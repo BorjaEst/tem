@@ -1,34 +1,27 @@
 """
 Sensory Processing Example: Multi-Scale Temporal Filtering
 
-This example demonstrates the SensoryProcessor's ability to learn and apply
-multi-scale temporal filtering to sensory observations. We generate synthetic
-sequences with different temporal dynamics and visualize how the processor
-captures patterns at multiple time scales.
+This example demonstrates the SensoryProcessor's multi-scale temporal filtering
+on a simple sequence prediction task. The processor learns to maintain multiple
+representations of observations at different time scales.
 
-Key Concepts Demonstrated:
-1. Two-hot encoding for dimensionality reduction
-2. Multi-frequency temporal filtering (fast to slow)
-3. Normalization for stable representations
-4. Memory projection for downstream processing
+What This Example Shows:
+- How the SensoryProcessor compresses observations (one-hot → two-hot)
+- How temporal filters adapt at different rates (fast vs slow)
+- How filter parameters evolve during training
+- The frequency response of learned filters
 
-The example trains a SensoryProcessor with 5 frequency modules on synthetic
-sequences containing slow trends, medium oscillations, and fast changes. The
-learned filter parameters (α) determine how quickly each frequency adapts to
-new observations, creating a hierarchy from rapid (α≈0.99) to slow (α≈0.01).
-
-Visualization:
-A single comprehensive figure with 4 panels showing:
-- A. Training convergence over epochs
-- B. Multi-scale filtered representations vs input observations
-- C. Evolution of learned filter parameters during training
-- D. Frequency response characteristics of the learned filters
+Task:
+Given a sequence of observations, predict the next observation. This simple
+task allows the temporal filters to learn appropriate smoothing rates.
 
 Usage:
-    python examples/sensory.py --n_epochs=10 --n_sequences=500
+    python examples/sensory.py                    # Default: 10 epochs
+    python examples/sensory.py --n_epochs=20      # More training
+    python examples/sensory.py --n_sequences=500  # More data
 
 Output:
-    outputs/sensory/sensory_analysis.png - Comprehensive 4-panel analysis
+    outputs/sensory/sensory_analysis.png - 4-panel visualization
     outputs/sensory/checkpoints/ - Model checkpoints
 """
 
@@ -47,8 +40,9 @@ from torch.optim import Adam
 
 from torch_tem.data import MultiScaleSequenceDataset
 from torch_tem.data.datamodule import BaseDataModule, DataModuleParams
-from torch_tem.figures import plot_sensory_analysis, print_sensory_summary
+from torch_tem.figures.sensory import plot_sensory_analysis, print_processor_summary
 from torch_tem.modules.sensory import SensoryProcessor, SensoryState
+from torch_tem.utils import generate_two_hot_codes
 
 # ==============================================================================
 # Configuration
@@ -61,22 +55,21 @@ class ExperimentConfig(BaseSettings):
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True)
 
     # Data generation
-    n_observations: int = Field(default=45, ge=10, description="Number of distinct observations")
-    n_sequences: int = Field(default=1000, ge=100, description="Number of training sequences")
-    sequence_length: int = Field(default=50, ge=10, description="Length of each sequence")
+    n_observations: int = Field(default=20, ge=10, description="Number of distinct observations")
+    n_sequences: int = Field(default=500, ge=100, description="Number of training sequences")
+    sequence_length: int = Field(default=30, ge=10, description="Length of each sequence")
 
     # Model architecture
-    n_compressed: int = Field(default=10, ge=5, description="Compressed observation dimension")
-    n_frequencies: int = Field(default=5, ge=2, description="Number of frequency modules")
-    n_grid: int = Field(default=30, ge=10, description="Grid cell dimension for memory")
+    n_compressed: int = Field(default=8, ge=5, description="Compressed observation dimension")
+    n_frequencies: int = Field(default=3, ge=2, description="Number of frequency modules")
 
     # Training
-    batch_size: int = Field(default=32, ge=1, description="Training batch size")
-    n_epochs: int = Field(default=5, ge=1, description="Number of training epochs")
-    learning_rate: float = Field(default=0.001, gt=0, description="Learning rate")
+    batch_size: int = Field(default=16, ge=1, description="Training batch size")
+    n_epochs: int = Field(default=10, ge=1, description="Number of training epochs")
+    learning_rate: float = Field(default=0.01, gt=0, description="Learning rate")
 
     # DataModule settings
-    val_split: float = Field(default=0.1, ge=0.05, le=0.3, description="Validation split fraction")
+    val_split: float = Field(default=0.15, ge=0.05, le=0.3, description="Validation split fraction")
 
     # Output
     output_dir: str = Field(default="outputs/sensory", description="Output directory")
@@ -89,117 +82,123 @@ class ExperimentConfig(BaseSettings):
 
 
 class SensoryLearner(pl.LightningModule):
-    """Lightning module wrapper around SensoryProcessor for end-to-end training.
+    """Simple learner demonstrating SensoryProcessor on sequence prediction.
 
-    Adds a simple prediction head to demonstrate that the learned
-    representations are useful for downstream tasks.
+    Task: Given observations x[0], x[1], ..., x[t], predict x[t+1]
+
+    The SensoryProcessor maintains multi-scale filtered representations that
+    help predict the next observation by capturing both recent changes (high
+    frequency) and longer-term trends (low frequency).
     """
 
-    def __init__(
-        self,
-        processor: SensoryProcessor,
-        n_compressed: int,
-        n_observations: int,
-        learning_rate: float = 0.001,
-    ):
+    def __init__(self, n_obs: int, n_comp: int, n_freq: int, lr: float = 0.01):
         super().__init__()
-        self.save_hyperparameters(ignore=["processor"])
+        self.save_hyperparameters()
 
-        self.processor = processor
-        self.learning_rate = learning_rate
+        self.n_observations = n_obs
+        self.n_compressed = n_comp
+        self.n_frequencies = n_freq
+        self.learning_rate = lr
 
-        # Prediction head: predict next observation from filtered state
-        self.predictor = nn.Linear(n_compressed, n_observations)
+        # Create two-hot encoding table
 
-        # Storage for history tracking
+        two_hot_codes = generate_two_hot_codes(n_bits=n_comp, n_codes=n_obs)
+        two_hot_table = torch.tensor(two_hot_codes, dtype=torch.float)
+
+        # Initialize filter frequencies (high to low)
+        initial_frequencies = [0.9 * (0.1 ** (f / (n_freq - 1))) for f in range(n_freq)]
+
+        # Create sensory processor
+        self.processor = SensoryProcessor(
+            n_frequencies=n_freq,
+            initial_frequencies=initial_frequencies,
+            two_hot_table=two_hot_table,
+            tile_matrices=[torch.randn(n_comp, n_comp * 2) / 10 for _ in range(n_freq)],
+        )
+
+        # Simple prediction head: use highest frequency (most recent) representation
+        self.predictor = nn.Linear(n_comp, n_obs)
+
+        # Track training history
         self.training_history = {
             "loss": [],
-            "alpha_values": [[] for _ in range(processor.n_freq)],
+            "alpha_values": [[] for _ in range(n_freq)],
         }
 
     def forward(self, sequence: Tensor) -> Tuple[List[SensoryState], Tensor]:
-        """Process sequence and predict next observations.
+        """Process sequence through sensory processor and make predictions.
 
         Args:
-            sequence: [seq_len, n_obs] one-hot sequence
+            sequence: [seq_len, n_obs] one-hot encoded observations
 
         Returns:
-            states: List of SensoryState for each time step
+            states: SensoryState for each time step
             predictions: [seq_len-1, n_obs] predicted next observations
         """
-        # Ensure sequence is on the correct device
         sequence = sequence.to(self.device)
-
         seq_len = sequence.shape[0]
+
         states = []
         predictions = []
 
-        # Initialize previous state with correct dimensions (n_compressed, not n_freq)
-        n_compressed = self.processor.two_hot_table.shape[1]
-        x_prev = [torch.zeros(1, n_compressed, device=self.device) for _ in range(self.processor.n_freq)]
+        # Initialize with zeros (no prior information)
+        x_prev = [torch.zeros(1, self.n_compressed, device=self.device) for _ in range(self.n_frequencies)]
 
         for t in range(seq_len):
-            # Process current observation
-            x_raw = sequence[t : t + 1]  # Add batch dim
+            # Process current observation through sensory pipeline
+            x_raw = sequence[t : t + 1]
             state = self.processor(x_raw, x_prev)
             states.append(state)
 
-            # Predict next observation (using high-frequency filtered state)
+            # Predict next observation using high-frequency representation
+            # (high frequency captures recent patterns best for next-step prediction)
             if t < seq_len - 1:
-                pred = self.predictor(state.filtered[0])
+                pred = self.predictor(state.filtered[0])  # Use filter 0 (highest frequency)
                 predictions.append(pred)
 
-            # Update previous state
+            # Update for next step
             x_prev = state.filtered
 
-        predictions = torch.cat(predictions, dim=0) if predictions else torch.zeros(0, sequence.shape[1], device=self.device)
-
+        predictions = torch.cat(predictions, dim=0) if predictions else torch.zeros(0, self.n_observations, device=self.device)
         return states, predictions
 
     def training_step(self, batch: Tensor, batch_idx: int) -> Tensor:
-        """Training step for a batch of sequences.
+        """Training step: predict next observation in sequence.
 
         Args:
-            batch: Batch of sequences [batch_size, seq_len, n_obs]
+            batch: [batch_size, seq_len, n_obs] batch of sequences
             batch_idx: Batch index
 
         Returns:
             Loss value
         """
-        # Process each sequence independently (no batch processing for sequences)
         batch_loss = 0.0
+
         for seq in batch:
             states, predictions = self(seq)
-
-            # Target: next observations in sequence
-            targets = seq[1:].argmax(dim=-1)
-
-            # Prediction loss
+            targets = seq[1:].argmax(dim=-1)  # Next observation indices
             loss = F.cross_entropy(predictions, targets)
             batch_loss += loss
 
         batch_loss /= len(batch)
-
-        # Log metrics
         self.log("train_loss", batch_loss, prog_bar=True, on_step=False, on_epoch=True)
 
         return batch_loss
 
     def on_train_epoch_end(self) -> None:
-        """Called at the end of each training epoch to track filter parameters."""
-        # Record alpha values for visualization
+        """Track filter parameters after each epoch."""
         with torch.no_grad():
             current_loss = self.trainer.callback_metrics.get("train_loss", 0.0)
             if isinstance(current_loss, torch.Tensor):
                 current_loss = current_loss.item()
             self.training_history["loss"].append(current_loss)
 
-            for f in range(self.processor.n_freq):
+            for f in range(self.n_frequencies):
                 alpha = torch.sigmoid(self.processor.alpha[f]).item()
                 self.training_history["alpha_values"][f].append(alpha)
 
     def configure_optimizers(self):
-        """Configure optimizer."""
+        """Configure Adam optimizer with higher learning rate for faster convergence."""
         return Adam(self.parameters(), lr=self.learning_rate)
 
     def get_history(self) -> dict:
@@ -216,24 +215,21 @@ def main():
     """Run the sensory processing experiment."""
 
     print("=" * 80)
-    print("Sensory Processing Experiment: Multi-Scale Temporal Filtering")
+    print("Sensory Processing: Multi-Scale Temporal Filtering")
     print("=" * 80)
 
-    # Load configuration
     config = ExperimentConfig()
 
     print(f"\nConfiguration:")
-    print(f"  Observations: {config.n_observations}")
-    print(f"  Sequences: {config.n_sequences} × {config.sequence_length} steps")
-    print(f"  Frequencies: {config.n_frequencies}")
-    print(f"  Training: {config.n_epochs} epochs, batch size {config.batch_size}")
-    print(f"  Validation split: {config.val_split:.1%}")
-    print(f"  Output: {config.output_dir}")
+    print(f"  • Observations: {config.n_observations}")
+    print(f"  • Sequences: {config.n_sequences} × {config.sequence_length} steps")
+    print(f"  • Frequencies: {config.n_frequencies} (high → low)")
+    print(f"  • Training: {config.n_epochs} epochs, batch size {config.batch_size}, lr={config.learning_rate}")
+    print(f"  • Output: {config.output_dir}")
 
-    # Set random seed
     pl.seed_everything(config.seed)
 
-    # Create dataset generator
+    # Dataset generator
     def dataset_generator(n_samples: int) -> MultiScaleSequenceDataset:
         return MultiScaleSequenceDataset(
             n_sequences=n_samples,
@@ -242,104 +238,75 @@ def main():
             seed=config.seed,
         )
 
-    # Create DataModule
-    print(f"\n📊 Setting up data module...")
+    # DataModule
+    print(f"\n📊 Creating data...")
     dm_params = DataModuleParams(
         num_samples=config.n_sequences,
         val_split=config.val_split,
-        test_split=0.0,  # No test split for this example
+        test_split=0.0,
         n_predict=0,
         batch_size=config.batch_size,
-        num_workers=0,  # Set to 0 to avoid multiprocessing issues
+        num_workers=0,
         pin_memory=False,
         drop_last=True,
     )
     datamodule = BaseDataModule(generator=dataset_generator, params=dm_params)
 
-    # Create two-hot encoding table
-    from torch_tem.utils import generate_two_hot_codes
-
-    two_hot_codes = generate_two_hot_codes(n_bits=config.n_compressed, n_codes=config.n_observations)
-    two_hot_table = torch.tensor(two_hot_codes, dtype=torch.float)
-
-    # Create tile matrices
-    tile_matrices = [torch.randn(config.n_compressed, config.n_grid * config.n_compressed) / 10 for _ in range(config.n_frequencies)]
-
-    # Initialize frequencies (high to low)
-    initial_frequencies = [0.99 * (0.1 ** (f / (config.n_frequencies - 1))) for f in range(config.n_frequencies)]
-
-    print(f"\n🔧 Initializing model...")
-    print(f"  Initial α values: {[f'{a:.3f}' for a in initial_frequencies]}")
-
-    # Create processor
-    processor = SensoryProcessor(
-        n_frequencies=config.n_frequencies,
-        initial_frequencies=initial_frequencies,
-        two_hot_table=two_hot_table,
-        tile_matrices=tile_matrices,
-    )
-
-    # Wrap in Lightning module
+    # Model
+    print(f"\n🔧 Initializing SensoryProcessor...")
     model = SensoryLearner(
-        processor=processor,
-        n_compressed=config.n_compressed,
         n_observations=config.n_observations,
+        n_compressed=config.n_compressed,
+        n_frequencies=config.n_frequencies,
         learning_rate=config.learning_rate,
     )
 
-    # Setup callbacks
+    # Show initial filter rates
+    with torch.no_grad():
+        print(f"  Initial filter rates (α):")
+        for f in range(config.n_frequencies):
+            alpha = torch.sigmoid(model.processor.alpha[f]).item()
+            print(f"    Filter {f}: α = {alpha:.3f} ({'fast' if alpha > 0.5 else 'slow'})")
+
+    # Setup
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=output_dir / "checkpoints",
-        filename="sensory-{epoch:02d}-{train_loss:.4f}",
+        filename="best-{epoch:02d}-{train_loss:.3f}",
         save_top_k=1,
         monitor="train_loss",
         mode="min",
     )
 
-    # Create trainer
+    # Trainer
     print(f"\n🚀 Training...")
     trainer = pl.Trainer(
         max_epochs=config.n_epochs,
         callbacks=[checkpoint_callback],
         enable_progress_bar=True,
-        enable_model_summary=True,
+        enable_model_summary=False,  # Keep output clean
         log_every_n_steps=10,
-        logger=False,  # Disable default logger for cleaner output
+        logger=False,
         enable_checkpointing=True,
-        accelerator="cpu",  # Use CPU to avoid device transfer issues
+        accelerator="cpu",
     )
 
-    # Train the model
     trainer.fit(model, datamodule)
 
-    # Get training history
-    history = model.get_history()
-
-    # Generate visualizations
-    print(f"\n📈 Generating visualizations...")
-
-    # Get a sample dataset for visualization
+    # Visualize processor behavior
+    print(f"\n📈 Generating visualization...")
     datamodule.setup("fit")
-    sample_dataset = datamodule.datasets["fit"][0]
+    train_dataset = datamodule.datasets["fit"][0]  # Get the actual dataset (returns tuple)
+    sample_sequence = train_dataset[0]  # Get first sequence as tensor
 
-    output_path = plot_sensory_analysis(model, sample_dataset, history, output_dir)
-    print(f"✅ Saved comprehensive analysis: {output_path}")
+    output_path = plot_sensory_analysis(model.processor, sample_sequence, output_dir)
+    print(f"✅ Saved: {output_path}")
 
-    # Print summary statistics
-    print_sensory_summary(history, config.n_frequencies)
+    print_processor_summary(model.processor)
 
-    # Print final filter values
-    print(f"\n📊 Final Filter Parameters:")
-    with torch.no_grad():
-        for f in range(config.n_frequencies):
-            alpha = torch.sigmoid(model.processor.alpha[f]).item()
-            print(f"  Frequency {f}: α = {alpha:.4f}")
-
-    print(f"\n✅ Experiment complete!")
-    print(f"📁 Results saved to: {output_dir}")
+    print(f"\n✅ Complete! Results in: {output_dir}")
     print("=" * 80)
 
 

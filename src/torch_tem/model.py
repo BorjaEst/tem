@@ -37,10 +37,67 @@ from torch_tem.modules.sensory import SensoryProcessor
 
 
 class TEMModel(LightningModule):
-    """
-    Tolman-Eichenbaum Machine - Refactored Orchestrator.
+    """Tolman-Eichenbaum Machine - Refactored Orchestrator.
 
-    Coordinates specialized modules with minimal direct computation.
+    The TEM is a biologically-inspired model of spatial cognition and episodic memory.
+    It combines path integration (grid cells), sensory grounding (place cells), and
+    Hebbian associative memory to enable flexible navigation and memory-based inference.
+
+    Architecture Overview:
+    ======================
+    This orchestrator coordinates five specialized modules:
+
+    1. **SensoryProcessor**: Prepares observations for memory operations
+       - Temporal filtering, normalization, compression
+
+    2. **AbstractLocationModule**: Grid cell system with path integration
+       - Tracks position via self-motion integration
+       - Multi-scale spatial representation
+
+    3. **GroundedLocationModule**: Place cell conjunction
+       - Combines grid cells with sensory input
+       - Creates location-specific activations
+
+    4. **MemorySystem**: Hebbian associative memory
+       - Links place cells with observations
+       - Supports attractor-based retrieval
+
+    5. **ObservationGenerator**: Decodes observations from place cells
+       - Probabilistic observation prediction
+
+    Information Flow (Single Iteration):
+    ====================================
+    1. Process sensory input → sensory_state
+    2. Retrieve place cells from memory using sensory_state → p_from_sensory
+    3. Generate grid cells via path integration → abstract_gen
+    4. Infer grid cells (combine path + memory + landmarks) → abstract_inf
+    5. Infer place cells (grid × sensory) → grounded_inf
+    6. Generate observations from place cells → obs_predictions
+    7. Update associative memory with new (place, observation) pairs
+    8. Calculate losses for training
+
+    Module Independence:
+    ====================
+    This refactored version uses dependency injection: modules receive only
+    primitive parameters, not parent config objects. This enables:
+    - Independent testing of each module
+    - Clear interfaces between components
+    - Easier debugging and maintenance
+
+    Args:
+        arch_config: Architecture configuration with all network dimensions,
+            frequencies, connectivity patterns
+        mem_config: Memory system configuration (learning rates, decay, iterations)
+        model_config: Behavioral configuration (sampling, inference modes)
+
+    Attributes:
+        sensory: SensoryProcessor instance for observation processing
+        abstract_loc: AbstractLocationModule for grid cell operations
+        grounded_loc: GroundedLocationModule for place cell inference
+        memory: MemorySystem for Hebbian associative memory
+        obs_gen: ObservationGenerator for decoding observations
+        state_mgr: StateManager for episode state management
+        loss_calc: LossCalculator for computing training objectives
     """
 
     def __init__(self, arch_config: ArchitectureConfig, mem_config: MemoryConfig, model_config: ModelConfig):
@@ -54,17 +111,55 @@ class TEMModel(LightningModule):
         # Create static matrices
         self.static_matrices = StaticMatrices.create(arch_config, mem_config)
 
-        # Initialize specialized modules
-        self.sensory = SensoryProcessor(arch_config, self.static_matrices)
+        # Initialize specialized modules with minimal dependencies
+        self.sensory = SensoryProcessor(
+            n_frequencies=arch_config.n_f,
+            initial_frequencies=arch_config.f_initial_extended,
+            two_hot_table=self.static_matrices.two_hot_table,
+            tile_matrices=self.static_matrices.W_tile,
+        )
+
         self.abstract_loc = AbstractLocationModule(arch_config, model_config, self.static_matrices)
-        self.grounded_loc = GroundedLocationModule(arch_config)
-        self.memory = MemorySystem(arch_config, mem_config, self.static_matrices)
+
+        self.grounded_loc = GroundedLocationModule(n_p_dims=arch_config.n_p)
+
+        self.memory = MemorySystem(
+            n_p_dims=arch_config.n_p,
+            lambda_forget=mem_config.lambda_,
+            eta_remember=mem_config.eta,
+            kappa_decay=mem_config.kappa,
+            n_attractor_iters=mem_config.i_attractor,
+            p_update_mask=self.static_matrices.p_update_mask,
+            p_retrieve_mask_inf=self.static_matrices.p_retrieve_mask_inf,
+            p_retrieve_mask_gen=self.static_matrices.p_retrieve_mask_gen,
+        )
+
         self.obs_gen = ObservationGenerator(arch_config, self.static_matrices)
         self.state_mgr = StateManager(arch_config)
         self.loss_calc = LossCalculator()
 
     def forward(self, walk: List[Tuple], prev_state: Optional[EpisodeState] = None):
-        """Process a walk through an environment."""
+        """Process a walk through an environment.
+
+        A "walk" is a sequence of (location, observation, action) tuples representing
+        an agent's trajectory through an environment. This method processes each step
+        sequentially, maintaining and updating internal state (memory, grid cells).
+
+        Args:
+            walk: List of (location, observation, action) tuples where:
+                - location: Dict with position metadata (may include 'shiny' key)
+                - observation: Tensor [batch, n_x_dims] of sensory input
+                - action: List of action indices (movement direction)
+            prev_state: Optional EpisodeState from previous walk to continue episode.
+                If None, initializes fresh state.
+
+        Returns:
+            List of IterationResult objects, one per walk step, containing:
+            - losses: All loss components for training
+            - states: Internal states (sensory, abstract, grounded)
+            - observations: Generated observation distributions
+            - next_state: Updated EpisodeState for next iteration
+        """
         # Initialize or continue state
         if prev_state is None:
             batch_size = walk[0][1].shape[0]
@@ -82,7 +177,30 @@ class TEMModel(LightningModule):
         return results
 
     def _single_iteration(self, observation: torch.Tensor, location: dict, action: List[int], state: EpisodeState) -> IterationResult:
-        """Single TEM iteration - coordinates all modules."""
+        """Single TEM iteration - coordinates all modules.
+
+        This is the core computational step of the TEM model, implementing the
+        full sensory-memory-location processing pipeline:
+
+        1. **Sensory Processing**: Compress and normalize observation
+        2. **Memory Retrieval**: Recall place cells from sensory input
+        3. **Path Integration**: Update grid cells based on movement
+        4. **Location Inference**: Combine path integration with memory and landmarks
+        5. **Place Cell Inference**: Ground abstract location with sensory input
+        6. **Generative Decoding**: Predict observations from place cells
+        7. **Memory Update**: Store new associations (place ↔ observation)
+        8. **Loss Calculation**: Compute training objectives
+
+        Args:
+            observation: Current sensory observation [batch, n_x_dims]
+            location: Location metadata dict (may contain 'shiny' key for landmarks)
+            action: List of action indices (movement directions)
+            state: Current EpisodeState with memory matrices and previous activations
+
+        Returns:
+            IterationResult containing losses, internal states, observation predictions,
+            and updated state for next iteration
+        """
 
         # 1. Process sensory input
         sensory_state = self.sensory(observation, state.x_prev)
@@ -145,7 +263,41 @@ class TEMModel(LightningModule):
 
 
 class ObservationGenerator(nn.Module):
-    """Generates sensory observations from grounded locations."""
+    """Generates sensory observations from grounded locations.
+
+    This module implements the decoding pathway from place cell activations (p)
+    back to sensory observations (x). It enables the model to make predictions
+    about what observations should be encountered at a given location.
+
+    Decoding Process:
+    =================
+    1. **Compression**: Sum place cell activations over entorhinal preferences
+       x_compressed = w_x · p · W_tile^T + b_x
+
+    2. **Decompression**: Expand compressed representation to full observation space
+       logits = MLP(x_compressed)
+
+    3. **Probabilistic Output**: Apply softmax to get observation distribution
+       P(x | p) = softmax(logits)
+
+    This allows the model to:
+    - Predict expected observations at inferred locations
+    - Generate "mental imagery" from memory
+    - Calculate prediction errors for learning
+
+    Args:
+        arch_config: Architecture configuration containing:
+            - n_x: Full observation space dimensionality
+            - n_x_c: Compressed observation dimensionality
+            - n_x_f: Observation dimensions per frequency
+        static_matrices: Pre-computed matrices:
+            - W_tile: Tiling matrices for compression
+
+    Attributes:
+        w_x: Learnable weight for compression scaling
+        b_x: Learnable bias for compressed representation
+        MLP_c_star: Decompression network (compressed → full observation space)
+    """
 
     def __init__(self, arch_config: ArchitectureConfig, static_matrices: StaticMatrices):
         super().__init__()
@@ -157,7 +309,20 @@ class ObservationGenerator(nn.Module):
         self.MLP_c_star = MLP(arch_config.n_x_f[0], arch_config.n_x, hidden_dim=20 * arch_config.n_x_c)
 
     def forward(self, p: torch.Tensor) -> ObservationDistribution:
-        """Generate observation distribution from place cells."""
+        """Generate observation distribution from place cells.
+
+        Decodes place cell activations into a probability distribution over
+        possible observations. This implements the generative model P(x | p)
+        that predicts what the agent should observe at the location encoded by p.
+
+        Args:
+            p: Place cell activations [batch, n_p_dims] representing current location
+
+        Returns:
+            ObservationDistribution containing:
+            - logits: Raw network outputs [batch, n_x] before softmax
+            - probabilities: Normalized probability distribution P(x | p)
+        """
         # Sum over entorhinal preferences
         x_compressed = self.w_x * torch.matmul(p, torch.t(self.matrices.W_tile[0])) + self.b_x
 
@@ -169,13 +334,56 @@ class ObservationGenerator(nn.Module):
 
 
 class StateManager:
-    """Manages model state across iterations and episodes."""
+    """Manages model state across iterations and episodes.
+
+    The TEM model is stateful: it maintains memory matrices, previous activations,
+    and step counters that persist across multiple forward passes within an episode.
+    This class encapsulates all state management logic.
+
+    State Components:
+    =================
+    - **memory_gen**: Generative memory matrix M [batch, n_p, n_p] linking place cells
+      to observations for prediction
+    - **memory_inf**: Inference memory matrix (if separate) for sensory→place retrieval
+    - **g_prev**: Previous grid cell activations for path integration
+    - **x_prev**: Previous observations for temporal filtering
+    - **step**: Current step counter within episode
+
+    Two Operating Modes:
+    ====================
+    1. **Common Memory**: Single memory matrix serves both inference and generation
+       - Simpler, fewer parameters
+       - Used when inference and generation share same associations
+
+    2. **Separate Memory**: Distinct matrices for inference vs. generation
+       - More flexible, can specialize each pathway
+       - Used when asymmetric memory access is desired
+
+    Args:
+        arch_config: Architecture configuration with dimensions and frequencies
+    """
 
     def __init__(self, arch_config: ArchitectureConfig):
         self.config = arch_config
 
     def initialize_episode(self, batch_size: int, g_init: List[torch.Tensor], use_separate_memory: bool) -> EpisodeState:
-        """Initialize state for new episode."""
+        """Initialize state for new episode.
+
+        Creates fresh state for starting a new episode or batch of episodes.
+        All memory matrices are zeroed, grid cells are set to learned priors,
+        and previous observations are cleared.
+
+        Args:
+            batch_size: Number of parallel episodes to initialize
+            g_init: Learned prior grid cell activations [n_g[f]] per frequency,
+                will be replicated across batch
+            use_separate_memory: Whether to create distinct inference and generation
+                memory matrices (True) or share a single matrix (False)
+
+        Returns:
+            EpisodeState with zeroed memory, prior grid cells, zero previous
+            observations, and step counter at 0
+        """
         n_p_total = sum(self.config.n_p)
         M_gen = torch.zeros((batch_size, n_p_total, n_p_total))
         M_inf = None if not use_separate_memory else torch.zeros((batch_size, n_p_total, n_p_total))
@@ -186,7 +394,21 @@ class StateManager:
         return EpisodeState(memory_gen=M_gen, memory_inf=M_inf, g_prev=g_prev, x_prev=x_prev, step=0)
 
     def reset_walks(self, state: EpisodeState, new_walk_mask: List[bool], g_init: List[torch.Tensor]) -> EpisodeState:
-        """Reset state for walks starting new environments."""
+        """Reset state for walks starting new environments.
+
+        In batch processing, some walks may complete while others continue.
+        This method selectively resets state for specific batch elements that
+        are starting fresh environments, without affecting ongoing walks.
+
+        Args:
+            state: Current EpisodeState to be partially reset
+            new_walk_mask: Boolean list indicating which batch elements start
+                new environments (True = reset, False = continue)
+            g_init: Learned prior grid cell activations to reset to
+
+        Returns:
+            Modified EpisodeState with selected elements reset (in-place modification)
+        """
         for idx, is_new in enumerate(new_walk_mask):
             if is_new:
                 state.memory_gen[idx] = 0
@@ -199,7 +421,43 @@ class StateManager:
 
 
 class LossCalculator:
-    """Calculates all loss components."""
+    """Calculates all loss components.
+
+    The TEM model is trained using multiple loss terms that encourage different
+    aspects of correct behavior:
+
+    Loss Components:
+    ================
+    1. **L_p_g**: Consistency between place cells inferred from sensory input vs.
+       generated from grid cells via memory
+       - Ensures sensory grounding matches abstract representation
+
+    2. **L_p_x**: Consistency between place cells from sensory input vs. retrieved
+       from memory using that sensory input
+       - Verifies memory correctly associates sensory observations with locations
+
+    3. **L_g**: Consistency between inferred grid cells (with memory correction) vs.
+       generated grid cells (path integration only)
+       - Encourages memory to provide useful corrections to path integration
+
+    4. **L_x_p**: Observation reconstruction from inferred place cells
+       - Tests if place cells encode sufficient information to predict observations
+
+    5. **L_x_g**: Observation reconstruction from inferred grid cells (via memory)
+       - Tests full inference pathway: grid → memory → place → observation
+
+    6. **L_x_gen**: Observation reconstruction from generated grid cells (via memory)
+       - Tests generation pathway: path integration → memory → place → observation
+
+    7. **L_reg_g**: L2 regularization on grid cell activations
+       - Prevents unbounded growth, encourages sparse representations
+
+    8. **L_reg_p**: L1 regularization on place cell activations
+       - Encourages sparsity in place cell code (few active cells per location)
+
+    All losses are computed per batch element and can be weighted/combined
+    during training according to learning curriculum.
+    """
 
     @staticmethod
     def compute(
@@ -211,7 +469,32 @@ class LossCalculator:
         obs_target: torch.Tensor,
         obs_predictions: List[ObservationDistribution],
     ) -> LossComponents:
-        """Compute all loss components."""
+        """Compute all loss components.
+
+        Evaluates the model's performance across multiple objectives simultaneously.
+        Each loss term measures a different aspect of spatial cognition and memory.
+
+        Args:
+            abstract_inf: Inferred grid cells (path + memory + landmarks)
+            abstract_gen: Generated grid cells (path integration only)
+            grounded_inf: Inferred place cells (grid × sensory)
+            grounded_gen: Generated place cells from inferred grid via memory
+            p_inf_x: Place cells retrieved from memory using sensory input
+                (None if memory-based inference disabled)
+            obs_target: Ground truth observation [batch, n_x] (one-hot or soft labels)
+            obs_predictions: List of 3 ObservationDistributions:
+                [0] from inferred place cells (p_inf)
+                [1] from inferred grid via memory (g_inf → M → p → x)
+                [2] from generated grid via memory (g_gen → M → p → x)
+
+        Returns:
+            LossComponents containing all individual loss terms:
+            - L_p_g: Place consistency (inference vs. generation)
+            - L_p_x: Place-memory consistency
+            - L_g: Grid consistency (inference vs. generation)
+            - L_x_p, L_x_g, L_x_gen: Observation reconstruction losses
+            - L_reg_g, L_reg_p: Regularization terms
+        """
         # Grounded location losses
         L_p_g = torch.sum(torch.stack(utils.squared_error(grounded_inf.p, grounded_gen), dim=0), dim=0)
         L_p_x = torch.sum(torch.stack(utils.squared_error(grounded_inf.p, p_inf_x), dim=0), dim=0) if p_inf_x is not None else torch.zeros_like(L_p_g)

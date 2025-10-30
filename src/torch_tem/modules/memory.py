@@ -38,11 +38,11 @@ class MemorySystem(nn.Module):
             h_new = mask·activation(κ·h_old + M·h_old)
         n_attractor_iters: Number of attractor iterations, default=5
             More iterations → stronger pattern completion
-        p_update_mask: Connectivity mask [n_p_total × n_p_total] for hierarchical updates
+        p_update_mask: Connectivity mask [n_p_total x n_p_total] for hierarchical updates
             None → flat (all-to-all) connectivity
-        p_retrieve_mask_inf: List of retrieval masks [n_attractor_iters × n_p_total]
+        p_retrieve_mask_inf: List of retrieval masks [n_attractor_iters x n_p_total]
             Controls which modules update at each iteration (inference mode)
-        p_retrieve_mask_gen: List of retrieval masks [n_attractor_iters × n_p_total]
+        p_retrieve_mask_gen: List of retrieval masks [n_attractor_iters x n_p_total]
             Controls which modules update at each iteration (generative mode)
 
     Attributes:
@@ -94,19 +94,19 @@ class MemorySystem(nn.Module):
         stabilize first, then high-frequency modules refine details.
 
         Args:
-            query: Partial patterns per frequency [n_freq × [batch × n_p_f]]
+            query: Partial patterns per frequency [n_freq x [batch x n_p_f]]
                 Can come from sensory input, abstract location, etc.
-            memory_matrix: Associative memory [batch × n_p_total × n_p_total]
+            memory_matrix: Associative memory [batch x n_p_total x n_p_total]
                 Stores learned associations between place cell patterns
             mode: "inference" or "generative"
                 Determines which retrieval mask schedule to use
 
         Returns:
-            Completed patterns per frequency [n_freq × [batch × n_p_f]]
+            Completed patterns per frequency [n_freq x [batch x n_p_f]]
             Converged attractors representing stored memories
         """
         # Concatenate all frequency modules into single vector
-        h_t = torch.cat(query, dim=1)  # [batch × n_p_total]
+        h_t = torch.cat(query, dim=1)  # [batch x n_p_total]
         h_t = self._activation(h_t)
 
         # Select appropriate mask schedule for this mode
@@ -142,21 +142,21 @@ class MemorySystem(nn.Module):
             M[t] = clamp(λ·M[t-1] + η·ΔM, min=-1, max=1)
 
         Args:
-            memory_prev: Previous memory matrix [batch × n_p_total × n_p_total]
-            p_inferred: Inferred place cell patterns [n_freq × [batch × n_p_f]]
+            memory_prev: Previous memory matrix [batch x n_p_total x n_p_total]
+            p_inferred: Inferred place cell patterns [n_freq x [batch x n_p_f]]
                 From inference pathway (observation → memory → place cells)
-            p_generated: Generated place cell patterns [n_freq × [batch × n_p_f]]
+            p_generated: Generated place cell patterns [n_freq x [batch x n_p_f]]
                 From generative pathway (abstract location → memory → place cells)
             hierarchical: If True, apply connectivity mask for hierarchical updates
                 Only allows low→high frequency connections
 
         Returns:
-            Updated memory matrix [batch × n_p_total × n_p_total]
+            Updated memory matrix [batch x n_p_total x n_p_total]
             Clamped to [-1, 1] for numerical stability
         """
         # Concatenate all frequencies for batch outer product
-        p_inf_flat = torch.cat(p_inferred, dim=1)  # [batch × n_p_total]
-        p_gen_flat = torch.cat(p_generated, dim=1)  # [batch × n_p_total]
+        p_inf_flat = torch.cat(p_inferred, dim=1)  # [batch x n_p_total]
+        p_gen_flat = torch.cat(p_generated, dim=1)  # [batch x n_p_total]
 
         # Compute Hebbian update: outer product of sum and difference
         # (p_inf + p_gen)⊗(p_inf - p_gen)
@@ -180,9 +180,9 @@ class MemorySystem(nn.Module):
         Clamping to [-1,1] ensures numerical stability.
 
         Args:
-            p: Place cell activations [batch × n_p]
+            p: Place cell activations [batch x n_p]
 
         Returns:
-            Activated patterns [batch × n_p] in range ≈[-1, 1]
+            Activated patterns [batch x n_p] in range ≈[-1, 1]
         """
         return utils.leaky_relu(torch.clamp(p, min=-1, max=1))

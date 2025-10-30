@@ -19,9 +19,9 @@ class SensoryState(BaseModel):
     Attributes:
         raw: Raw one-hot observation [batch, n_x]
         compressed: Two-hot encoded observation [batch, n_x_c]
-        filtered: Temporally smoothed representations per frequency [n_freq × [batch, n_x_c]]
-        normalized: Zero-mean, unit-norm representations per frequency [n_freq × [batch, n_x_c]]
-        memory_ready: Projected to place cell dimensions [n_freq × [batch, n_p]]
+        filtered: Temporally smoothed representations per frequency [n_freq x [batch, n_x_c]]
+        normalized: Zero-mean, unit-norm representations per frequency [n_freq x [batch, n_x_c]]
+        memory_ready: Projected to place cell dimensions [n_freq x [batch, n_p]]
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -105,10 +105,10 @@ class SensoryProcessor(nn.Module):
         ~C(n,2) possible codes (combinatorial capacity).
 
         Args:
-            x_onehot: One-hot encoded observations [batch × n_x]
+            x_onehot: One-hot encoded observations [batch x n_x]
 
         Returns:
-            Two-hot encoded observations [batch × n_x_c] where n_x_c < n_x
+            Two-hot encoded observations [batch x n_x_c] where n_x_c < n_x
         """
         return torch.stack([self.two_hot_table[i] for i in torch.argmax(x_onehot, dim=1)], dim=0)
 
@@ -122,11 +122,11 @@ class SensoryProcessor(nn.Module):
         Lower α → slower adaptation (lower frequency, more smoothing)
 
         Args:
-            x_compressed: Current compressed observation [batch × n_x_c]
-            x_prev: Previous filtered states [n_freq × [batch × n_x_c]]
+            x_compressed: Current compressed observation [batch x n_x_c]
+            x_prev: Previous filtered states [n_freq x [batch x n_x_c]]
 
         Returns:
-            Filtered observations per frequency [n_freq × [batch × n_x_c]]
+            Filtered observations per frequency [n_freq x [batch x n_x_c]]
         """
         alpha = [torch.sigmoid(self.alpha[f]) for f in range(self.n_freq)]
         return [(1 - alpha[f]) * x_prev[f] + alpha[f] * x_compressed for f in range(self.n_freq)]
@@ -143,10 +143,10 @@ class SensoryProcessor(nn.Module):
             3. Normalize: scale to unit norm
 
         Args:
-            x_filtered: Temporally filtered observations [n_freq × [batch × n_x_c]]
+            x_filtered: Temporally filtered observations [n_freq x [batch x n_x_c]]
 
         Returns:
-            Normalized observations [n_freq × [batch × n_x_c]]
+            Normalized observations [n_freq x [batch x n_x_c]]
         """
         return [utils.normalise(utils.relu(x_filtered[f] - torch.mean(x_filtered[f]))) for f in range(self.n_freq)]
 
@@ -161,9 +161,9 @@ class SensoryProcessor(nn.Module):
         retrieve grounded location (place cell) representations.
 
         Args:
-            x_normalized: Normalized sensory input [n_freq × [batch × n_x_c]]
+            x_normalized: Normalized sensory input [n_freq x [batch x n_x_c]]
 
         Returns:
-            Memory-ready representations [n_freq × [batch × n_p]]
+            Memory-ready representations [n_freq x [batch x n_p]]
         """
         return [torch.sigmoid(self.w_p[f]) * torch.matmul(x_normalized[f], self.W_tile[f]) for f in range(self.n_freq)]

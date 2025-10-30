@@ -82,8 +82,8 @@ class EpisodeState(BaseModel):
     Attributes:
         memory_gen: Generative memory matrix [batch, n_p_total, n_p_total]
         memory_inf: Inference memory matrix if separate [batch, n_p_total, n_p_total]
-        g_prev: Previous grid cell activations [n_freq × [batch, n_g[f]]]
-        x_prev: Previous sensory observations [n_freq × [batch, n_x_c]]
+        g_prev: Previous grid cell activations [n_freq x [batch, n_g[f]]]
+        x_prev: Previous sensory observations [n_freq x [batch, n_x_c]]
         step: Current step number within episode
         metadata: Optional additional episode-level information
     """
@@ -108,7 +108,7 @@ class IterationStates(BaseModel):
         sensory: Sensory processing outputs
         abstract_inf: Inferred abstract location (with memory correction)
         abstract_gen: Generated abstract location (path integration only)
-        grounded_inf: Inferred grounded location (grid × sensory)
+        grounded_inf: Inferred grounded location (grid x sensory)
         grounded_gen: Generated grounded location from memory retrieval
     """
 
@@ -243,7 +243,7 @@ class TEMModel(LightningModule):
     2. Retrieve place cells from memory using sensory_state → p_from_sensory
     3. Generate grid cells via path integration → abstract_gen
     4. Infer grid cells (combine path + memory + landmarks) → abstract_inf
-    5. Infer place cells (grid × sensory) → grounded_inf
+    5. Infer place cells (grid x sensory) → grounded_inf
     6. Generate observations from place cells → obs_predictions
     7. Update associative memory with new (place, observation) pairs
     8. Calculate losses for training
@@ -649,7 +649,7 @@ class LossCalculator:
         Args:
             abstract_inf: Inferred grid cells (path + memory + landmarks)
             abstract_gen: Generated grid cells (path integration only)
-            grounded_inf: Inferred place cells (grid × sensory)
+            grounded_inf: Inferred place cells (grid x sensory)
             grounded_gen: Generated place cells from inferred grid via memory
             p_inf_x: Place cells retrieved from memory using sensory input
                 (None if memory-based inference disabled)

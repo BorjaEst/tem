@@ -254,7 +254,7 @@ class SensoryProcessor(nn.Module):
         Returns:
             Memory-ready representations [n_freq x [batch x n_p]]
         """
-        return [torch.sigmoid(self.w_p[f]) * torch.matmul(x_normalized[f], self.W_tile[f]) for f in range(self.n_freq)]
+        return [torch.sigmoid(self.w_p[f]) * (x_normalized[f] @ self.W_tile[f]) for f in range(self.n_freq)]
 
 
 # ==============================================================================

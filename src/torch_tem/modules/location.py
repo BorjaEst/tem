@@ -18,21 +18,14 @@ class AbstractLocationState(BaseModel):
 
     Represents the abstract spatial representation provided by grid cells,
     including uncertainty estimates and provenance information.
-
-    Attributes:
-        mu: Mean grid cell activations per frequency [n_freq × [batch, n_g[f]]]
-        sigma: Uncertainty (standard deviation) per frequency [n_freq × [batch, n_g[f]]]
-        sources: List of information sources that contributed to this state
-            (e.g., ["path_integration"], ["memory", "path_integration", "shiny_objects"])
-        metadata: Optional additional information for debugging or analysis
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    mu: List[Tensor]
-    sigma: List[Tensor]
-    sources: List[str] = Field(default_factory=list)
-    metadata: Dict = Field(default_factory=dict)
+    mu: List[Tensor] = Field(..., description="Mean grid cell activations per frequency [n_freq × [batch, n_g[f]]]")
+    sigma: List[Tensor] = Field(..., description="Uncertainty (standard deviation) per frequency [n_freq × [batch, n_g[f]]]")
+    sources: List[str] = Field(default_factory=list, description="Information sources that contributed to this state")
+    metadata: Dict = Field(default_factory=dict, description="Optional additional information for debugging or analysis")
 
 
 class GroundedLocationState(BaseModel):
@@ -40,16 +33,12 @@ class GroundedLocationState(BaseModel):
 
     Represents location-specific activations that arise from the conjunction
     of abstract grid cells with sensory observations.
-
-    Attributes:
-        p: Place cell activations per frequency [n_freq × [batch, n_p[f]]]
-        sigma: Optional uncertainty estimates per frequency [n_freq × [batch, n_p[f]]]
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    p: List[Tensor]
-    sigma: Optional[List[Tensor]] = None
+    p: List[Tensor] = Field(..., description="Place cell activations per frequency [n_freq × [batch, n_p[f]]]")
+    sigma: Optional[List[Tensor]] = Field(None, description="Optional uncertainty estimates per frequency [n_freq × [batch, n_p[f]]]")
 
 
 class AbstractLocationModule(nn.Module):

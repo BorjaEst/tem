@@ -1,6 +1,6 @@
 """PyTorch implementation of the Tolman-Eichenbaum Machine (TEM)."""
 
-from .model import Parameters
+from .parameters import Parameters
 from .utils import (
     create_downsampling_matrix,
     create_hierarchical_connections,

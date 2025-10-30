@@ -19,7 +19,6 @@ class DataModuleParams(BaseModel):
     num_samples: int = Field(default=4000, ge=100, le=50000, description="Total number of samples")
     val_split: float = Field(default=0.1, ge=0.0, le=0.3, description="Validation split fraction")
     test_split: float = Field(default=0.1, ge=0.0, le=0.3, description="Test split fraction")
-    n_predict: int = Field(default=10, ge=0, le=10000, description="Number of prediction samples")
 
     # DataLoader Settings
     batch_size: int = Field(default=16, ge=1, le=512, description="Training batch size")

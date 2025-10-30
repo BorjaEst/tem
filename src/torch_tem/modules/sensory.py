@@ -143,8 +143,8 @@ class SensoryProcessor(nn.Module):
     ):
         super().__init__()
         self.n_freq = n_frequencies
-        self.two_hot_table = two_hot_table
-        self.W_tile = tile_matrices
+        self.register_buffer("two_hot_table", two_hot_table)  # Move with model
+        self.W_tile = nn.ParameterList([nn.Parameter(w, requires_grad=True) for w in tile_matrices])
 
         # Temporal filtering parameters (learned)
         # Stored in logit space: logit(α) = log(α/(1-α))

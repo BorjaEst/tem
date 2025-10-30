@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torch-tem"
+version = "0.1.0"
+description = "PyTorch package for Tolman-Eichenbaum Machine"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Borja Esteban", email = "boressan@outlook.com" },
+    { name = "Jacob Bakermans", email = "jacob.bakermans@gmail.com" },
+]
+keywords = ["machine learning", "neuroscience", "spatial cognition", "pytorch"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch~=2.9.0",
+    "scipy~=1.16.0",
+    "matplotlib~=3.10.0",
+    "tensorboard~=2.20.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest~=8.4.0", "black~=25.9.0", "flake8~=7.3.0", "mypy~=1.18.0"]
+
+[project.urls]
+Homepage = "https://github.com/BorjaEst/torch-tem"
+Repository = "https://github.com/BorjaEst/torch.tem"
+Documentation = "https://github.com/BorjaEst/torch-tem/blob/main/README.md"
+
+[tool.setuptools]
+packages = ["torch_tem"]
+package-dir = { "" = "src" }
+
+[tool.setuptools.package-data]
+torch_tem = ["py.typed"]
+
+[tool.black]
+line-length = 120
+target-version = ["py312"]
+include = '\.pyi?$'
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

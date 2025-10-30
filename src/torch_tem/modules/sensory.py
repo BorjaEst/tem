@@ -1,3 +1,80 @@
+"""
+Sensory Processing Module
+
+This module implements the sensory observation processing pipeline for the
+Tolman-Eichenbaum Machine (TEM). It transforms raw sensory observations into
+multi-scale temporal representations suitable for memory operations.
+
+Key Components:
+    - **SensoryState**: Container for all intermediate and final representations
+    - **SensoryProcessor**: Neural module implementing the complete processing pipeline
+
+Processing Pipeline:
+    1. **Compression**: One-hot → Two-hot encoding (dimensionality reduction)
+       - Reduces observation space while preserving distinctiveness
+       - Uses lookup table for efficient transformation
+
+    2. **Temporal Filtering**: Multi-scale exponential smoothing
+       - Maintains separate filters at different frequencies
+       - Fast filters (high α) capture rapid changes
+       - Slow filters (low α) capture stable patterns
+       - Formula: x[t] = (1-α)·x[t-1] + α·x_new
+
+    3. **Normalization**: Zero-mean, unit-norm representations
+       - Centers data by subtracting mean
+       - Applies ReLU for sparsity
+       - Normalizes to unit L2 norm for stability
+
+    4. **Memory Preparation**: Projection to place cell dimensions
+       - Tiles representations via learned matrices
+       - Prepares for outer product with location codes
+       - Ready for Hebbian memory operations
+
+Multi-Scale Representation:
+    The processor maintains multiple frequency modules (typically 5), each with
+    its own temporal filter rate. This creates a hierarchy of representations:
+
+    - **High frequency** (α ≈ 0.99): Rapid adaptation, recent observations
+    - **Mid frequencies** (α ≈ 0.3): Balanced temporal integration
+    - **Low frequency** (α ≈ 0.01): Slow adaptation, stable patterns
+
+    This multi-scale approach enables both rapid learning and stable long-term
+    representations, similar to the brain's processing at multiple time scales.
+
+Example:
+    >>> from torch_tem.modules.sensory import SensoryProcessor
+    >>> from torch_tem.utils import generate_two_hot_codes
+    >>>
+    >>> # Setup
+    >>> n_obs, n_compressed, n_freq = 45, 10, 5
+    >>> two_hot_table = torch.tensor(generate_two_hot_codes(n_compressed, n_obs))
+    >>> tile_matrices = [torch.randn(n_compressed, 300) for _ in range(n_freq)]
+    >>> initial_freqs = [0.99, 0.3, 0.09, 0.03, 0.01]
+    >>>
+    >>> # Create processor
+    >>> processor = SensoryProcessor(
+    ...     n_frequencies=n_freq,
+    ...     initial_frequencies=initial_freqs,
+    ...     two_hot_table=two_hot_table,
+    ...     tile_matrices=tile_matrices
+    ... )
+    >>>
+    >>> # Process observations
+    >>> x_raw = torch.zeros(4, n_obs)  # Batch of 4 one-hot observations
+    >>> x_raw[0, 5] = 1.0
+    >>> x_prev = [torch.zeros(4, n_compressed) for _ in range(n_freq)]
+    >>> state = processor(x_raw, x_prev)
+    >>>
+    >>> # Access multi-scale representations
+    >>> state.filtered[0]  # High-frequency representation
+    >>> state.filtered[-1]  # Low-frequency representation
+    >>> state.memory_ready[0]  # Ready for memory operations
+
+References:
+    - Whittington et al. (2020). "The Tolman-Eichenbaum Machine"
+    - Multi-scale temporal processing inspired by hippocampal time cells
+"""
+
 from typing import List
 
 import numpy as np
@@ -6,8 +83,6 @@ import torch.nn as nn
 from pydantic import BaseModel, ConfigDict
 from torch import Tensor
 from torch.nn import functional as F
-
-from torch_tem import utils
 
 
 class SensoryState(BaseModel):
@@ -161,7 +236,7 @@ class SensoryProcessor(nn.Module):
         Returns:
             Normalized observations [n_freq x [batch x n_x_c]]
         """
-        return [F.normalise(F.relu(x_filtered[f] - torch.mean(x_filtered[f]))) for f in range(self.n_freq)]
+        return [F.normalize(F.relu(x_filtered[f] - torch.mean(x_filtered[f]))) for f in range(self.n_freq)]
 
     def prepare_for_memory(self, x_normalized: List[torch.Tensor]) -> List[torch.Tensor]:
         """Project sensory representations to place cell dimensions.

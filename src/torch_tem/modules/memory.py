@@ -3,8 +3,7 @@ from typing import List
 import numpy as np
 import torch
 import torch.nn as nn
-
-from torch_tem import utils
+from torch.nn import functional as F
 
 
 class MemorySystem(nn.Module):
@@ -185,4 +184,4 @@ class MemorySystem(nn.Module):
         Returns:
             Activated patterns [batch x n_p] in range ≈[-1, 1]
         """
-        return utils.leaky_relu(torch.clamp(p, min=-1, max=1))
+        return F.leaky_relu(torch.clamp(p, min=-1, max=1))

@@ -6,6 +6,7 @@ import torch.nn as nn
 from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import truncnorm
 from torch import Tensor
+from torch.nn import functional as F
 
 from torch_tem import utils
 from torch_tem.config import ArchitectureConfig, ModelConfig, StaticMatrices
@@ -288,7 +289,7 @@ class AbstractLocationModule(nn.Module):
             # Combine via inverse variance weighting
             mu_g, sigma_g = [], []
             for f in range(self.arch.n_f):
-                mu, sigma = utils.inv_var_weight([g_gen.mu[f], mu_g_mem[f]], [g_gen.sigma[f], sigma_g_mem[f]])
+                mu, sigma = F.inv_var_weight([g_gen.mu[f], mu_g_mem[f]], [g_gen.sigma[f], sigma_g_mem[f]])
                 mu_g.append(mu)
                 sigma_g.append(sigma)
             sources.append("memory")
@@ -501,14 +502,14 @@ class AbstractLocationModule(nn.Module):
 
         mu_g_shiny = self.MLP_mu_g_shiny([shiny_locations for _ in range(self.arch.n_f_g if self.arch.separate_ovc else self.arch.n_f)])
         mu_g_shiny = [torch.abs(mu) for mu in mu_g_shiny]
-        mu_g_shiny = [utils.leaky_relu(torch.clamp(mu, min=-1, max=1)) for mu in mu_g_shiny]
+        mu_g_shiny = [F.leaky_relu(torch.clamp(mu, min=-1, max=1)) for mu in mu_g_shiny]
 
         sigma_g_shiny = self.MLP_sigma_g_shiny([shiny_locations for _ in range(self.arch.n_f_g if self.arch.separate_ovc else self.arch.n_f)])
 
         # Update only OVC modules
         module_start = self.arch.n_f_g if self.arch.separate_ovc else 0
         for f in range(module_start, self.arch.n_f):
-            mu, sigma = utils.inv_var_weight([mu_g[f][shiny_envs, :], mu_g_shiny[f - module_start]], [sigma_g[f][shiny_envs, :], sigma_g_shiny[f - module_start]])
+            mu, sigma = F.inv_var_weight([mu_g[f][shiny_envs, :], mu_g_shiny[f - module_start]], [sigma_g[f][shiny_envs, :], sigma_g_shiny[f - module_start]])
             mask = torch.zeros_like(mu_g[f], dtype=torch.bool)
             mask[shiny_envs, :] = True
             mu_g[f] = mu_g[f].masked_scatter(mask, mu)
@@ -589,7 +590,7 @@ class GroundedLocationModule(nn.Module):
         p = []
         for f in range(self.n_freq):
             mu_p = abstract[f] * sensory[f]  # Element-wise multiplication
-            mu_p = utils.leaky_relu(torch.clamp(mu_p, min=-1, max=1))
+            mu_p = F.leaky_relu(torch.clamp(mu_p, min=-1, max=1))
             p.append(mu_p)
 
         sigma_p = self.MLP_sigma_p(p)

@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from pydantic import BaseModel, ConfigDict
 from torch import Tensor
+from torch.nn import functional as F
 
 from torch_tem import utils
 
@@ -160,7 +161,7 @@ class SensoryProcessor(nn.Module):
         Returns:
             Normalized observations [n_freq x [batch x n_x_c]]
         """
-        return [utils.normalise(utils.relu(x_filtered[f] - torch.mean(x_filtered[f]))) for f in range(self.n_freq)]
+        return [F.normalise(F.relu(x_filtered[f] - torch.mean(x_filtered[f]))) for f in range(self.n_freq)]
 
     def prepare_for_memory(self, x_normalized: List[torch.Tensor]) -> List[torch.Tensor]:
         """Project sensory representations to place cell dimensions.

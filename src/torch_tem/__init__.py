@@ -1,5 +1,7 @@
 """PyTorch implementation of the Tolman-Eichenbaum Machine (TEM)."""
 
+# Import data module
+from . import data
 from .parameters import Parameters
 from .utils import (
     create_downsampling_matrix,
@@ -20,4 +22,5 @@ __all__ = [
     "create_outer_product_tile_matrix",
     "generate_two_hot_codes",
     "create_downsampling_matrix",
+    "data",
 ]

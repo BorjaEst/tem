@@ -3,9 +3,34 @@ from typing import List
 import numpy as np
 import torch
 import torch.nn as nn
+from pydantic import BaseModel, ConfigDict
+from torch import Tensor
 
 from torch_tem import utils
-from torch_tem.core.states import SensoryState
+
+
+class SensoryState(BaseModel):
+    """Container for sensory processing outputs.
+
+    This state object captures all intermediate and final representations
+    produced by the sensory processing pipeline, enabling downstream modules
+    to access whichever representation is most appropriate for their needs.
+
+    Attributes:
+        raw: Raw one-hot observation [batch, n_x]
+        compressed: Two-hot encoded observation [batch, n_x_c]
+        filtered: Temporally smoothed representations per frequency [n_freq × [batch, n_x_c]]
+        normalized: Zero-mean, unit-norm representations per frequency [n_freq × [batch, n_x_c]]
+        memory_ready: Projected to place cell dimensions [n_freq × [batch, n_p]]
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    raw: Tensor
+    compressed: Tensor
+    filtered: List[Tensor]
+    normalized: List[Tensor]
+    memory_ready: List[Tensor]
 
 
 class SensoryProcessor(nn.Module):

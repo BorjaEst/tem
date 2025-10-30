@@ -5,14 +5,16 @@ Refactored TEM Model - Modular Architecture
 Following OOP principles with clear separation of concerns.
 """
 import copy
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from lightning import LightningModule
+from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import truncnorm
+from torch import Tensor
 
 from torch_tem import utils
 from torch_tem.config import (
@@ -22,18 +24,188 @@ from torch_tem.config import (
     StaticMatrices,
 )
 from torch_tem.core.mlp import MLP
-from torch_tem.core.states import (
+from torch_tem.modules.location import (
+    AbstractLocationModule,
     AbstractLocationState,
-    EpisodeState,
+    GroundedLocationModule,
     GroundedLocationState,
-    IterationResult,
-    IterationStates,
-    LossComponents,
-    ObservationDistribution,
 )
-from torch_tem.modules.location import AbstractLocationModule, GroundedLocationModule
 from torch_tem.modules.memory import MemorySystem
-from torch_tem.modules.sensory import SensoryProcessor
+from torch_tem.modules.sensory import SensoryProcessor, SensoryState
+
+# ==============================================================================
+# Orchestrator-Level State Models
+# ==============================================================================
+# These states coordinate information flow between modules and are owned
+# by the TEMModel orchestrator rather than individual modules.
+
+
+class ObservationDistribution(BaseModel):
+    """Container for generated observation distribution.
+
+    Represents a probabilistic prediction of sensory observations,
+    typically decoded from place cell activations.
+
+    Attributes:
+        logits: Raw network outputs before softmax [batch, n_x]
+        probabilities: Normalized probability distribution P(x) [batch, n_x]
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    logits: Tensor
+    probabilities: Tensor
+
+    def sample(self) -> Tensor:
+        """Sample from categorical distribution.
+
+        Returns:
+            Sampled observation indices [batch, 1]
+        """
+        return torch.multinomial(self.probabilities, 1)
+
+    def mode(self) -> Tensor:
+        """Return most likely observation.
+
+        Returns:
+            Most probable observation index [batch]
+        """
+        return torch.argmax(self.probabilities, dim=-1)
+
+
+class EpisodeState(BaseModel):
+    """Complete state for an episode.
+
+    Maintains all persistent state across multiple iterations within
+    an episode, including memory matrices and previous activations.
+
+    Attributes:
+        memory_gen: Generative memory matrix [batch, n_p_total, n_p_total]
+        memory_inf: Inference memory matrix if separate [batch, n_p_total, n_p_total]
+        g_prev: Previous grid cell activations [n_freq × [batch, n_g[f]]]
+        x_prev: Previous sensory observations [n_freq × [batch, n_x_c]]
+        step: Current step number within episode
+        metadata: Optional additional episode-level information
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    memory_gen: Tensor
+    memory_inf: Optional[Tensor]
+    g_prev: List[Tensor]
+    x_prev: List[Tensor]
+    step: int
+    metadata: Dict = Field(default_factory=dict)
+
+
+class IterationStates(BaseModel):
+    """All internal states from one iteration.
+
+    Collects the internal representations from all modules during
+    a single forward pass, useful for analysis and debugging.
+
+    Attributes:
+        sensory: Sensory processing outputs
+        abstract_inf: Inferred abstract location (with memory correction)
+        abstract_gen: Generated abstract location (path integration only)
+        grounded_inf: Inferred grounded location (grid × sensory)
+        grounded_gen: Generated grounded location from memory retrieval
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    sensory: SensoryState
+    abstract_inf: AbstractLocationState
+    abstract_gen: AbstractLocationState
+    grounded_inf: GroundedLocationState
+    grounded_gen: List[Tensor]
+
+
+class LossComponents(BaseModel):
+    """Individual loss components for training.
+
+    Breaks down the total training objective into interpretable components,
+    each encouraging a specific aspect of correct behavior.
+
+    Loss Definitions:
+    - L_p_g: Consistency between inferred and generated place cells
+    - L_p_x: Consistency between inferred place cells and sensory retrieval
+    - L_x_gen: Observation reconstruction from generated grid cells
+    - L_x_g: Observation reconstruction from inferred grid cells
+    - L_x_p: Observation reconstruction from inferred place cells
+    - L_g: Consistency between inferred and generated grid cells
+    - L_reg_g: L2 regularization on grid cell activations
+    - L_reg_p: L1 regularization on place cell activations
+
+    Attributes:
+        L_p_g: Grounded location consistency loss [batch]
+        L_p_x: Sensory-grounded consistency loss [batch]
+        L_x_gen: Generative observation loss [batch]
+        L_x_g: Grid-based observation loss [batch]
+        L_x_p: Place-based observation loss [batch]
+        L_g: Abstract location consistency loss [batch]
+        L_reg_g: Grid cell regularization loss [batch]
+        L_reg_p: Place cell regularization loss [batch]
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    L_p_g: Tensor
+    L_p_x: Tensor
+    L_x_gen: Tensor
+    L_x_g: Tensor
+    L_x_p: Tensor
+    L_g: Tensor
+    L_reg_g: Tensor
+    L_reg_p: Tensor
+
+    def as_list(self) -> List[Tensor]:
+        """Return losses as list in standard order.
+
+        Returns:
+            List of loss tensors in canonical order
+        """
+        return [
+            self.L_p_g,
+            self.L_p_x,
+            self.L_x_gen,
+            self.L_x_g,
+            self.L_x_p,
+            self.L_g,
+            self.L_reg_g,
+            self.L_reg_p,
+        ]
+
+    @property
+    def total(self) -> Tensor:
+        """Sum of all loss components.
+
+        Returns:
+            Total loss [batch]
+        """
+        return sum(self.as_list())
+
+
+class IterationResult(BaseModel):
+    """Complete result from one iteration.
+
+    Packages all outputs from a single TEM iteration, including
+    losses for training, internal states for analysis, observation
+    predictions, and updated state for the next iteration.
+
+    Attributes:
+        losses: All loss components for training
+        states: Internal module states for analysis
+        observations: Observation distributions from different pathways
+        next_state: Updated episode state for next iteration
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    losses: LossComponents
+    states: IterationStates
+    observations: List[ObservationDistribution]
+    next_state: EpisodeState
 
 
 class TEMModel(LightningModule):

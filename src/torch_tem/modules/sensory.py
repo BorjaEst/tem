@@ -85,6 +85,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 
+# =============================================================================
 class SensoryState(BaseModel):
     """Container for sensory processing outputs.
 
@@ -102,6 +103,7 @@ class SensoryState(BaseModel):
     memory_ready: List[Tensor] = Field(..., description="Projected to place cell dimensions [n_freq x [batch, n_p]]")
 
 
+# =============================================================================
 class SensoryProcessor(nn.Module):
     """Processes sensory observations through compression, filtering, and normalization.
 
@@ -127,17 +129,12 @@ class SensoryProcessor(nn.Module):
         w_p: Learned weighting for memory preparation (applied via sigmoid)
     """
 
-    def __init__(
-        self,
-        n_frequencies: int,
-        initial_frequencies: List[float],
-        two_hot_table: torch.Tensor,
-        tile_matrices: List[torch.Tensor],
-    ):
+    # -------------------------------------------------------------------------
+    def __init__(self, n_freq: int, init_freq: List[float], two_hot_table: Tensor, W_tile: List[Tensor]):
         super().__init__()
-        self.n_freq = n_frequencies
+        self.n_freq = n_freq
         self.register_buffer("two_hot_table", two_hot_table)  # Move with model
-        self.W_tile = nn.ParameterList([nn.Parameter(w, requires_grad=True) for w in tile_matrices])
+        self.W_tile = nn.ParameterList([nn.Parameter(w, requires_grad=True) for w in W_tile])
 
         # Temporal filtering parameters (learned)
         # Stored in logit space: logit(α) = log(α/(1-α))
@@ -145,7 +142,7 @@ class SensoryProcessor(nn.Module):
         # This ensures α stays in (0,1) during optimization
         self.alpha = nn.ParameterList([
             nn.Parameter(torch.tensor(np.log(f / (1 - f)), dtype=torch.float)) 
-            for f in initial_frequencies
+            for f in init_freq
         ])  # fmt: skip
 
         # Memory preparation weights (learned)
@@ -156,7 +153,8 @@ class SensoryProcessor(nn.Module):
             for _ in range(n_frequencies)
         ])  # fmt: skip
 
-    def forward(self, x_raw: torch.Tensor, x_prev: List[torch.Tensor]) -> SensoryState:
+    # -------------------------------------------------------------------------
+    def forward(self, x_raw: Tensor, x_prev: List[Tensor]) -> SensoryState:
         """Process sensory observation through the complete pipeline.
 
         Args:
@@ -171,14 +169,16 @@ class SensoryProcessor(nn.Module):
                 - normalized: Zero-mean, unit-norm per frequency
                 - memory_ready: Projected to place cell dimensions
         """
-        x_compressed = self.compress(x_raw)  # One-hot → two-hot (dimensionality reduction)
-        x_filtered = self.temporal_filter(x_compressed, x_prev)  # Exponential smoothing
-        x_normalized = self.normalize(x_filtered)  # Center and normalize
-        x_memory = self.prepare_for_memory(x_normalized)  # Project to memory space
+        return SensoryState(
+            raw=(raw := x_raw),
+            compressed=(compressed := self.compress(raw)),  # One-hot → two-hot (dim reduction)
+            filtered=(filtered := self.temporal_filter(compressed, x_prev)),  # Exponential smoothing
+            normalized=(normalized := self.normalize(filtered)),  # Center and normalize
+            memory_ready=self.prepare_for_memory(normalized),  # Project to memory space
+        )
 
-        return SensoryState(raw=x_raw, compressed=x_compressed, filtered=x_filtered, normalized=x_normalized, memory_ready=x_memory)
-
-    def compress(self, x_onehot: torch.Tensor) -> torch.Tensor:
+    # -------------------------------------------------------------------------
+    def compress(self, x_onehot: Tensor) -> Tensor:
         """Compress one-hot to two-hot representation using lookup table.
 
         Two-hot encoding reduces dimensionality while preserving distinctiveness.
@@ -191,9 +191,11 @@ class SensoryProcessor(nn.Module):
         Returns:
             Two-hot encoded observations [batch x n_x_c] where n_x_c < n_x
         """
-        return torch.stack([self.two_hot_table[i] for i in torch.argmax(x_onehot, dim=1)], dim=0)
+        compressed = [self.two_hot_table[i] for i in torch.argmax(x_onehot, dim=1)]
+        return torch.stack(compressed, dim=0)
 
-    def temporal_filter(self, x_compressed: torch.Tensor, x_prev: List[torch.Tensor]) -> List[torch.Tensor]:
+    # -------------------------------------------------------------------------
+    def temporal_filter(self, x_compressed: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
         """Apply exponential temporal filtering (moving average).
 
         Each frequency module maintains its own filter rate:
@@ -209,10 +211,10 @@ class SensoryProcessor(nn.Module):
         Returns:
             Filtered observations per frequency [n_freq x [batch x n_x_c]]
         """
-        alpha = [torch.sigmoid(self.alpha[f]) for f in range(self.n_freq)]
-        return [(1 - alpha[f]) * x_prev[f] + alpha[f] * x_compressed for f in range(self.n_freq)]
+        a = [torch.sigmoid(self.alpha[f]) for f in range(self.n_freq)]  # Alpha
+        return [(1 - a[f]) * x_prev[f] + a[f] * x_compressed for f in range(self.n_freq)]
 
-    def normalize(self, x_filtered: List[torch.Tensor]) -> List[torch.Tensor]:
+    def normalize(self, x_filtered: List[Tensor]) -> List[Tensor]:
         """Normalize sensory input to zero-mean, unit-norm.
 
         Normalization ensures consistent scale across different observations
@@ -229,9 +231,13 @@ class SensoryProcessor(nn.Module):
         Returns:
             Normalized observations [n_freq x [batch x n_x_c]]
         """
-        return [F.normalize(F.relu(x_filtered[f] - torch.mean(x_filtered[f]))) for f in range(self.n_freq)]
+        return [
+            F.normalize(F.relu(x_filtered[f] - torch.mean(x_filtered[f]))) 
+            for f in range(self.n_freq)
+        ]  # fmt: skip
 
-    def prepare_for_memory(self, x_normalized: List[torch.Tensor]) -> List[torch.Tensor]:
+    # -------------------------------------------------------------------------
+    def prepare_for_memory(self, x_normalized: List[Tensor]) -> List[Tensor]:
         """Project sensory representations to place cell dimensions.
 
         Prepares sensory input for Hebbian memory operations by:
@@ -247,13 +253,13 @@ class SensoryProcessor(nn.Module):
         Returns:
             Memory-ready representations [n_freq x [batch x n_p]]
         """
-        return [torch.sigmoid(self.w_p[f]) * (x_normalized[f] @ self.W_tile[f]) for f in range(self.n_freq)]
+        return [
+            torch.sigmoid(self.w_p[f]) * (x_normalized[f] @ self.W_tile[f])
+            for f in range(self.n_freq)
+        ]  # fmt: skip
 
 
 # ==============================================================================
-# Usage Example
-# ==============================================================================
-
 if __name__ == "__main__":
     """
     Example usage of SensoryProcessor for processing observations.
@@ -283,18 +289,16 @@ if __name__ == "__main__":
     two_hot_table = torch.eye(n_observations)[:, :n_compressed]  # Simplified: just truncate
 
     # Create tile matrices for outer product
-    tile_matrices = [torch.randn(n_compressed, n_grid * n_compressed) / 10 for _ in range(n_frequencies)]
+    W_tile = [
+        torch.randn(n_compressed, n_grid * n_compressed) / 10 
+        for _ in range(n_frequencies)
+    ]  # fmt: skip
 
     # Initialize frequencies (high to low frequency)
-    initial_frequencies = [0.99, 0.3, 0.09, 0.03, 0.01]
+    init_freq = [0.99, 0.3, 0.09, 0.03, 0.01]
 
     # Create processor
-    processor = SensoryProcessor(
-        n_frequencies=n_frequencies,
-        initial_frequencies=initial_frequencies,
-        two_hot_table=two_hot_table,
-        tile_matrices=tile_matrices,
-    )
+    processor = SensoryProcessor(n_frequencies, init_freq, two_hot_table, W_tile)
 
     # Create sample one-hot observations
     x_raw = torch.zeros(batch_size, n_observations)

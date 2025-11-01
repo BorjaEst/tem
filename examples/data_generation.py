@@ -35,7 +35,7 @@ class ExampleConfig(BaseSettings):
 
     # Environment configuration
     grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for programmatic environment (used if env_path not provided)")
-    observation_mode: Literal["unique", "shared"] = Field(default="unique", description="Observation generation mode for grids")
+    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
 
     # Walk generation
     n_walks: int = Field(default=5, ge=1, le=20, description="Number of walks to generate and visualize")

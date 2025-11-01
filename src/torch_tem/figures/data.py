@@ -13,6 +13,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from torch_tem import utils
+
 
 # ==============================================================================
 # Protocols
@@ -45,44 +47,6 @@ class WalkProtocol(Protocol):
 # ==============================================================================
 # Environment Visualization
 # ==============================================================================
-def _detect_grid_structure(adj: np.ndarray, n_locs: int) -> Optional[Tuple[int, int]]:
-    """Detect if environment is a grid and return (width, height).
-
-    Checks if the graph structure matches a grid topology.
-    """
-    # Try common grid dimensions
-    for width in range(2, int(np.sqrt(n_locs)) + 2):
-        if n_locs % width == 0:
-            height = n_locs // width
-
-            # Check if adjacency matches grid pattern
-            is_grid = True
-            for loc_id in range(n_locs):
-                i, j = loc_id // width, loc_id % width
-
-                # Count expected neighbors
-                expected_neighbors = []
-                if i > 0:
-                    expected_neighbors.append((i - 1) * width + j)  # up
-                if i < height - 1:
-                    expected_neighbors.append((i + 1) * width + j)  # down
-                if j > 0:
-                    expected_neighbors.append(i * width + (j - 1))  # left
-                if j < width - 1:
-                    expected_neighbors.append(i * width + (j + 1))  # right
-
-                # Check actual neighbors match
-                actual_neighbors = [k for k in range(n_locs) if adj[loc_id, k] > 0]
-                if set(actual_neighbors) != set(expected_neighbors):
-                    is_grid = False
-                    break
-
-            if is_grid:
-                return (width, height)
-
-    return None
-
-
 def _compute_layout(adj: np.ndarray, n_locs: int) -> Tuple[np.ndarray, np.ndarray]:
     """Compute optimal node positions based on graph structure.
 
@@ -95,7 +59,7 @@ def _compute_layout(adj: np.ndarray, n_locs: int) -> Tuple[np.ndarray, np.ndarra
         Tuple of (x_positions, y_positions) arrays
     """
     # Try to detect grid structure
-    grid_dims = _detect_grid_structure(adj, n_locs)
+    grid_dims = utils.detect_grid_structure(adj, n_locs)
 
     if grid_dims is not None:
         # Use grid layout

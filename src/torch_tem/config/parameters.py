@@ -240,10 +240,11 @@ class Parameters(BaseModel):
         if self.p_update_mask.numel() > 1:
             return self.p_update_mask
 
-        return utils.create_hierarchical_mask(
-            n_p_list=self.n_p_calculated,
+        return utils.create_p_update_mask(
+            n_p=self.n_p_calculated,
             n_f=self.n_f_calculated,
             n_f_g=self.n_f_g_calculated,
+            n_f_ovc=self.n_f_ovc_calculated,
             f_initial=self.f_initial_extended,
         )
 
@@ -253,11 +254,13 @@ class Parameters(BaseModel):
         if self.p_retrieve_mask_inf:
             return self.p_retrieve_mask_inf
 
-        return utils.create_retrieval_masks(
-            n_p_list=self.n_p_calculated,
-            n_attractor=self.i_attractor_calculated,
-            max_iters_per_freq=self.i_attractor_max_freq_inf_calculated,
+        inf_masks, _ = utils.create_p_retrieve_masks(
+            n_p=self.n_p_calculated,
+            i_attractor=self.i_attractor_calculated,
+            i_attractor_max_freq_inf=self.i_attractor_max_freq_inf_calculated,
+            i_attractor_max_freq_gen=self.i_attractor_max_freq_gen_calculated,
         )
+        return inf_masks
 
     @computed_field(description="Mask for hierarchical memory retrieval in generative model")
     @property
@@ -265,11 +268,13 @@ class Parameters(BaseModel):
         if self.p_retrieve_mask_gen:
             return self.p_retrieve_mask_gen
 
-        return utils.create_retrieval_masks(
-            n_p_list=self.n_p_calculated,
-            n_attractor=self.i_attractor_calculated,
-            max_iters_per_freq=self.i_attractor_max_freq_gen_calculated,
+        _, gen_masks = utils.create_p_retrieve_masks(
+            n_p=self.n_p_calculated,
+            i_attractor=self.i_attractor_calculated,
+            i_attractor_max_freq_inf=self.i_attractor_max_freq_inf_calculated,
+            i_attractor_max_freq_gen=self.i_attractor_max_freq_gen_calculated,
         )
+        return gen_masks
 
     @computed_field(description="Hierarchical connections for abstract location module transitions")
     @property
@@ -277,7 +282,7 @@ class Parameters(BaseModel):
         if self.g_connections:
             return self.g_connections
 
-        return utils.create_hierarchical_connections(
+        return utils.create_g_connections(
             n_f=self.n_f_calculated,
             n_f_g=self.n_f_g_calculated,
             n_f_ovc=self.n_f_ovc_calculated,
@@ -296,9 +301,8 @@ class Parameters(BaseModel):
 
         n_g_sub = self.n_g_subsampled_combined
         n_x_f = self.n_x_f_calculated
-        n_f = self.n_f_calculated
 
-        return [utils.create_outer_product_repeat_matrix(n_g_sub[f], n_x_f[f]) for f in range(n_f)]
+        return utils.create_W_repeat(n_g_sub, n_x_f)
 
     @computed_field(description="Matrix for tiling sensory observation x for outer product with g")
     @property
@@ -308,9 +312,8 @@ class Parameters(BaseModel):
 
         n_g_sub = self.n_g_subsampled_combined
         n_x_f = self.n_x_f_calculated
-        n_f = self.n_f_calculated
 
-        return [utils.create_outer_product_tile_matrix(n_g_sub[f], n_x_f[f]) for f in range(n_f)]
+        return utils.create_W_tile(n_g_sub, n_x_f)
 
     # Encoding/decoding matrices
     two_hot_table: List[Tensor] = Field(default_factory=list, description="Table for converting one-hot to two-hot compressed representation")
@@ -322,8 +325,7 @@ class Parameters(BaseModel):
         if self.two_hot_table:
             return self.two_hot_table
 
-        codes = utils.generate_two_hot_codes(n_bits=self.n_x_c, n_codes=self.n_x)
-        return [tensor(code) for code in codes]
+        return utils.create_two_hot_table(n_x=self.n_x, n_x_c=self.n_x_c)
 
     @computed_field(description="Downsampling matrix from grid cells to compressed grid cells")
     @property
@@ -334,4 +336,4 @@ class Parameters(BaseModel):
         n_g = self.n_g_calculated
         n_g_sub = self.n_g_subsampled_combined
 
-        return [utils.create_downsampling_matrix(dim_in, dim_out) for dim_in, dim_out in zip(n_g, n_g_sub)]
+        return utils.create_g_downsample(n_g, n_g_sub)

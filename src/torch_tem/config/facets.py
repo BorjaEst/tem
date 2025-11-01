@@ -109,6 +109,29 @@ class ProjectionParams(Protocol):
         ...
 
 
+class SensoryProjectionParams(Protocol):
+    """Minimal interface for SensoryProjection.
+
+    Dependencies: n_f_calculated, n_x_f_calculated, W_tile_calculated
+    Complexity: Low (3 parameters)
+    """
+
+    @property
+    def n_f_calculated(self) -> int:
+        """Total number of frequency modules."""
+        ...
+
+    @property
+    def n_x_f_calculated(self) -> List[int]:
+        """Neurons for temporally filtered sensory experience x per frequency."""
+        ...
+
+    @property
+    def W_tile_calculated(self) -> List[Tensor]:
+        """Matrix for tiling sensory observation x for outer product with g."""
+        ...
+
+
 # =======================================================================================
 # MEMORY SYSTEM
 # =======================================================================================

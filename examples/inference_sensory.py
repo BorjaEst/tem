@@ -19,13 +19,14 @@ Usage:
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import List, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from pydantic import Field, field_validator
+from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from torch import Tensor
 
 from torch_tem import data, figures
 from torch_tem.core.encoder import SensoryEncoder
@@ -36,7 +37,11 @@ from torch_tem.inference.sensory import SensoryProcessor
 # Configuration
 # ==============================================================================
 class ExampleConfig(BaseSettings):
-    """Configuration for sensory processing example."""
+    """Configuration for sensory processing example.
+
+    This config implements both EncoderParams and SensoryProcessorParams protocols,
+    allowing direct instantiation of components without intermediate helper functions.
+    """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="inference_sensory")
 
@@ -61,6 +66,9 @@ class ExampleConfig(BaseSettings):
     show_plots: bool = Field(default=True, description="Display plots interactively")
     save_plots: bool = Field(default=True, description="Save plots to output directory")
 
+    # Internal fields (set after environment is created)
+    n_x: int = Field(default=0, description="Number of distinct observations (set dynamically)")
+
     @field_validator("output_dir")
     @classmethod
     def create_output_dir(cls, v: Path) -> Path:
@@ -68,65 +76,60 @@ class ExampleConfig(BaseSettings):
         v.mkdir(parents=True, exist_ok=True)
         return v
 
+    # ==============================================================================
+    # EncoderParams Protocol Implementation
+    # ==============================================================================
 
-# ==============================================================================
-# Helper: Create minimal params object
-# ==============================================================================
-def create_sensory_params(n_f: int, n_x_c: int, f_min: float, f_max: float):
-    """Create a minimal parameter object for SensoryProcessor.
+    @computed_field
+    @property
+    def two_hot_table_calculated(self) -> List[Tensor]:
+        """Table for converting one-hot to two-hot compressed representation.
 
-    Args:
-        n_f: Number of frequency channels
-        n_x_c: Compressed sensory dimension
-        f_min: Minimum frequency
-        f_max: Maximum frequency
+        Implements EncoderParams protocol requirement.
+        """
+        two_hot_table = []
+        for i in range(self.n_x):
+            code = torch.zeros(self.n_x_c)
+            idx1 = i % self.n_x_c
+            idx2 = (i + 1) % self.n_x_c
+            code[idx1] = 1.0
+            code[idx2] = 1.0
+            two_hot_table.append(code)
+        return two_hot_table
 
-    Returns:
-        Simple namespace satisfying SensoryProcessorParams protocol
-    """
-    import types
+    # ==============================================================================
+    # SensoryProcessorParams Protocol Implementation
+    # ==============================================================================
 
-    # Generate frequency bank (logarithmic spacing)
-    if n_f == 1:
-        frequencies = [f_max]
-    else:
-        frequencies = np.logspace(np.log10(f_min), np.log10(f_max), n_f).tolist()
+    @computed_field
+    @property
+    def n_f_calculated(self) -> int:
+        """Total number of frequency modules.
 
-    return types.SimpleNamespace(
-        n_f_calculated=n_f,
-        n_x_c=n_x_c,
-        n_x_f_calculated=n_f * n_x_c,
-        f_initial_extended=frequencies,
-    )
+        Implements SensoryProcessorParams protocol requirement.
+        """
+        return self.n_frequencies
 
+    @computed_field
+    @property
+    def n_x_f_calculated(self) -> List[int]:
+        """Neurons for temporally filtered sensory experience x per frequency.
 
-def create_encoder_params(n_x: int, n_x_c: int):
-    """Create a minimal parameter object for SensoryEncoder.
+        Implements SensoryProcessorParams protocol requirement.
+        """
+        return [self.n_x_c for _ in range(self.n_frequencies)]
 
-    Args:
-        n_x: Number of distinct observations
-        n_x_c: Compressed sensory dimension
+    @computed_field
+    @property
+    def f_initial_extended(self) -> List[float]:
+        """Extended f_initial with frequency values (logarithmic spacing).
 
-    Returns:
-        Simple namespace satisfying EncoderParams protocol
-    """
-    import types
-
-    # Generate two-hot encoding table
-    two_hot_table = []
-    for i in range(n_x):
-        code = torch.zeros(n_x_c)
-        idx1 = i % n_x_c
-        idx2 = (i + 1) % n_x_c
-        code[idx1] = 1.0
-        code[idx2] = 1.0
-        two_hot_table.append(code)
-
-    return types.SimpleNamespace(
-        n_x=n_x,
-        n_x_c=n_x_c,
-        two_hot_table_calculated=two_hot_table,
-    )
+        Implements SensoryProcessorParams protocol requirement.
+        """
+        if self.n_frequencies == 1:
+            return [self.f_max]
+        else:
+            return np.logspace(np.log10(self.f_min), np.log10(self.f_max), self.n_frequencies).tolist()
 
 
 # ==============================================================================
@@ -146,6 +149,9 @@ if __name__ == "__main__":
     env.validate()
     print(f"  Environment: {env.n_locations} locations, {env.n_observations} observations")
 
+    # Update config with actual observation count from environment
+    config.n_x = env.n_observations
+
     policy_gen = data.PolicyGenerator(env)
     if config.policy_type == "random":
         policy = policy_gen.random_policy()
@@ -158,18 +164,15 @@ if __name__ == "__main__":
     walk = walks[0]
 
     # Extract observations and locations
-    observations = torch.stack([torch.tensor(obs, dtype=torch.float32) for obs in walk.observations])  # [T, n_x]
+    observations = torch.stack([obs.clone().detach() for obs in walk.observations])  # [T, n_x]
     locations = torch.tensor(walk.locations, dtype=torch.long)  # [T]
     print(f"  Generated walk: {config.walk_length} steps")
 
-    # 2. Initialize sensory encoder and processor
+    # 2. Initialize sensory encoder and processor using config (implements protocols)
     print("\n[2/5] Initializing SensoryEncoder and SensoryProcessor...")
-    encoder_params = create_encoder_params(n_x=env.n_observations, n_x_c=config.n_x_c)
-    encoder = SensoryEncoder(encoder_params)
-
-    sensory_params = create_sensory_params(n_f=config.n_frequencies, n_x_c=config.n_x_c, f_min=config.f_min, f_max=config.f_max)
-    processor = SensoryProcessor(sensory_params)
-    print(f"  Frequencies: {sensory_params.f_initial_extended}")
+    encoder = SensoryEncoder(config)  # config satisfies EncoderParams protocol
+    processor = SensoryProcessor(config)  # config satisfies SensoryProcessorParams protocol
+    print(f"  Frequencies: {config.f_initial_extended}")
 
     # 3. Process observations through time
     print("\n[3/5] Processing observations through temporal filter...")
@@ -199,19 +202,19 @@ if __name__ == "__main__":
     print("\n[4/5] Generating visualizations...")
 
     # Plot 1: Frequency bank configuration
-    fig1 = figures.plot_frequency_bank(sensory_params.f_initial_extended, title="Frequency Bank Configuration")
+    fig1 = figures.plot_frequency_bank(config.f_initial_extended, title="Frequency Bank Configuration")
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_frequency_bank.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '01_frequency_bank.png'}")
 
     # Plot 2: Temporal filtering across all frequencies
-    fig2 = figures.plot_temporal_filtering(x_c_history, x_f_history, sensory_params.f_initial_extended, title="Temporal Filtering Across Frequencies")
+    fig2 = figures.plot_temporal_filtering(x_c_history, x_f_history, config.f_initial_extended, title="Temporal Filtering Across Frequencies")
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_temporal_filtering.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '02_temporal_filtering.png'}")
 
     # Plot 3: Single feature comparison
-    fig3 = figures.plot_frequency_comparison(x_c_history, x_f_history, sensory_params.f_initial_extended, feature_idx=0, title="Feature 0 Across Frequencies")
+    fig3 = figures.plot_frequency_comparison(x_c_history, x_f_history, config.f_initial_extended, feature_idx=0, title="Feature 0 Across Frequencies")
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_frequency_comparison.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '03_frequency_comparison.png'}")
@@ -226,7 +229,7 @@ if __name__ == "__main__":
     # Full processing (with normalization)
     x_f_normalized = processor(x_c_demo, x_prev_demo)
 
-    fig4 = figures.plot_normalization_effects(x_f_raw, x_f_normalized, sensory_params.f_initial_extended, title="L2 Normalization Effects")
+    fig4 = figures.plot_normalization_effects(x_f_raw, x_f_normalized, config.f_initial_extended, title="L2 Normalization Effects")
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_normalization_effects.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '04_normalization_effects.png'}")

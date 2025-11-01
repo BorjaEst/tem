@@ -19,16 +19,15 @@ Usage:
 """
 
 from pathlib import Path
-from typing import List, Literal
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from torch import Tensor
 
-from torch_tem import data
+from torch_tem import data, figures
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.inference.sensory import SensoryProcessor
 
@@ -68,174 +67,6 @@ class ExampleConfig(BaseSettings):
         """Create output directory if it doesn't exist."""
         v.mkdir(parents=True, exist_ok=True)
         return v
-
-
-# ==============================================================================
-# Visualization Functions
-# ==============================================================================
-def plot_frequency_bank(frequencies: List[float], title: str = "Frequency Bank Configuration") -> plt.Figure:
-    """Visualize frequency bank showing memory time constants.
-
-    Args:
-        frequencies: List of frequency values in (0, 1]
-        title: Plot title
-
-    Returns:
-        matplotlib Figure
-    """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
-    # Plot frequencies
-    ax1.bar(range(len(frequencies)), frequencies, color="steelblue", alpha=0.7, edgecolor="black")
-    ax1.set_xlabel("Frequency Channel", fontsize=11)
-    ax1.set_ylabel("Frequency Value", fontsize=11)
-    ax1.set_title("Frequency Values (0 = long memory, 1 = no memory)", fontsize=12)
-    ax1.set_ylim([0, 1.05])
-    ax1.grid(axis="y", alpha=0.3)
-    ax1.set_xticks(range(len(frequencies)))
-
-    # Plot effective time constants (1 / frequency)
-    time_constants = [1.0 / f if f > 0 else float("inf") for f in frequencies]
-    ax2.bar(range(len(time_constants)), time_constants, color="darkorange", alpha=0.7, edgecolor="black")
-    ax2.set_xlabel("Frequency Channel", fontsize=11)
-    ax2.set_ylabel("Effective Time Constant (steps)", fontsize=11)
-    ax2.set_title("Memory Decay Time Constants", fontsize=12)
-    ax2.grid(axis="y", alpha=0.3)
-    ax2.set_xticks(range(len(frequencies)))
-
-    fig.suptitle(title, fontsize=14, fontweight="bold")
-    fig.tight_layout()
-    return fig
-
-
-def plot_temporal_filtering(
-    x_c_history: Tensor,
-    x_f_history: List[List[Tensor]],
-    frequencies: List[float],
-    locations: Tensor,
-    title: str = "Temporal Filtering Across Frequencies",
-) -> plt.Figure:
-    """Visualize temporal filtering effects across frequency channels.
-
-    Args:
-        x_c_history: [T, n_x_c] compressed sensory over time
-        x_f_history: List of T timesteps, each with n_f filtered tensors [n_x_c]
-        frequencies: List of frequency values
-        locations: [T] location indices for coloring
-        title: Plot title
-
-    Returns:
-        matplotlib Figure
-    """
-    n_f = len(frequencies)
-    T = x_c_history.shape[0]
-
-    # Create subplot grid: original + all frequencies
-    fig, axes = plt.subplots(n_f + 1, 1, figsize=(14, 2 * (n_f + 1)), sharex=True)
-
-    # Plot original compressed sensory
-    x_c_np = x_c_history.detach().cpu().numpy()
-    im0 = axes[0].imshow(x_c_np.T, aspect="auto", cmap="viridis", interpolation="nearest")
-    axes[0].set_ylabel("Feature Dim", fontsize=10)
-    axes[0].set_title("Original Compressed Sensory (x_c)", fontsize=11, fontweight="bold")
-    plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
-
-    # Plot each frequency channel
-    for f_idx in range(n_f):
-        # Stack filtered tensors over time: [T, n_x_c]
-        x_f_t = torch.stack([x_f_history[t][f_idx] for t in range(T)])
-        x_f_np = x_f_t.detach().cpu().numpy()
-
-        im = axes[f_idx + 1].imshow(x_f_np.T, aspect="auto", cmap="viridis", interpolation="nearest")
-        axes[f_idx + 1].set_ylabel("Feature Dim", fontsize=10)
-        freq_val = frequencies[f_idx]
-        tau = 1.0 / freq_val if freq_val > 0 else float("inf")
-        axes[f_idx + 1].set_title(f"Frequency {f_idx}: f={freq_val:.2f} (τ≈{tau:.1f} steps)", fontsize=11, fontweight="bold")
-        plt.colorbar(im, ax=axes[f_idx + 1], fraction=0.046, pad=0.04)
-
-    axes[-1].set_xlabel("Time Step", fontsize=11)
-    fig.suptitle(title, fontsize=14, fontweight="bold", y=0.995)
-    fig.tight_layout()
-    return fig
-
-
-def plot_frequency_comparison(
-    x_c_history: Tensor, x_f_history: List[List[Tensor]], frequencies: List[float], feature_idx: int = 0, title: str = "Single Feature Across Frequencies"
-) -> plt.Figure:
-    """Plot a single feature dimension across all frequency channels over time.
-
-    Args:
-        x_c_history: [T, n_x_c] compressed sensory
-        x_f_history: List of T timesteps with n_f filtered tensors
-        frequencies: List of frequency values
-        feature_idx: Which feature dimension to plot
-        title: Plot title
-
-    Returns:
-        matplotlib Figure
-    """
-    n_f = len(frequencies)
-    T = x_c_history.shape[0]
-
-    fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-
-    # Plot original
-    x_c_feature = x_c_history[:, feature_idx].detach().cpu().numpy()
-    ax.plot(range(T), x_c_feature, label="Original (x_c)", linewidth=2, color="black", linestyle="--", alpha=0.7)
-
-    # Plot each frequency
-    colors = plt.cm.viridis(np.linspace(0, 1, n_f))
-    for f_idx in range(n_f):
-        x_f_feature = torch.stack([x_f_history[t][f_idx][feature_idx] for t in range(T)])
-        x_f_np = x_f_feature.detach().cpu().numpy()
-        freq_val = frequencies[f_idx]
-        tau = 1.0 / freq_val if freq_val > 0 else float("inf")
-        ax.plot(range(T), x_f_np, label=f"f={freq_val:.2f} (τ≈{tau:.1f})", linewidth=1.5, color=colors[f_idx], alpha=0.8)
-
-    ax.set_xlabel("Time Step", fontsize=12)
-    ax.set_ylabel("Activation", fontsize=12)
-    ax.set_title(f"{title} (Feature {feature_idx})", fontsize=13, fontweight="bold")
-    ax.legend(loc="upper right", fontsize=10, framealpha=0.9)
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    return fig
-
-
-def plot_normalization_effects(x_f_raw: List[Tensor], x_f_normalized: List[Tensor], frequencies: List[float], title: str = "Normalization Effects") -> plt.Figure:
-    """Compare raw filtered outputs with normalized outputs.
-
-    Args:
-        x_f_raw: List of n_f raw filtered tensors [B, n_x_c]
-        x_f_normalized: List of n_f normalized tensors [B, n_x_c]
-        frequencies: List of frequency values
-        title: Plot title
-
-    Returns:
-        matplotlib Figure
-    """
-    n_f = len(frequencies)
-    fig, axes = plt.subplots(2, n_f, figsize=(3 * n_f, 6), sharex=True, sharey="row")
-
-    for f_idx in range(n_f):
-        # Raw
-        raw_np = x_f_raw[f_idx].detach().cpu().numpy()
-        im1 = axes[0, f_idx].imshow(raw_np.T, aspect="auto", cmap="coolwarm", interpolation="nearest")
-        axes[0, f_idx].set_title(f"f={frequencies[f_idx]:.2f} (Raw)", fontsize=10)
-        plt.colorbar(im1, ax=axes[0, f_idx], fraction=0.046, pad=0.04)
-
-        # Normalized
-        norm_np = x_f_normalized[f_idx].detach().cpu().numpy()
-        im2 = axes[1, f_idx].imshow(norm_np.T, aspect="auto", cmap="coolwarm", interpolation="nearest")
-        axes[1, f_idx].set_title(f"f={frequencies[f_idx]:.2f} (Norm)", fontsize=10)
-        plt.colorbar(im2, ax=axes[1, f_idx], fraction=0.046, pad=0.04)
-
-        if f_idx == 0:
-            axes[0, f_idx].set_ylabel("Feature Dim (Raw)", fontsize=10)
-            axes[1, f_idx].set_ylabel("Feature Dim (Norm)", fontsize=10)
-
-    fig.suptitle(title, fontsize=14, fontweight="bold")
-    fig.tight_layout()
-    return fig
 
 
 # ==============================================================================
@@ -368,19 +199,19 @@ if __name__ == "__main__":
     print("\n[4/5] Generating visualizations...")
 
     # Plot 1: Frequency bank configuration
-    fig1 = plot_frequency_bank(sensory_params.f_initial_extended, title="Frequency Bank Configuration")
+    fig1 = figures.plot_frequency_bank(sensory_params.f_initial_extended, title="Frequency Bank Configuration")
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_frequency_bank.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '01_frequency_bank.png'}")
 
     # Plot 2: Temporal filtering across all frequencies
-    fig2 = plot_temporal_filtering(x_c_history, x_f_history, sensory_params.f_initial_extended, locations, title="Temporal Filtering Across Frequencies")
+    fig2 = figures.plot_temporal_filtering(x_c_history, x_f_history, sensory_params.f_initial_extended, title="Temporal Filtering Across Frequencies")
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_temporal_filtering.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '02_temporal_filtering.png'}")
 
     # Plot 3: Single feature comparison
-    fig3 = plot_frequency_comparison(x_c_history, x_f_history, sensory_params.f_initial_extended, feature_idx=0, title="Feature 0 Across Frequencies")
+    fig3 = figures.plot_frequency_comparison(x_c_history, x_f_history, sensory_params.f_initial_extended, feature_idx=0, title="Feature 0 Across Frequencies")
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_frequency_comparison.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '03_frequency_comparison.png'}")
@@ -395,7 +226,7 @@ if __name__ == "__main__":
     # Full processing (with normalization)
     x_f_normalized = processor(x_c_demo, x_prev_demo)
 
-    fig4 = plot_normalization_effects(x_f_raw, x_f_normalized, sensory_params.f_initial_extended, title="L2 Normalization Effects")
+    fig4 = figures.plot_normalization_effects(x_f_raw, x_f_normalized, sensory_params.f_initial_extended, title="L2 Normalization Effects")
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_normalization_effects.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '04_normalization_effects.png'}")

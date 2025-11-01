@@ -27,7 +27,7 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
-from torch_tem import data, figures
+from torch_tem import data, figures, utils
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
 from torch_tem.inference.grounded import GroundedLocationInference
@@ -130,30 +130,22 @@ class ExampleConfig(BaseSettings):
     @computed_field(description="Two-hot encoding table")
     @property
     def two_hot_table_calculated(self) -> List[Tensor]:
-        from torch_tem.utils import create_two_hot_table
-
-        return create_two_hot_table(self.n_x, self.n_x_c)
+        return utils.create_two_hot_table(self.n_x, self.n_x_c)
 
     @computed_field(description="Kronecker repeat matrices for outer product")
     @property
     def W_repeat_calculated(self) -> List[Tensor]:
-        from torch_tem.utils import create_W_repeat
-
-        return create_W_repeat(self.n_g_subsampled_per_freq, [self.n_x_c] * self.n_frequencies)
+        return utils.create_W_repeat(self.n_g_subsampled_per_freq, [self.n_x_c] * self.n_frequencies)
 
     @computed_field(description="Kronecker tile matrices for outer product")
     @property
     def W_tile_calculated(self) -> List[Tensor]:
-        from torch_tem.utils import create_W_tile
-
-        return create_W_tile(self.n_g_subsampled_per_freq, [self.n_x_c] * self.n_frequencies)
+        return utils.create_W_tile(self.n_g_subsampled_per_freq, [self.n_x_c] * self.n_frequencies)
 
     @computed_field(description="Downsampling matrices for grid cells")
     @property
     def g_downsample_calculated(self) -> List[Tensor]:
-        from torch_tem.utils import create_g_downsample
-
-        return create_g_downsample(self.n_g_calculated, self.n_g_subsampled_per_freq)
+        return utils.create_g_downsample(self.n_g_calculated, self.n_g_subsampled_per_freq)
 
 
 # ==============================================================================

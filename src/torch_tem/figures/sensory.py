@@ -261,16 +261,22 @@ def plot_normalization_effects(
     if n_f == 1:
         axes = axes.reshape(2, 1)
 
+    # Compute global min/max across all frequencies for shared colorbar
+    all_raw_values = torch.cat([x_f_raw[f_idx].flatten() for f_idx in range(n_f)])
+    all_norm_values = torch.cat([x_f_normalized[f_idx].flatten() for f_idx in range(n_f)])
+    vmin = min(all_raw_values.min().item(), all_norm_values.min().item())
+    vmax = max(all_raw_values.max().item(), all_norm_values.max().item())
+
     for f_idx in range(n_f):
         # Raw
         raw_np = x_f_raw[f_idx].detach().cpu().numpy()
-        im1 = axes[0, f_idx].imshow(raw_np.T, aspect="auto", cmap=cmap, interpolation="nearest")
+        im1 = axes[0, f_idx].imshow(raw_np.T, aspect="auto", cmap=cmap, interpolation="nearest", vmin=vmin, vmax=vmax)
         axes[0, f_idx].set_title(f"f={frequencies[f_idx]:.2f} (Raw)", fontsize=10)
         plt.colorbar(im1, ax=axes[0, f_idx], fraction=0.046, pad=0.04)
 
         # Normalized
         norm_np = x_f_normalized[f_idx].detach().cpu().numpy()
-        im2 = axes[1, f_idx].imshow(norm_np.T, aspect="auto", cmap=cmap, interpolation="nearest")
+        im2 = axes[1, f_idx].imshow(norm_np.T, aspect="auto", cmap=cmap, interpolation="nearest", vmin=vmin, vmax=vmax)
         axes[1, f_idx].set_title(f"f={frequencies[f_idx]:.2f} (Norm)", fontsize=10)
         plt.colorbar(im2, ax=axes[1, f_idx], fraction=0.046, pad=0.04)
 

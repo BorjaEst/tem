@@ -20,6 +20,11 @@ from torch_tem.figures.data import (
     plot_walk_statistics,
     plot_walks,
 )
+from torch_tem.figures.grounded import (
+    plot_grounded_location_activity,
+    plot_outer_product_structure,
+    plot_place_cell_dynamics,
+)
 from torch_tem.figures.sensory import (
     plot_frequency_bank,
     plot_frequency_comparison,
@@ -35,6 +40,10 @@ __all__ = [
     "plot_walks",
     "plot_walk_statistics",
     "plot_batch_tensors",
+    # Grounded location inference
+    "plot_grounded_location_activity",
+    "plot_outer_product_structure",
+    "plot_place_cell_dynamics",
     # Sensory processing
     "plot_frequency_bank",
     "plot_temporal_filtering",

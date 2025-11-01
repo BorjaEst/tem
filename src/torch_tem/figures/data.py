@@ -228,9 +228,7 @@ def plot_policy_comparison(
 # ==============================================================================
 # Walk Visualization
 # ==============================================================================
-def plot_walks(
-    env: EnvironmentProtocol, walks: List[WalkProtocol], title: str = "Generated Walks", figsize: Tuple[float, float] = (12, 8), max_walks: Optional[int] = None
-) -> plt.Figure:
+def plot_walks(env: EnvironmentProtocol, walks: List[WalkProtocol], title: str = "Generated Walks", figsize: Tuple[float, float] = (12, 8)) -> plt.Figure:
     """Visualize multiple walks through the environment.
 
     Args:
@@ -238,7 +236,6 @@ def plot_walks(
         walks: List of Walk objects to visualize
         title: Plot title
         figsize: Figure size
-        max_walks: Maximum number of walks to plot (None = all)
 
     Returns:
         matplotlib Figure object
@@ -247,29 +244,24 @@ def plot_walks(
 
     n_locs = env.n_locations
 
-    # Create circular layout
-    angles = np.linspace(0, 2 * np.pi, n_locs, endpoint=False)
-    x = np.cos(angles)
-    y = np.sin(angles)
-
-    # Plot connections (light gray)
+    # Get adjacency matrix (handle both Tensor and list)
     adj = env.adjacency
     if isinstance(adj, list):
         adj = torch.tensor(adj).numpy()
     else:
         adj = adj.numpy()
 
+    # Compute optimal layout using automatic detection
+    x, y = _compute_layout(adj, n_locs)
+
     for i in range(n_locs):
         for j in range(n_locs):
             if adj[i, j] > 0:
                 ax.plot([x[i], x[j]], [y[i], y[j]], "gray", alpha=0.1, linewidth=1, zorder=1)
 
-    # Limit number of walks if requested
-    walks_to_plot = walks[:max_walks] if max_walks else walks
-    colors = plt.cm.tab10(np.linspace(0, 1, len(walks_to_plot)))
-
     # Plot each walk
-    for walk_idx, walk in enumerate(walks_to_plot):
+    colors = plt.cm.tab10(np.linspace(0, 1, len(walks)))
+    for walk_idx, walk in enumerate(walks):
         # Extract location sequence
         if isinstance(walk.locations, Tensor):
             locs = walk.locations.tolist()

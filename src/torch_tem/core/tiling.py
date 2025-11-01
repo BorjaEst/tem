@@ -1,4 +1,8 @@
-"""Sensory projection for torch_tem package."""
+"""Sensory projection module for TEM.
+
+Transforms normalized sensory observations to p-space representation for Hebbian
+memory indexing. Part of the inference pipeline when use_p_inf=True.
+"""
 
 from typing import List
 
@@ -6,58 +10,126 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..config.facets import SensoryProjectionParams
+from torch_tem.config.facets import SensoryProjectionParams
 
 
 class SensoryProjection(nn.Module):
-    """Projects normalized sensory input to p-space for memory indexing.
+    """Projects sensory input to p-space via learnable tiling transformation.
 
-    This component prepares sensory observations for outer product computation
-    with abstract locations by applying W_tile transformation and learnable
-    per-frequency weighting.
+    In TEM, sensory observations (x) must be transformed to match the dimensionality
+    of the grounded location space (p) for Hebbian memory operations. This module
+    applies a frequency-specific tiling matrix (W_tile) with learnable gating weights
+    to prepare sensory input for outer product computation with abstract locations.
 
-    Responsibilities:
-    - Apply W_tile transformation to normalized sensory input
-    - Per-frequency weighting with learnable sigmoid parameters
-    - Prepare sensory input for Hebbian memory queries
+    Architecture:
+        - Per-frequency tiling matrices (W_tile): Fixed transformation matrices
+        - Per-frequency gate weights (w_p): Learnable scalars controlling contribution
+        - Sigmoid activation: Ensures 0-1 gating range
 
-    Mathematical Operation:
-        For each frequency module f:
+    Forward Pass:
         x_[f] = sigmoid(w_p[f]) * (x_normalized[f] @ W_tile[f])
 
-    Where:
-        - x_normalized[f]: Temporally filtered sensory input [B, n_x_f[f]]
-        - W_tile[f]: Tiling matrix for outer product computation [n_x_f[f], n_p[f]]
-        - w_p[f]: Learnable frequency-specific weight
-        - x_[f]: Projected sensory ready for memory indexing [B, n_p[f]]
+    Args:
+        params: Configuration providing n_f, n_x_f, and W_tile matrices
+
+    Attributes:
+        n_f: Number of frequency modules
+        n_x_f: Sensory dimensions per frequency [n_x_f[f] for f in n_f]
+        W_tile: Fixed tiling matrices [n_x_f[f] x n_p[f] for f in n_f]
+        w_p: Learnable gate weights [n_f learnable scalars]
+
+    Shape:
+        Input: List of [B, n_x_f[f]] tensors (one per frequency)
+        Output: List of [B, n_p[f]] tensors (one per frequency)
     """
 
     def __init__(self, params: SensoryProjectionParams):
-        """Initialize sensory projection.
-
-        Args:
-            params: Configuration satisfying SensoryProjectionParams protocol
-        """
+        """Initialize sensory projection with tiling matrices and gate weights."""
         super().__init__()
         self.n_f = params.n_f_calculated
         self.n_x_f = params.n_x_f_calculated
         self.W_tile = params.W_tile_calculated
 
-        # Learnable frequency-specific weights (applied with sigmoid)
+        # Initialize learnable gate weights (one per frequency module)
         self.w_p = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_f)])
 
     def forward(self, x_normalized: List[Tensor]) -> List[Tensor]:
-        """Project normalized sensory input to p-space.
+        """Transform normalized sensory input to p-space representation.
 
         Args:
-            x_normalized: Temporally filtered and normalized sensory input
-                         [n_f] of [B, n_x_f[f]]
+            x_normalized: Temporally filtered sensory input per frequency
+                         List of [B, n_x_f[f]] tensors
 
         Returns:
-            x_: Projected sensory ready for memory indexing
-                [n_f] of [B, n_p[f]]
+            List of [B, n_p[f]] tensors ready for memory indexing
         """
-        # Apply W_tile transformation with learnable sigmoid-gated weights per frequency
-        x_ = [torch.sigmoid(self.w_p[f]) * torch.matmul(x_normalized[f], self.W_tile[f].to(x_normalized[f].device)) for f in range(self.n_f)]
+        x_ = []
+        for f in range(self.n_f):
+            # Gate sensory input with learnable weight (sigmoid ensures [0,1])
+            gate = torch.sigmoid(self.w_p[f])
+            # Apply tiling transformation to match p-space dimensions
+            W_tile_f = self.W_tile[f].to(x_normalized[f].device)
+            x_f = gate * torch.matmul(x_normalized[f], W_tile_f)
+            x_.append(x_f)
 
         return x_
+
+
+if __name__ == "__main__":
+    """Minimal example demonstrating SensoryProjection usage."""
+    from pydantic import BaseModel, ConfigDict
+
+    # Define minimal config satisfying SensoryProjectionParams protocol
+    class ExampleConfig(BaseModel):
+        """Minimal configuration for example."""
+
+        n_f: int = 3  # Number of frequency modules
+        n_x_f: list[int] = [10, 8, 6]  # Sensory dimensions per frequency
+        W_tile: list[Tensor] = [
+            torch.randn(10, 15),  # [n_x_f[0], n_p[0]]
+            torch.randn(8, 12),  # [n_x_f[1], n_p[1]]
+            torch.randn(6, 9),  # [n_x_f[2], n_p[2]]
+        ]
+
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+
+        @property
+        def n_f_calculated(self) -> int:
+            return self.n_f
+
+        @property
+        def n_x_f_calculated(self) -> list[int]:
+            return self.n_x_f
+
+        @property
+        def W_tile_calculated(self) -> list[Tensor]:
+            return self.W_tile
+
+    # Initialize module
+    config = ExampleConfig()
+    projection = SensoryProjection(config)
+
+    # Create example input (batch_size=2, temporally filtered sensory observations)
+    x_normalized = [
+        torch.randn(2, 10),  # [B, n_x_f[0]]
+        torch.randn(2, 8),  # [B, n_x_f[1]]
+        torch.randn(2, 6),  # [B, n_x_f[2]]
+    ]
+
+    # Forward pass
+    x_projected = projection(x_normalized)
+
+    # Display results
+    print("SensoryProjection Example")
+    print("=" * 50)
+    print(f"Number of frequency modules: {config.n_f}")
+    print(f"Input dimensions per frequency: {config.n_x_f}")
+    print(f"Output dimensions per frequency: {[W.shape[1] for W in config.W_tile]}")
+    print()
+    print("Gate weights (before sigmoid):")
+    for f, w in enumerate(projection.w_p):
+        print(f"  Frequency {f}: {w.item():.4f} → sigmoid: {torch.sigmoid(w).item():.4f}")
+    print()
+    print("Input/Output shapes:")
+    for f in range(config.n_f):
+        print(f"  Frequency {f}: {x_normalized[f].shape} → {x_projected[f].shape}")

@@ -99,31 +99,26 @@ if __name__ == "__main__":
     fig1 = figures.plot_environment_layout(env, title=f"Environment ({env.n_locations} locations)")
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_environment_layout.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {config.output_dir / '01_environment_layout.png'}")
 
     # Plot policy comparison
     fig2 = figures.plot_policy_comparison(env, list(policies.items()), goal_location)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_policy_comparison.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {config.output_dir / '02_policy_comparison.png'}")
 
     # Plot walks
     fig3 = figures.plot_walks(env, walks, title=f"{config.n_walks} Walks ({config.policy_type} policy)")
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_walk_trajectories.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {config.output_dir / '03_walk_trajectories.png'}")
 
     # Plot walk statistics
     fig4 = figures.plot_walk_statistics(walks)
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_walk_statistics.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {config.output_dir / '04_walk_statistics.png'}")
 
     # Plot batch tensors
     fig5 = figures.plot_batch_tensors(obs, actions, locations)
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_batch_tensors.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {config.output_dir / '05_batch_tensors.png'}")
 
     # Show or close plots
     if config.show_plots:

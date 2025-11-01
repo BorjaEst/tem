@@ -8,12 +8,11 @@ from typing import List, Optional, Protocol, Tuple
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
-import networkx as nx
 import numpy as np
 import torch
 from torch import Tensor
 
-from torch_tem import utils
+from torch_tem.utils import compute_graph_layout
 
 
 # ==============================================================================
@@ -47,78 +46,6 @@ class WalkProtocol(Protocol):
 # ==============================================================================
 # Environment Visualization
 # ==============================================================================
-def _compute_layout(adj: np.ndarray, n_locs: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Compute optimal node positions based on graph structure.
-
-    Uses automatic layout detection:
-    1. Detects grid structure → use grid layout
-    2. Otherwise → use NetworkX spring/kamada_kawai layout (if available)
-    3. Fallback → circular layout
-
-    Returns:
-        Tuple of (x_positions, y_positions) arrays
-    """
-    # Try to detect grid structure
-    grid_dims = utils.detect_grid_structure(adj, n_locs)
-
-    if grid_dims is not None:
-        # Use grid layout
-        width, height = grid_dims
-        x = np.array([loc_id % width for loc_id in range(n_locs)])
-        y = np.array([loc_id // width for loc_id in range(n_locs)])
-
-        # Normalize to [-1, 1] range
-        if width > 1:
-            x = 2 * (x / (width - 1)) - 1
-        else:
-            x = np.zeros_like(x)
-
-        if height > 1:
-            y = 2 * (y / (height - 1)) - 1
-        else:
-            y = np.zeros_like(y)
-
-        # Flip y to match standard orientation (top = higher index)
-        y = -y
-
-        return x, y
-
-    # Build NetworkX graph
-    G = nx.Graph()
-    G.add_nodes_from(range(n_locs))
-    for i in range(n_locs):
-        for j in range(i + 1, n_locs):
-            if adj[i, j] > 0 or adj[j, i] > 0:
-                G.add_edge(i, j)
-
-    # Choose layout based on graph properties
-    if n_locs <= 20:
-        # Kamada-Kawai works well for small graphs
-        try:
-            pos = nx.kamada_kawai_layout(G)
-        except:
-            # Fallback to spring layout
-            pos = nx.spring_layout(G, k=1 / np.sqrt(n_locs), iterations=50)
-    else:
-        # Spring layout scales better for larger graphs
-        pos = nx.spring_layout(G, k=1 / np.sqrt(n_locs), iterations=50)
-
-    # Extract coordinates
-    x = np.array([pos[i][0] for i in range(n_locs)])
-    y = np.array([pos[i][1] for i in range(n_locs)])
-
-    # Normalize to [-1, 1] range
-    x_range = x.max() - x.min()
-    y_range = y.max() - y.min()
-
-    if x_range > 0:
-        x = 2 * (x - x.min()) / x_range - 1
-    if y_range > 0:
-        y = 2 * (y - y.min()) / y_range - 1
-
-    return x, y
-
-
 def plot_environment_layout(env: EnvironmentProtocol, title: str = "Environment Layout", figsize: Tuple[float, float] = (10, 10)) -> plt.Figure:
     """Plot environment structure with automatic optimal layout.
 
@@ -149,7 +76,7 @@ def plot_environment_layout(env: EnvironmentProtocol, title: str = "Environment 
     n_locs = env.n_locations
 
     # Compute optimal layout
-    x, y = _compute_layout(adj, n_locs)
+    x, y = compute_graph_layout(adj, n_locs)
 
     # Plot connections
     for i in range(n_locs):
@@ -252,7 +179,7 @@ def plot_walks(env: EnvironmentProtocol, walks: List[WalkProtocol], title: str =
         adj = adj.numpy()
 
     # Compute optimal layout using automatic detection
-    x, y = _compute_layout(adj, n_locs)
+    x, y = compute_graph_layout(adj, n_locs)
 
     for i in range(n_locs):
         for j in range(n_locs):

@@ -1,5 +1,6 @@
 """Utility functions for torch_tem package."""
 
+from .layouts import compute_graph_layout
 from .masks import create_g_connections, create_p_retrieve_masks, create_p_update_mask
 from .matrices import (
     create_g_downsample,
@@ -18,4 +19,5 @@ __all__ = [
     "create_p_retrieve_masks",
     "create_g_connections",
     "detect_grid_structure",
+    "compute_graph_layout",
 ]

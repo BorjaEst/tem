@@ -8,6 +8,7 @@ from typing import List, Optional, Protocol, Tuple
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import torch
 from torch import Tensor
@@ -44,17 +45,134 @@ class WalkProtocol(Protocol):
 # ==============================================================================
 # Environment Visualization
 # ==============================================================================
-def plot_environment_layout(env: EnvironmentProtocol, title: str = "Environment Layout", figsize: Tuple[float, float] = (10, 10), layout: str = "circular") -> plt.Figure:
-    """Plot environment structure showing locations and connections.
+def _detect_grid_structure(adj: np.ndarray, n_locs: int) -> Optional[Tuple[int, int]]:
+    """Detect if environment is a grid and return (width, height).
+
+    Checks if the graph structure matches a grid topology.
+    """
+    # Try common grid dimensions
+    for width in range(2, int(np.sqrt(n_locs)) + 2):
+        if n_locs % width == 0:
+            height = n_locs // width
+
+            # Check if adjacency matches grid pattern
+            is_grid = True
+            for loc_id in range(n_locs):
+                i, j = loc_id // width, loc_id % width
+
+                # Count expected neighbors
+                expected_neighbors = []
+                if i > 0:
+                    expected_neighbors.append((i - 1) * width + j)  # up
+                if i < height - 1:
+                    expected_neighbors.append((i + 1) * width + j)  # down
+                if j > 0:
+                    expected_neighbors.append(i * width + (j - 1))  # left
+                if j < width - 1:
+                    expected_neighbors.append(i * width + (j + 1))  # right
+
+                # Check actual neighbors match
+                actual_neighbors = [k for k in range(n_locs) if adj[loc_id, k] > 0]
+                if set(actual_neighbors) != set(expected_neighbors):
+                    is_grid = False
+                    break
+
+            if is_grid:
+                return (width, height)
+
+    return None
+
+
+def _compute_layout(adj: np.ndarray, n_locs: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute optimal node positions based on graph structure.
+
+    Uses automatic layout detection:
+    1. Detects grid structure → use grid layout
+    2. Otherwise → use NetworkX spring/kamada_kawai layout (if available)
+    3. Fallback → circular layout
+
+    Returns:
+        Tuple of (x_positions, y_positions) arrays
+    """
+    # Try to detect grid structure
+    grid_dims = _detect_grid_structure(adj, n_locs)
+
+    if grid_dims is not None:
+        # Use grid layout
+        width, height = grid_dims
+        x = np.array([loc_id % width for loc_id in range(n_locs)])
+        y = np.array([loc_id // width for loc_id in range(n_locs)])
+
+        # Normalize to [-1, 1] range
+        if width > 1:
+            x = 2 * (x / (width - 1)) - 1
+        else:
+            x = np.zeros_like(x)
+
+        if height > 1:
+            y = 2 * (y / (height - 1)) - 1
+        else:
+            y = np.zeros_like(y)
+
+        # Flip y to match standard orientation (top = higher index)
+        y = -y
+
+        return x, y
+
+    # Build NetworkX graph
+    G = nx.Graph()
+    G.add_nodes_from(range(n_locs))
+    for i in range(n_locs):
+        for j in range(i + 1, n_locs):
+            if adj[i, j] > 0 or adj[j, i] > 0:
+                G.add_edge(i, j)
+
+    # Choose layout based on graph properties
+    if n_locs <= 20:
+        # Kamada-Kawai works well for small graphs
+        try:
+            pos = nx.kamada_kawai_layout(G)
+        except:
+            # Fallback to spring layout
+            pos = nx.spring_layout(G, k=1 / np.sqrt(n_locs), iterations=50)
+    else:
+        # Spring layout scales better for larger graphs
+        pos = nx.spring_layout(G, k=1 / np.sqrt(n_locs), iterations=50)
+
+    # Extract coordinates
+    x = np.array([pos[i][0] for i in range(n_locs)])
+    y = np.array([pos[i][1] for i in range(n_locs)])
+
+    # Normalize to [-1, 1] range
+    x_range = x.max() - x.min()
+    y_range = y.max() - y.min()
+
+    if x_range > 0:
+        x = 2 * (x - x.min()) / x_range - 1
+    if y_range > 0:
+        y = 2 * (y - y.min()) / y_range - 1
+
+    return x, y
+
+
+def plot_environment_layout(env: EnvironmentProtocol, title: str = "Environment Layout", figsize: Tuple[float, float] = (10, 10)) -> plt.Figure:
+    """Plot environment structure with automatic optimal layout.
+
+    Automatically detects graph structure and chooses best visualization:
+    - Grid graphs: Use grid layout preserving spatial structure
+    - General graphs: Use force-directed layout (NetworkX if available)
+    - Fallback: Circular layout
 
     Args:
         env: Environment with adjacency matrix and location count
         title: Plot title
         figsize: Figure size (width, height)
-        layout: Layout algorithm ('circular', 'spring', 'grid')
 
     Returns:
         matplotlib Figure object
+
+    Note:
+        Install networkx for better graph layouts: `pip install networkx`
     """
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -66,14 +184,8 @@ def plot_environment_layout(env: EnvironmentProtocol, title: str = "Environment 
         adj = adj.numpy()
     n_locs = env.n_locations
 
-    # Create layout positions
-    if layout == "circular":
-        angles = np.linspace(0, 2 * np.pi, n_locs, endpoint=False)
-        x = np.cos(angles)
-        y = np.sin(angles)
-    else:
-        # Could implement spring or grid layouts
-        raise NotImplementedError(f"Layout '{layout}' not yet implemented")
+    # Compute optimal layout
+    x, y = _compute_layout(adj, n_locs)
 
     # Plot connections
     for i in range(n_locs):

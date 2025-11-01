@@ -24,13 +24,14 @@ from pathlib import Path
 from typing import List, Literal
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 # Import visualization functions from torch_tem.figures
-from torch_tem import data, figures
+from torch_tem import data, figures, utils
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -103,18 +104,15 @@ class ExampleConfig(BaseSettings):
     @property
     def p_update_mask_calculated(self) -> Tensor:
         """Allow connections only from low to high frequency (coarse to fine)."""
-        n_p_total = sum(self.n_p_calculated)
-        mask = torch.zeros(n_p_total, n_p_total)
-
-        # Build hierarchical mask: low freq can connect to all, high freq only to higher
-        start_idx = 0
-        for freq_idx, n_p in enumerate(self.n_p_calculated):
-            # This frequency can connect to itself and all higher frequencies
-            end_idx = start_idx + n_p
-            mask[start_idx:end_idx, start_idx:] = 1.0
-            start_idx = end_idx
-
-        return mask
+        # Use utility function with simplified parameters (no OVC modules)
+        # All frequencies have equal initial frequency for simple hierarchical structure
+        return utils.create_p_update_mask(
+            n_p=self.n_p_calculated,
+            n_f=self.n_frequencies,
+            n_f_g=self.n_frequencies,  # All modules are grid-based
+            n_f_ovc=0,  # No object vector cell modules
+            f_initial=[float(i) for i in range(self.n_frequencies)],  # 0, 1, 2, ... (low to high)
+        )
 
     @property
     def use_p_inf(self) -> bool:
@@ -135,26 +133,33 @@ class ExampleConfig(BaseSettings):
     @property
     def p_retrieve_mask_inf_calculated(self) -> List[Tensor]:
         """Progressive unmasking: start with low freq, gradually enable higher."""
-        masks = []
-        n_p_total = sum(self.n_p_calculated)
+        # Use utility function: enable each frequency progressively
+        # i_attractor_max_freq = [1, 2, 3, ...] means freq 0 active for iter 0,
+        # freq 1 active for iters 0-1, freq 2 active for iters 0-2, etc.
+        i_attractor_max_freq = list(range(1, self.n_frequencies + 1))
 
-        for iteration in range(self.n_frequencies):
-            mask = torch.zeros(n_p_total)
-            # Enable frequencies up to current iteration (0 = lowest freq)
-            start_idx = 0
-            for freq_idx in range(iteration + 1):
-                n_p = self.n_p_calculated[freq_idx]
-                mask[start_idx : start_idx + n_p] = 1.0
-                start_idx += n_p
-            masks.append(mask)
-
-        return masks
+        inf_masks, _ = utils.create_p_retrieve_masks(
+            n_p=self.n_p_calculated,
+            i_attractor=self.i_attractor_calculated,
+            i_attractor_max_freq_inf=i_attractor_max_freq,
+            i_attractor_max_freq_gen=i_attractor_max_freq,  # Not used, but required
+        )
+        return inf_masks
 
     @computed_field(description="Hierarchical masks for generative retrieval")
     @property
     def p_retrieve_mask_gen_calculated(self) -> List[Tensor]:
         """Same schedule as inference (can be customized for different dynamics)."""
-        return self.p_retrieve_mask_inf_calculated
+        # Use utility function: same progressive schedule
+        i_attractor_max_freq = list(range(1, self.n_frequencies + 1))
+
+        _, gen_masks = utils.create_p_retrieve_masks(
+            n_p=self.n_p_calculated,
+            i_attractor=self.i_attractor_calculated,
+            i_attractor_max_freq_inf=i_attractor_max_freq,  # Not used, but required
+            i_attractor_max_freq_gen=i_attractor_max_freq,
+        )
+        return gen_masks
 
 
 # ==============================================================================
@@ -164,32 +169,15 @@ if __name__ == "__main__":
     """Run the memory attractor dynamics experiment with visualizations."""
     config = ExampleConfig()
 
-    print("=" * 80)
-    print("Memory Attractor Dynamics Example")
-    print("=" * 80)
-    print(f"\nConfiguration:")
-    print(f"  Grid size: {config.grid_size}x{config.grid_size} ({config.n_x} observations)")
-    print(f"  Frequency modules: {config.n_frequencies}")
-    print(f"  Place cells per module: {config.n_p_calculated}")
-    print(f"  Total place cells: {sum(config.n_p_calculated)}")
-    print(f"  Hebbian rates: η={config.eta}, λ={config.lambda_}, κ={config.kappa}")
-    print(f"  Training steps: {config.n_training_steps}")
-
     # Initialize memory components
     storage = MemoryStorage(config)
     attractor = AttractorDynamics(config)
-
-    print(f"\nMemory Architecture:")
-    print(f"  Dual memory: {storage.use_dual_memory}")
-    print(f"  Attractor iterations: {attractor.i_attractor}")
-    print(f"  Hierarchical masks: {len(attractor.p_retrieve_mask_inf)}")
 
     # Generate synthetic spatial patterns for training
     n_p_total = sum(config.n_p_calculated)
     memory_strengths = []
     cosine_sims = []
 
-    print(f"\n{'Training Progress':-^80}")
     for step in range(config.n_training_steps):
         # Generate random grounded locations (simulating spatial navigation)
         # In TEM, these come from: p = g ⊗ x (grid cells ⊗ sensory input)
@@ -203,22 +191,11 @@ if __name__ == "__main__":
         m_gen_strength = torch.norm(storage.M_gen).item()
         memory_strengths.append(m_gen_strength)
 
-        if storage.use_dual_memory:
-            # Measure divergence between inference and generative memories
-            m_gen_flat = storage.M_gen.flatten()
-            m_inf_flat = storage.M_inf.flatten()
-            cosine_sim = torch.nn.functional.cosine_similarity(m_gen_flat, m_inf_flat, dim=0).item()
-            cosine_sims.append(cosine_sim)
-
-        if (step + 1) % 10 == 0 or step == 0:
-            print(f"  Step {step+1:3d}: M_gen strength = {m_gen_strength:8.4f}", end="")
-            if storage.use_dual_memory:
-                print(f", M_gen ↔ M_inf similarity = {cosine_sim:.4f}")
-            else:
-                print()
-
-    # Test attractor dynamics with noisy queries
-    print(f"\n{'Testing Attractor Retrieval':-^80}")
+        # Measure divergence between inference and generative memories
+        m_gen_flat = storage.M_gen.flatten()
+        m_inf_flat = storage.M_inf.flatten()
+        cosine_sim = torch.nn.functional.cosine_similarity(m_gen_flat, m_inf_flat, dim=0).item()
+        cosine_sims.append(cosine_sim)
 
     # Create test patterns (stored patterns from training distribution)
     test_targets = torch.randn(config.n_test_queries, n_p_total).softmax(dim=1)
@@ -241,10 +218,8 @@ if __name__ == "__main__":
         query_error = torch.nn.functional.mse_loss(test_queries[i], test_targets[i]).item()
         retrieval_error = torch.nn.functional.mse_loss(test_retrievals[i], test_targets[i]).item()
         improvement = ((query_error - retrieval_error) / query_error) * 100
-        print(f"  Query {i+1}: Error {query_error:.6f} → {retrieval_error:.6f} (↓{improvement:.1f}%)")
 
     # Test robustness to different noise levels
-    print(f"\n{'Robustness Analysis':-^80}")
     noise_levels = [0.1, 0.2, 0.3, 0.4, 0.5]
     errors_by_mode = {"Inference": [], "Generative": []}
 
@@ -262,62 +237,33 @@ if __name__ == "__main__":
         error_gen = torch.nn.functional.mse_loss(retrieved_gen, test_targets).item()
         errors_by_mode["Generative"].append(error_gen)
 
-    print(f"  Noise levels tested: {noise_levels}")
-    print(f"  Inference errors: {[f'{e:.6f}' for e in errors_by_mode['Inference']]}")
-    print(f"  Generative errors: {[f'{e:.6f}' for e in errors_by_mode['Generative']]}")
-
-    # Generate visualizations
-    print(f"\n{'Generating Visualizations':-^80}")
-
     # Plot 1: Memory matrices
-    fig1 = figures.plot_memory_matrices(
-        storage.M_gen,
-        storage.get_memory(for_inference=True),
-        n_p_per_freq=config.n_p_calculated,
-        n_training_steps=config.n_training_steps,
-    )
+    fig1 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), n_p_per_freq=config.n_p_calculated, n_training_steps=config.n_training_steps)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_memory_matrices.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 01_memory_matrices.png")
 
     # Plot 2: Learning curve
     fig2 = figures.plot_learning_curve(memory_strengths, cosine_sims if storage.use_dual_memory else None)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_learning_curve.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 02_learning_curve.png")
 
     # Plot 3: Hierarchical masks
     fig3 = figures.plot_hierarchical_masks(attractor.p_retrieve_mask_inf, n_p_per_freq=config.n_p_calculated)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_hierarchical_masks.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 03_hierarchical_masks.png")
 
     # Plot 4: Attractor convergence
     fig4 = figures.plot_attractor_convergence(queries_list, retrievals_list, targets_list)
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_attractor_convergence.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 04_attractor_convergence.png")
 
     # Plot 5: Retrieval quality
     fig5 = figures.plot_retrieval_quality(errors_by_mode, noise_levels)
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_retrieval_quality.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 05_retrieval_quality.png")
-
-    print(f"\n{'Summary':-^80}")
-    print(f"  Final memory strength: {memory_strengths[-1]:.4f}")
-    if storage.use_dual_memory:
-        print(f"  Final M_gen ↔ M_inf similarity: {cosine_sims[-1]:.4f}")
-    print(f"  Mean retrieval improvement: {improvement:.1f}%")
-    print(f"  Output directory: {config.output_dir}")
 
     # Show or close plots
     if config.show_plots:
-        print("\nDisplaying plots...")
         plt.show()
     else:
         plt.close("all")
-
-    print("\n" + "=" * 80)
-    print("Example completed successfully!")
-    print("=" * 80)

@@ -151,36 +151,6 @@ class ExampleConfig(BaseSettings):
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
-def generate_synthetic_grid_cells(n_steps: int, n_g: List[int], frequencies: List[float], batch_size: int = 1) -> List[Tensor]:
-    """Generate synthetic grid cell activity patterns.
-
-    Creates oscillating patterns with frequency-dependent dynamics to simulate
-    grid cell responses during spatial navigation.
-
-    Args:
-        n_steps: Number of timesteps
-        n_g: Grid cell dimensions per frequency
-        frequencies: Frequency values per module
-        batch_size: Batch size
-
-    Returns:
-        List of [T, B, n_g[f]] tensors with synthetic grid patterns
-    """
-    n_f = len(n_g)
-    g_history = []
-
-    for f in range(n_f):
-        # Create oscillating patterns with random phase offsets
-        t = torch.linspace(0, 10 * frequencies[f], n_steps).unsqueeze(1).unsqueeze(2)  # [T, 1, 1]
-        phases = torch.randn(1, batch_size, n_g[f]) * 2 * np.pi  # [1, B, n_g[f]]
-
-        # Combine multiple oscillations
-        pattern = torch.sin(t + phases) + 0.3 * torch.sin(2 * t + phases * 0.5)
-        pattern = pattern + 0.2 * torch.randn_like(pattern)  # Add noise
-
-        g_history.append(pattern)
-
-    return g_history
 
 
 def plot_grounded_location_activity(p_history: List[List[Tensor]], observations: Tensor, locations: Tensor, frequencies: List[float], n_cells_per_freq: List[int]) -> plt.Figure:
@@ -341,7 +311,8 @@ if __name__ == "__main__":
     print(f"  GroundedLocationInference: g ⊗ x → p")
 
     # Generate synthetic grid cell patterns (simulating abstract location)
-    g_history = generate_synthetic_grid_cells(config.walk_length, config.n_g_calculated, config.f_initial_extended, batch_size=1)
+    grid_generator = data.SyntheticGridGenerator(config, batch_size=1)
+    g_history = grid_generator.generate()
 
     print(f"\nSynthetic grid cells generated:")
     for f in range(config.n_frequencies):

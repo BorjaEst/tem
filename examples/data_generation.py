@@ -34,7 +34,6 @@ class ExampleConfig(BaseSettings):
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="data_generation")
 
     # Environment configuration
-    env_path: Optional[str] = Field(default=None, description="Path to environment JSON file (overrides grid generation)")
     grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for programmatic environment (used if env_path not provided)")
     observation_mode: Literal["unique", "shared"] = Field(default="unique", description="Observation generation mode for grids")
 
@@ -44,12 +43,12 @@ class ExampleConfig(BaseSettings):
     repeat_bias: float = Field(default=2.0, ge=1.0, le=10.0, description="Action repeat bias for straight-line movement")
 
     # Policy configuration
-    policy_type: Literal["random", "distance", "q_learning", "mixed"] = Field(default="distance", description="Policy type for walk generation")
+    policy_type: Literal["random", "distance", "q_learning"] = Field(default="distance", description="Policy type for walk generation")
     beta: float = Field(default=2.0, ge=0.1, le=10.0, description="Inverse temperature for softmax policies")
     gamma: float = Field(default=0.9, ge=0.0, le=1.0, description="Discount factor for Q-learning")
 
     # Shiny objects
-    n_shiny: int = Field(default=0, ge=0, le=10, description="Number of shiny reward objects (0 disables)")
+    n_shiny: int = Field(default=2, ge=0, le=10, description="Number of shiny reward objects")
     shiny_returns: int = Field(default=5, ge=1, le=20, description="Number of returns to shiny objects")
     shiny_separation: float = Field(default=0.3, ge=0.0, le=1.0, description="Minimum separation between shiny objects (as fraction of max distance)")
 
@@ -73,28 +72,28 @@ if __name__ == "__main__":
     """Run the data generation example with visualizations."""
     config = ExampleConfig()
 
-    print("=" * 80)
-    print("TEM Data Generation Example")
-    print("=" * 80)
-    print(f"\nConfiguration:")
-    for field, value in config.model_dump().items():
-        print(f"  {field}: {value}")
-    print()
-
-    # Step 1: Load or create environment
-    print("Step 1: Loading environment...")
-    if config.env_path:
-        env = data.Environment(config.env_path)
-        print(f"  Loaded from: {config.env_path}")
-    else:
-        env = data.Environment.from_grid(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
-        print(f"  Generated {config.grid_size}x{config.grid_size} grid")
-
-    print(f"  Locations: {env.n_locations}")
-    print(f"  Observations: {env.n_observations}")
-    print(f"  Actions: {env.n_actions}")
+    # Load or create environment
+    env = data.Environment.from_grid(config.grid_size, config.grid_size, config.observation_mode)
     env.validate()
-    print("  ✓ Environment validated")
+
+    # Create policies for comparison
+    policy_gen = data.PolicyGenerator(env)
+    goal_location = env.n_locations - 1  # Use last location as goal
+    policies = {
+        "random": policy_gen.random_policy(),
+        "distance": policy_gen.distance_policy(goal_location, config.beta),
+        "q_learning": policy_gen.q_learning_policy(goal_location, config.gamma, config.beta, n_iterations=100),
+    }
+
+    # Generate walks
+    walk_gen = data.WalkGenerator(env, repeat_bias=config.repeat_bias)
+    policy = policies[config.policy_type]
+    walks = walk_gen.generate_walks(config.n_walks, config.walk_length, policy)
+
+    # DataModule and batch generation
+    shiny_config = data.ShinyConfig(n=config.n_shiny, returns=config.shiny_returns, min_separation=config.shiny_separation, gamma=config.gamma, beta=config.beta)
+    dm = data.TEMDataModule(env_spec=env, batch_size=config.n_walks, walk_length=config.walk_length, shiny_config=shiny_config, repeat_bias=config.repeat_bias)
+    obs, actions, locations = dm.generate_batch()
 
     # Plot environment layout
     fig1 = figures.plot_environment_layout(env, title=f"Environment ({env.n_locations} locations)")
@@ -102,42 +101,11 @@ if __name__ == "__main__":
         fig1.savefig(config.output_dir / "01_environment_layout.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '01_environment_layout.png'}")
 
-    # Step 2: Policy comparison
-    print("\nStep 2: Generating policies...")
-    policy_gen = data.PolicyGenerator(env)
-    goal_location = env.n_locations - 1  # Use last location as goal
-
-    # Generate policies for comparison
-    policies = [
-        ("Random", policy_gen.random_policy()),
-        ("Distance", policy_gen.distance_policy(goal_locations=goal_location, beta=2.0)),
-        ("Q-learning", policy_gen.q_learning_policy(goal_locations=goal_location, gamma=0.9, beta=2.0, n_iterations=100)),
-    ]
-
-    fig2 = figures.plot_policy_comparison(env, policies, goal_location)
+    # Plot policy comparison
+    fig2 = figures.plot_policy_comparison(env, list(policies.items()), goal_location)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_policy_comparison.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '02_policy_comparison.png'}")
-
-    # Step 3: Generate walks
-    print(f"\nStep 3: Generating {config.n_walks} walks...")
-    walk_gen = data.WalkGenerator(env, repeat_bias=config.repeat_bias)
-
-    # Select policy based on config
-    if config.policy_type == "random":
-        policy = policy_gen.random_policy()
-    elif config.policy_type == "distance":
-        policy = policy_gen.distance_policy(goal_locations=goal_location, beta=config.beta)
-    elif config.policy_type == "q_learning":
-        policy = policy_gen.q_learning_policy(goal_locations=goal_location, gamma=config.gamma, beta=config.beta, n_iterations=100)
-    elif config.policy_type == "mixed":
-        random_pol = policy_gen.random_policy()
-        distance_pol = policy_gen.distance_policy(goal_locations=goal_location, beta=config.beta)
-        policy = policy_gen.mix_policies([random_pol, distance_pol], [0.3, 0.7])
-
-    walks = walk_gen.generate_walks(config.n_walks, config.walk_length, policy)
-    print(f"  Generated {len(walks)} walks of length {config.walk_length}")
-    print(f"  Policy: {config.policy_type}")
 
     # Plot walks
     fig3 = figures.plot_walks(env, walks, title=f"{config.n_walks} Walks ({config.policy_type} policy)")
@@ -151,38 +119,13 @@ if __name__ == "__main__":
         fig4.savefig(config.output_dir / "04_walk_statistics.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '04_walk_statistics.png'}")
 
-    # Step 4: DataModule and batch generation
-    print("\nStep 4: PyTorch Lightning DataModule...")
-
-    # Setup shiny config if requested
-    shiny_config = None
-    if config.n_shiny > 0:
-        shiny_config = data.ShinyConfig(n=config.n_shiny, returns=config.shiny_returns, min_separation=config.shiny_separation, gamma=config.gamma, beta=config.beta)
-        print(f"  Shiny objects: {config.n_shiny}")
-
-    dm = data.TEMDataModule(env_spec=env, batch_size=config.n_walks, walk_length=config.walk_length, shiny_config=shiny_config, repeat_bias=config.repeat_bias)
-
-    if shiny_config:
-        print(f"  Shiny locations: {dm.shiny_locations}")
-
-    obs, actions, locations = dm.generate_batch()
-    print(f"  Batch shapes:")
-    print(f"    observations: {tuple(obs.shape)}")
-    print(f"    actions: {tuple(actions.shape)}")
-    print(f"    locations: {tuple(locations.shape)}")
-
     # Plot batch tensors
     fig5 = figures.plot_batch_tensors(obs, actions, locations)
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_batch_tensors.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '05_batch_tensors.png'}")
 
-    # Final summary
-    print("\n" + "=" * 80)
-    print("Example completed successfully!")
-    print(f"Output directory: {config.output_dir}")
-    print("=" * 80)
-
+    # Show or close plots
     if config.show_plots:
         plt.show()
     else:

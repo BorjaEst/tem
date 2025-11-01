@@ -29,6 +29,7 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
+# Import visualization functions from torch_tem.figures
 from torch_tem import data, figures
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
@@ -157,140 +158,6 @@ class ExampleConfig(BaseSettings):
 
 
 # ==============================================================================
-# Visualization Functions
-# ==============================================================================
-
-
-def plot_memory_matrices(M_gen: Tensor, M_inf: Tensor, config: ExampleConfig) -> plt.Figure:
-    """Visualize learned memory matrices with frequency structure."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-    # Plot generative memory
-    im1 = axes[0].imshow(M_gen.cpu().numpy(), cmap="RdBu_r", aspect="auto")
-    axes[0].set_title("Generative Memory (M_gen)")
-    axes[0].set_xlabel("To (Place Cell Index)")
-    axes[0].set_ylabel("From (Place Cell Index)")
-    plt.colorbar(im1, ax=axes[0], label="Connection Strength")
-
-    # Add frequency boundaries
-    boundaries = [0] + [sum(config.n_p_calculated[: i + 1]) for i in range(config.n_frequencies)]
-    for boundary in boundaries:
-        axes[0].axhline(boundary, color="black", linestyle="--", alpha=0.3)
-        axes[0].axvline(boundary, color="black", linestyle="--", alpha=0.3)
-
-    # Plot inference memory
-    im2 = axes[1].imshow(M_inf.cpu().numpy(), cmap="RdBu_r", aspect="auto")
-    axes[1].set_title("Inference Memory (M_inf)")
-    axes[1].set_xlabel("To (Place Cell Index)")
-    axes[1].set_ylabel("From (Place Cell Index)")
-    plt.colorbar(im2, ax=axes[1], label="Connection Strength")
-
-    for boundary in boundaries:
-        axes[1].axhline(boundary, color="black", linestyle="--", alpha=0.3)
-        axes[1].axvline(boundary, color="black", linestyle="--", alpha=0.3)
-
-    fig.suptitle(f"Learned Memory Matrices (after {config.n_training_steps} updates)")
-    plt.tight_layout()
-    return fig
-
-
-def plot_attractor_convergence(queries: List[Tensor], retrievals: List[Tensor], targets: List[Tensor], config: ExampleConfig) -> plt.Figure:
-    """Visualize attractor convergence for multiple test queries."""
-    n_queries = len(queries)
-    fig, axes = plt.subplots(n_queries, 3, figsize=(15, 3 * n_queries))
-    if n_queries == 1:
-        axes = axes.reshape(1, -1)
-
-    for i in range(n_queries):
-        # Plot query pattern
-        axes[i, 0].bar(range(len(queries[i])), queries[i].cpu().numpy(), alpha=0.7)
-        axes[i, 0].set_title(f"Query {i+1} (Noisy)")
-        axes[i, 0].set_xlabel("Place Cell Index")
-        axes[i, 0].set_ylabel("Activation")
-        axes[i, 0].set_ylim([-0.5, 1.5])
-
-        # Plot retrieved pattern
-        axes[i, 1].bar(range(len(retrievals[i])), retrievals[i].cpu().numpy(), alpha=0.7, color="green")
-        axes[i, 1].set_title(f"Retrieved {i+1} (After Attractor)")
-        axes[i, 1].set_xlabel("Place Cell Index")
-        axes[i, 1].set_ylabel("Activation")
-        axes[i, 1].set_ylim([-0.5, 1.5])
-
-        # Plot target pattern (ground truth)
-        axes[i, 2].bar(range(len(targets[i])), targets[i].cpu().numpy(), alpha=0.7, color="orange")
-        axes[i, 2].set_title(f"Target {i+1} (Ground Truth)")
-        axes[i, 2].set_xlabel("Place Cell Index")
-        axes[i, 2].set_ylabel("Activation")
-        axes[i, 2].set_ylim([-0.5, 1.5])
-
-    fig.suptitle("Attractor Dynamics: Query → Retrieval Convergence")
-    plt.tight_layout()
-    return fig
-
-
-def plot_learning_curve(memory_strengths: List[float], cosine_sims: List[float]) -> plt.Figure:
-    """Plot memory learning progression over training."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-    # Memory strength (Frobenius norm)
-    axes[0].plot(memory_strengths, marker="o", linewidth=2)
-    axes[0].set_xlabel("Training Step")
-    axes[0].set_ylabel("Memory Strength (Frobenius Norm)")
-    axes[0].set_title("Hebbian Learning: Memory Growth")
-    axes[0].grid(True, alpha=0.3)
-
-    # Cosine similarity between M_gen and M_inf
-    axes[1].plot(cosine_sims, marker="s", linewidth=2, color="green")
-    axes[1].set_xlabel("Training Step")
-    axes[1].set_ylabel("Cosine Similarity")
-    axes[1].set_title("Memory Divergence: M_gen vs M_inf")
-    axes[1].set_ylim([0, 1])
-    axes[1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    return fig
-
-
-def plot_hierarchical_masks(masks: List[Tensor], config: ExampleConfig) -> plt.Figure:
-    """Visualize hierarchical mask schedule for attractor iterations."""
-    fig, axes = plt.subplots(1, len(masks), figsize=(4 * len(masks), 4))
-    if len(masks) == 1:
-        axes = [axes]
-
-    for it, mask in enumerate(masks):
-        axes[it].bar(range(len(mask)), mask.cpu().numpy(), alpha=0.7, color=f"C{it}")
-        axes[it].set_title(f"Iteration {it+1}")
-        axes[it].set_xlabel("Place Cell Index")
-        axes[it].set_ylabel("Mask Value (0=Frozen, 1=Active)")
-        axes[it].set_ylim([0, 1.2])
-
-        # Add frequency boundaries
-        boundaries = [sum(config.n_p_calculated[:i]) for i in range(1, config.n_frequencies)]
-        for boundary in boundaries:
-            axes[it].axvline(boundary, color="black", linestyle="--", alpha=0.5)
-
-    fig.suptitle("Hierarchical Mask Schedule (Coarse-to-Fine Convergence)")
-    plt.tight_layout()
-    return fig
-
-
-def plot_retrieval_quality(errors_by_noise: dict, noise_levels: List[float]) -> plt.Figure:
-    """Plot retrieval error vs. noise level."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    for mode, errors in errors_by_noise.items():
-        ax.plot(noise_levels, errors, marker="o", linewidth=2, label=mode)
-
-    ax.set_xlabel("Query Noise Level")
-    ax.set_ylabel("Retrieval Error (MSE)")
-    ax.set_title("Attractor Dynamics: Robustness to Noisy Queries")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    return fig
-
-
-# ==============================================================================
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
@@ -403,31 +270,36 @@ if __name__ == "__main__":
     print(f"\n{'Generating Visualizations':-^80}")
 
     # Plot 1: Memory matrices
-    fig1 = plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), config)
+    fig1 = figures.plot_memory_matrices(
+        storage.M_gen,
+        storage.get_memory(for_inference=True),
+        n_p_per_freq=config.n_p_calculated,
+        n_training_steps=config.n_training_steps,
+    )
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_memory_matrices.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 01_memory_matrices.png")
 
     # Plot 2: Learning curve
-    fig2 = plot_learning_curve(memory_strengths, cosine_sims if storage.use_dual_memory else [])
+    fig2 = figures.plot_learning_curve(memory_strengths, cosine_sims if storage.use_dual_memory else None)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_learning_curve.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 02_learning_curve.png")
 
     # Plot 3: Hierarchical masks
-    fig3 = plot_hierarchical_masks(attractor.p_retrieve_mask_inf, config)
+    fig3 = figures.plot_hierarchical_masks(attractor.p_retrieve_mask_inf, n_p_per_freq=config.n_p_calculated)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_hierarchical_masks.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 03_hierarchical_masks.png")
 
     # Plot 4: Attractor convergence
-    fig4 = plot_attractor_convergence(queries_list, retrievals_list, targets_list, config)
+    fig4 = figures.plot_attractor_convergence(queries_list, retrievals_list, targets_list)
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_attractor_convergence.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 04_attractor_convergence.png")
 
     # Plot 5: Retrieval quality
-    fig5 = plot_retrieval_quality(errors_by_mode, noise_levels)
+    fig5 = figures.plot_retrieval_quality(errors_by_mode, noise_levels)
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_retrieval_quality.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 05_retrieval_quality.png")

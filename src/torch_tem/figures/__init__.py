@@ -25,6 +25,14 @@ from torch_tem.figures.grounded import (
     plot_outer_product_structure,
     plot_place_cell_dynamics,
 )
+from torch_tem.figures.memory import (
+    plot_attractor_convergence,
+    plot_hierarchical_masks,
+    plot_learning_curve,
+    plot_memory_difference,
+    plot_memory_matrices,
+    plot_retrieval_quality,
+)
 from torch_tem.figures.sensory import (
     plot_frequency_bank,
     plot_frequency_comparison,
@@ -44,6 +52,13 @@ __all__ = [
     "plot_grounded_location_activity",
     "plot_outer_product_structure",
     "plot_place_cell_dynamics",
+    # Memory system
+    "plot_memory_matrices",
+    "plot_attractor_convergence",
+    "plot_learning_curve",
+    "plot_hierarchical_masks",
+    "plot_retrieval_quality",
+    "plot_memory_difference",
     # Sensory processing
     "plot_frequency_bank",
     "plot_temporal_filtering",

@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     # Step 2: Policy comparison
     print("\nStep 2: Generating policies...")
-    policy_gen = figures.PolicyGenerator(env)
+    policy_gen = data.PolicyGenerator(env)
     goal_location = env.n_locations - 1  # Use last location as goal
 
     # Generate policies for comparison

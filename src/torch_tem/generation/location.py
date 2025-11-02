@@ -182,103 +182,61 @@ class LocationGenerator(nn.Module):
 # ======================================================================================
 
 if __name__ == "__main__":
-    """Example usage of LocationGenerator for g→p memory-based retrieval.
+    """Example demonstrating LocationGenerator for g→p memory-based retrieval.
 
-    This simplified example demonstrates the LocationGenerator component using
-    the Parameters configuration system and utility functions.
-
-    Steps:
-    1. Create Parameters configuration
-    2. Initialize memory components (MemoryStorage, AttractorDynamics)
-    3. Train memory with Hebbian updates
-    4. Generate grounded locations from abstract locations
-    5. Compare deterministic vs stochastic modes
+    Shows how the generator retrieves grounded locations (place cells) from
+    abstract locations (grid cells) using learned Hebbian memory associations.
     """
     from torch_tem.config import Parameters
     from torch_tem.memory.attractor import AttractorDynamics
     from torch_tem.memory.storage import MemoryStorage
 
-    print("=" * 70)
-    print("LocationGenerator Example: g→p Memory-Based Retrieval")
-    print("=" * 70)
-
-    # ==========================================================================
-    # Setup: Use Parameters for configuration
-    # ==========================================================================
+    # Create configuration with 3 frequency modules
     params = Parameters(
-        # Architecture (simplified 3-frequency setup)
-        n_g_subsampled=[10, 10, 10],
-        n_x_c=5,
-        n_f_g=3,
-        n_f_ovc=0,
-        f_initial=[0.99, 0.5, 0.1],
-        # Memory parameters
-        eta=0.3,
-        lambda_=0.95,
-        kappa=0.8,
-        # Generation mode
-        do_sample=False,
-        # Memory configuration
-        use_p_inf=False,  # Only generative memory
-        common_memory=True,
+        n_g_subsampled=[10, 10, 10],  # Grid cells per frequency (downsampled)
+        n_x_c=5,  # Compressed sensory dimensions
+        n_f_g=3,  # Number of frequency modules
+        f_initial=[0.99, 0.5, 0.1],  # Frequency scales (high to low)
+        eta=0.3,  # Remembering rate
+        lambda_=0.95,  # Forgetting rate
+        kappa=0.8,  # Attractor decay (retrieval stability)
+        do_sample=False,  # Deterministic (no sampling noise)
+        use_p_inf=False,  # Only generative memory (no inference memory)
+        common_memory=True,  # Single memory matrix
     )
 
-    print("\n[1/4] Initializing memory components...")
+    # Initialize components
     memory = MemoryStorage(params)
     attractor = AttractorDynamics(params)
     generator = LocationGenerator(params, memory, attractor)
 
-    print(f"  ✓ LocationGenerator created with {params.n_f_calculated} frequency modules")
-    print(f"  ✓ Place cell dimensions: {params.n_p_calculated}")
-
-    # ==========================================================================
-    # Train Memory with Hebbian updates
-    # ==========================================================================
-    print(f"\n[2/4] Training memory with 30 Hebbian updates...")
+    # Train memory with random patterns (simulating spatial experience)
     n_p_total = sum(params.n_p_calculated)
     batch_size = 4
 
     for step in range(30):
-        # Generate random place cell patterns: p = g ⊗ x
         p_patterns = torch.randn(batch_size, n_p_total).softmax(dim=1)
-
-        # Hebbian learning: M = λ*M + η*outer(p, p)
         memory.update(p_patterns, p_patterns, eta=params.eta, lamb=params.lambda_)
 
-        if (step + 1) % 10 == 0:
-            m_strength = torch.norm(memory.M_gen).item()
-            print(f"  Step {step + 1:3d}/30: Memory strength = {m_strength:.2f}")
-
-    # ==========================================================================
-    # Generate Locations from abstract location queries
-    # ==========================================================================
-    print("\n[3/4] Generating grounded locations from abstract locations...")
-
-    # Create test queries (downsampled g expanded to p-space dimensions)
-    # In full TEM: comes from ProjectionHead.downsample(g) @ W_repeat
+    # Generate from abstract location query
     g_test = [torch.randn(2, params.n_p_calculated[f]).softmax(dim=1) for f in range(params.n_f_calculated)]
 
     with torch.no_grad():
         p_generated = generator.generate(g_test, for_inference=False)
 
-    print(f"  ✓ Generated {len(p_generated)} frequency modules")
-    for f, p_f in enumerate(p_generated):
-        print(f"    Module {f}: shape {list(p_f.shape)}, mean={p_f.mean():.3f}, std={p_f.std():.3f}")
+    print("Generated grounded locations:")
+    print(f"  Input: {len(g_test)} frequency modules")
+    print(f"  Output: {len(p_generated)} frequency modules")
+    print(f"  Dimensions: {params.n_p_calculated}")
+    print(f"  Mean activation: {torch.cat(p_generated, dim=1).mean():.4f}")
 
-    # ==========================================================================
-    # Compare deterministic vs stochastic generation
-    # ==========================================================================
-    print("\n[4/4] Comparing generation modes...")
-
-    # Deterministic mode (already set above)
+    # Compare deterministic vs stochastic modes
     with torch.no_grad():
         p_det_1 = generator.generate(g_test, for_inference=False)
         p_det_2 = generator.generate(g_test, for_inference=False)
 
-    det_diff = torch.stack([torch.norm(p1 - p2) for p1, p2 in zip(p_det_1, p_det_2)])
-    print(f"  Deterministic: difference = {det_diff.mean():.6f} (should be ~0)")
+    det_diff = torch.stack([torch.norm(p1 - p2) for p1, p2 in zip(p_det_1, p_det_2)]).mean()
 
-    # Stochastic mode - create new params with do_sample=True
     params_stoch = params.model_copy(update={"do_sample": True})
     gen_stoch = LocationGenerator(params_stoch, memory, attractor)
 
@@ -286,9 +244,8 @@ if __name__ == "__main__":
         p_stoch_1 = gen_stoch.generate(g_test, for_inference=False)
         p_stoch_2 = gen_stoch.generate(g_test, for_inference=False)
 
-    stoch_diff = torch.stack([torch.norm(p1 - p2) for p1, p2 in zip(p_stoch_1, p_stoch_2)])
-    print(f"  Stochastic: difference = {stoch_diff.mean():.6f} (should be >0)")
+    stoch_diff = torch.stack([torch.norm(p1 - p2) for p1, p2 in zip(p_stoch_1, p_stoch_2)]).mean()
 
-    print("\n" + "=" * 70)
-    print("Example completed! See examples/ for complete pipeline demos.")
-    print("=" * 70)
+    print(f"\nMode comparison:")
+    print(f"  Deterministic: {det_diff:.6f} (reproducible)")
+    print(f"  Stochastic: {stoch_diff:.6f} (adds learned uncertainty)")

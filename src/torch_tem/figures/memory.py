@@ -163,7 +163,7 @@ def plot_attractor_convergence(
         >>> fig.savefig('convergence.png')
     """
     n_queries = len(queries)
-    
+
     # Auto-compute y-axis limits if not provided
     # Use the 95th percentile to avoid outliers dominating the scale
     if ylim is None:

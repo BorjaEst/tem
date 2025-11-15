@@ -1,4 +1,4 @@
-"""Sensory processing utilities for the Tolman–Eichenbaum Machine (TEM).
+"""Sensory processing utilities for the Tolman-Eichenbaum Machine (TEM).
 
 This module implements a lightweight sensory pre-processor used by TEM
 components before inference and learning. It provides two core steps:

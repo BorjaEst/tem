@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Memory attractor dynamics example with Hebbian learning visualization.
+"""Attractor dynamics retrieval example with hierarchical convergence visualization.
 
-This example demonstrates the torch_tem.memory module capabilities:
-- MemoryStorage initialization and Hebbian updates
+This example demonstrates the torch_tem.memory.attractor module capabilities:
 - AttractorDynamics retrieval with hierarchical early-stopping
-- Memory learning through simulated spatial navigation
+- Content-addressable memory recall from noisy queries
 - Convergence analysis across different query patterns
 - Hierarchical mask effects on retrieval quality
+- Robustness testing across noise levels
 - Dual memory (inference vs. generative) comparison
 
-The attractor dynamics implement content-addressable memory recall, where noisy
-or partial query patterns are iteratively refined toward stored spatial patterns.
-This is central to TEM's ability to infer locations from sensory observations
-and predict future locations from abstract transitions.
+The attractor dynamics implement iterative memory retrieval:
+    p[t+1] = κ * p[t] + (M^T @ p[t]) * mask[t]
+
+Where noisy or partial query patterns are iteratively refined toward stored
+spatial patterns through hierarchical coarse-to-fine convergence.
 
 Usage:
-    python examples/memory_attractor.py --n-locations 25 --n-training-steps 100
-    python examples/memory_attractor.py --kappa 0.9 --eta 0.4 --lambda 0.95
+    python examples/memory_attractor.py --n-test-queries 10 --noise-level 0.4
+    python examples/memory_attractor.py --kappa 0.9 --n-frequencies 4
     python examples/memory_attractor.py --help
 """
 
@@ -30,7 +31,6 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
-# Import visualization functions from torch_tem.figures
 from torch_tem import data, figures, utils
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
@@ -40,15 +40,15 @@ from torch_tem.memory.storage import MemoryStorage
 # Configuration
 # ==============================================================================
 class ExampleConfig(BaseSettings):
-    """Configuration for memory attractor dynamics example.
+    """Configuration for attractor dynamics example.
 
-    This config implements both AttractorParams and MemoryStorageParams protocols,
-    allowing direct instantiation of memory components.
+    This config implements the AttractorParams protocol, allowing direct
+    instantiation of AttractorDynamics component.
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="memory_attractor")
 
-    # Environment configuration
+    # Environment configuration (used only for parameter sizing)
     grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for spatial environment")
     observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
 
@@ -57,16 +57,18 @@ class ExampleConfig(BaseSettings):
     n_g_per_module: int = Field(default=10, ge=5, le=20, description="Grid cells per frequency module")
     n_x_c: int = Field(default=5, ge=2, le=20, description="Compressed sensory dimensions")
 
-    # Hebbian learning parameters
-    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Remembering rate (Hebbian learning strength)")
-    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Forgetting rate (memory decay)")
+    # Attractor dynamics parameters
     kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor decay term (stability)")
 
-    # Training configuration
-    n_training_steps: int = Field(default=50, ge=10, le=500, description="Number of Hebbian updates")
-    batch_size: int = Field(default=8, ge=1, le=32, description="Batch size for memory updates")
+    # Memory initialization (minimal training for realistic memory)
+    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Remembering rate for memory initialization")
+    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Forgetting rate for memory initialization")
+    n_memory_init_steps: int = Field(default=20, ge=5, le=100, description="Steps for memory initialization")
+    batch_size: int = Field(default=8, ge=1, le=32, description="Batch size for memory initialization")
+
+    # Retrieval testing configuration
     n_test_queries: int = Field(default=5, ge=1, le=20, description="Number of test retrieval queries")
-    noise_level: float = Field(default=0.3, ge=0.0, le=1.0, description="Noise level for query patterns")
+    noise_level: float = Field(default=1.0, ge=0.0, le=5.0, description="Noise level in logit space (std of Gaussian noise added before softmax)")
 
     # Memory configuration
     use_dual_memory: bool = Field(default=True, description="Use separate inference/generative memories")
@@ -91,7 +93,7 @@ class ExampleConfig(BaseSettings):
         return n_locations if self.observation_mode == "unique" else max(4, n_locations // 4)
 
     # ==============================================================================
-    # MemoryStorageParams Protocol Implementation
+    # MemoryStorageParams Protocol Implementation (for initialization)
     # ==============================================================================
 
     @computed_field(description="Neurons for hippocampal grounded location p per frequency")
@@ -153,74 +155,71 @@ class ExampleConfig(BaseSettings):
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
-    """Run the memory attractor dynamics experiment with visualizations."""
+    """Run the attractor dynamics experiment with visualizations."""
     # Parse CLI arguments and create configuration
-    # This implements Protocol interfaces for MemoryStorage and AttractorDynamics
+    # This implements AttractorParams protocol for direct instantiation
     config = ExampleConfig()
 
+    print(f"Attractor Dynamics Experiment Configuration:")
+    print(f"  Architecture: {config.n_frequencies} frequencies × {config.n_g_per_module} grid cells × {config.n_x_c} sensory dims")
+    print(f"  Total place cells: {sum(config.n_p_calculated)}")
+    print(f"  Attractor parameters: κ={config.kappa}, iterations={config.i_attractor_calculated}")
+    print(f"  Test queries: {config.n_test_queries} with {config.noise_level} noise")
+    print()
+
     # =========================================================================
-    # PHASE 1: Initialize Memory Components
+    # PHASE 1: Initialize Memory and Attractor
     # =========================================================================
-    # MemoryStorage manages Hebbian memory matrices (M_gen, M_inf)
-    # It implements: M = λ*M + η*outer(p_inf, p_gen)
+    # We need a memory matrix for retrieval. Create one through minimal Hebbian training.
+    print("Initializing memory matrix through minimal Hebbian learning...")
     storage = MemoryStorage(config)
+    n_p_total = sum(config.n_p_calculated)
+
+    for step in range(config.n_memory_init_steps):
+        p_inferred = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
+        p_generated = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
+        storage.update(p_inferred, p_generated, eta=config.eta, lamb=config.lambda_)
+
+    m_gen_strength = torch.norm(storage.M_gen).item()
+    print(f"  Memory initialized: M_gen strength={m_gen_strength:.4f}")
+    print()
 
     # AttractorDynamics implements iterative retrieval with hierarchical masking
     # It implements: p[t+1] = κ*p[t] + M^T@p[t] * mask[t]
     attractor = AttractorDynamics(config)
 
-    # =========================================================================
-    # PHASE 2: Train Memory Through Hebbian Learning
-    # =========================================================================
-    # Simulate spatial navigation by generating random place cell patterns
-    # In full TEM: p = g ⊗ x (grid cells ⊗ compressed sensory input)
-    n_p_total = sum(config.n_p_calculated)
-
-    # Track learning progress over training
-    memory_strengths = []  # Frobenius norm of M_gen (overall connection strength)
-    cosine_sims = []  # Similarity between M_gen and M_inf (dual memory divergence)
-
-    for step in range(config.n_training_steps):
-        # Generate random grounded location patterns (batch_size samples)
-        # softmax ensures valid probability distributions (sum to 1, non-negative)
-        # In real TEM: p_inferred comes from sensory→location inference
-        p_inferred = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
-
-        # In real TEM: p_generated comes from abstract→location prediction
-        p_generated = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
-
-        # Apply Hebbian learning rule: strengthen connections between co-active patterns
-        # M_new = λ*M_old + η*outer(p_inf, p_gen)
-        # - λ (lambda): forgetting rate (decay old memories)
-        # - η (eta): learning rate (strength of new associations)
-        storage.update(p_inferred, p_generated, eta=config.eta, lamb=config.lambda_)
-
-        # Monitor memory strength (how much information is stored)
-        # Frobenius norm = sqrt(sum of squared weights)
-        m_gen_strength = torch.norm(storage.M_gen).item()
-        memory_strengths.append(m_gen_strength)
-
-        # Monitor divergence between dual memories (should stay similar if properly tuned)
-        # Cosine similarity = 1.0 means identical, 0.0 means orthogonal
-        m_gen_flat = storage.M_gen.flatten()
-        m_inf_flat = storage.M_inf.flatten()
-        cosine_sim = torch.nn.functional.cosine_similarity(m_gen_flat, m_inf_flat, dim=0).item()
-        cosine_sims.append(cosine_sim)
+    print(f"Attractor dynamics initialized with {config.i_attractor_calculated} iterations")
+    print(f"  Hierarchical masking schedule (inference mode):")
+    for it, mask in enumerate(attractor.p_retrieve_mask_inf):
+        n_active = mask.sum().item()
+        print(f"    Iteration {it+1}: {n_active}/{n_p_total} neurons active ({n_active/n_p_total*100:.1f}%)")
+    print()
 
     # =========================================================================
-    # PHASE 3: Test Attractor Retrieval Quality
+    # PHASE 2: Test Attractor Retrieval Quality
     # =========================================================================
-    # Evaluate memory recall: can noisy/partial queries be corrected via attractor dynamics?
+    print(f"Testing attractor retrieval with {config.n_test_queries} queries...")
+    print(f"  Noise level: {config.noise_level}")
+    print()
 
     # Create clean target patterns from the learned distribution
     # These represent "ground truth" locations we want to retrieve
-    test_targets = torch.randn(config.n_test_queries, n_p_total).softmax(dim=1)
+    # Generate in logit space first to allow meaningful noise addition
+    target_logits = torch.randn(config.n_test_queries, n_p_total)
+    test_targets = target_logits.softmax(dim=1)
 
-    # Corrupt targets with Gaussian noise to simulate partial/uncertain observations
-    # This tests the memory's ability to "clean up" noisy inputs
-    noise = torch.randn_like(test_targets) * config.noise_level
-    test_queries = test_targets + noise
-    test_queries = test_queries.clamp(min=0)  # Ensure valid activations (no negatives)
+    # Add noise in logit space (before softmax) to preserve probability structure
+    # This creates realistic corruption while maintaining valid distributions
+    noise_logits = torch.randn_like(target_logits) * config.noise_level
+    query_logits = target_logits + noise_logits
+    test_queries = query_logits.softmax(dim=1)
+    
+    # Compute signal-to-noise ratio for reporting
+    signal_power = (test_targets ** 2).mean()
+    noise_power = ((test_targets - test_queries) ** 2).mean()
+    snr_db = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float('inf')
+    print(f"  Signal-to-noise ratio: {snr_db:.2f} dB")
+    print()
 
     # Run attractor dynamics: iteratively refine queries toward stored patterns
     # p[t+1] = κ*p[t] + M^T@p[t] * mask[t]
@@ -238,22 +237,32 @@ if __name__ == "__main__":
 
     # Compute retrieval quality metrics
     # MSE measures how close retrieved patterns are to ground truth
+    print("Retrieval quality metrics:")
+    improvements = []
     for i in range(config.n_test_queries):
         query_error = torch.nn.functional.mse_loss(test_queries[i], test_targets[i]).item()
         retrieval_error = torch.nn.functional.mse_loss(test_retrievals[i], test_targets[i]).item()
         improvement = ((query_error - retrieval_error) / query_error) * 100  # Percentage improvement
+        improvements.append(improvement)
+        print(f"  Query {i+1}: query_error={query_error:.6f}, retrieval_error={retrieval_error:.6f}, improvement={improvement:.1f}%")
+
+    avg_improvement = np.mean(improvements)
+    print(f"  Average improvement: {avg_improvement:.1f}%")
+    print()
 
     # =========================================================================
-    # PHASE 4: Robustness Analysis Across Noise Levels
+    # PHASE 3: Robustness Analysis Across Noise Levels
     # =========================================================================
-    # Test how well memory performs under varying degrees of corruption
-    noise_levels = [0.1, 0.2, 0.3, 0.4, 0.5]  # From slight to severe noise
+    print("Testing robustness across noise levels...")
+    noise_levels = [0.5, 1.0, 1.5, 2.0, 3.0]  # Logit-space noise levels
     errors_by_mode = {"Inference": [], "Generative": []}  # Compare dual memories
 
     for noise_level in noise_levels:
-        # Create noisy queries at this noise level
-        noise = torch.randn_like(test_targets) * noise_level
-        noisy_queries = (test_targets + noise).clamp(min=0)
+        # Add noise in logit space for realistic corruption
+        # This preserves the probability distribution structure
+        noise_logits = torch.randn_like(target_logits) * noise_level
+        noisy_query_logits = target_logits + noise_logits
+        noisy_queries = noisy_query_logits.softmax(dim=1)
 
         # Test inference memory (used for sensory→location inference)
         retrieved_inf = attractor.retrieve(noisy_queries, storage.get_memory(for_inference=True), for_inference=True)
@@ -264,60 +273,57 @@ if __name__ == "__main__":
         retrieved_gen = attractor.retrieve(noisy_queries, storage.get_memory(for_inference=False), for_inference=False)
         error_gen = torch.nn.functional.mse_loss(retrieved_gen, test_targets).item()
         errors_by_mode["Generative"].append(error_gen)
+        
+        # Compute SNR for this noise level
+        signal_power = (test_targets ** 2).mean()
+        noise_power = ((test_targets - noisy_queries) ** 2).mean()
+        snr_db = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float('inf')
+
+        print(f"  Noise {noise_level:.1f} (SNR={snr_db:+.1f}dB): Inference MSE={error_inf:.6f}, Generative MSE={error_gen:.6f}")
+
+    print()
 
     # =========================================================================
-    # PHASE 5: Generate Visualizations
+    # PHASE 4: Generate Visualizations
     # =========================================================================
-    # Create comprehensive figures to understand memory structure and dynamics
+    print("Generating visualizations...")
 
-    # Plot 1: Memory matrix structure
-    # Shows the learned association weights M_gen and M_inf
-    # Block structure reveals hierarchical frequency organization
-    fig1 = figures.plot_memory_matrices(
-        storage.M_gen,  # Generative memory (abstract→location associations)
-        storage.get_memory(for_inference=True),  # Inference memory (sensory→location)
-        n_p_per_freq=config.n_p_calculated,  # Dimensions for block visualization
-        n_training_steps=config.n_training_steps,  # For title annotation
-    )
-    if config.save_plots:
-        fig1.savefig(config.output_dir / "01_memory_matrices.png", dpi=150, bbox_inches="tight")
-
-    # Plot 2: Learning dynamics over training
-    # Track how memory strength grows and dual memories evolve
-    fig2 = figures.plot_learning_curve(
-        memory_strengths,  # Frobenius norm trajectory
-        cosine_sims if storage.use_dual_memory else None,  # Dual memory similarity
-    )
-    if config.save_plots:
-        fig2.savefig(config.output_dir / "02_learning_curve.png", dpi=150, bbox_inches="tight")
-
-    # Plot 3: Hierarchical retrieval masks
+    # Plot 1: Hierarchical retrieval masks
     # Visualize progressive unmasking schedule (coarse→fine)
-    fig3 = figures.plot_hierarchical_masks(
+    fig1 = figures.plot_hierarchical_masks(
         attractor.p_retrieve_mask_inf,  # Binary masks for each iteration
         n_p_per_freq=config.n_p_calculated,  # Frequency boundaries
     )
     if config.save_plots:
-        fig3.savefig(config.output_dir / "03_hierarchical_masks.png", dpi=150, bbox_inches="tight")
+        save_path = config.output_dir / "01_hierarchical_masks.png"
+        fig1.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved: {save_path}")
 
-    # Plot 4: Attractor convergence trajectories
+    # Plot 2: Attractor convergence trajectories
     # Show how noisy queries are iteratively refined toward targets
-    fig4 = figures.plot_attractor_convergence(
+    fig2 = figures.plot_attractor_convergence(
         queries_list,  # Initial noisy patterns
         retrievals_list,  # Final retrieved patterns
         targets_list,  # Ground truth patterns
     )
     if config.save_plots:
-        fig4.savefig(config.output_dir / "04_attractor_convergence.png", dpi=150, bbox_inches="tight")
+        save_path = config.output_dir / "02_attractor_convergence.png"
+        fig2.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved: {save_path}")
 
-    # Plot 5: Robustness to noise
+    # Plot 3: Robustness to noise
     # Compare inference vs generative memory across noise levels
-    fig5 = figures.plot_retrieval_quality(
+    fig3 = figures.plot_retrieval_quality(
         errors_by_mode,  # MSE for each mode at each noise level
         noise_levels,  # X-axis values
     )
     if config.save_plots:
-        fig5.savefig(config.output_dir / "05_retrieval_quality.png", dpi=150, bbox_inches="tight")
+        save_path = config.output_dir / "03_retrieval_quality.png"
+        fig3.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved: {save_path}")
+
+    print()
+    print(f"All outputs saved to: {config.output_dir}")
 
     # Display plots interactively or just save them
     if config.show_plots:

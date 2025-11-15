@@ -135,7 +135,7 @@ def plot_attractor_convergence(
     query_labels: Optional[List[str]] = None,
     title: str = "Attractor Dynamics: Query → Retrieval Convergence",
     figsize: Optional[tuple] = None,
-    ylim: tuple = (-0.5, 1.5),
+    ylim: Optional[tuple] = None,
 ) -> plt.Figure:
     """Visualize attractor convergence for multiple query patterns.
 
@@ -150,7 +150,7 @@ def plot_attractor_convergence(
         query_labels: Optional labels for each query (e.g., ["Query 1", "Query 2"])
         title: Figure title
         figsize: Figure size (width, height). If None, auto-sized based on n_queries
-        ylim: Y-axis limits for all subplots
+        ylim: Y-axis limits for all subplots. If None, auto-scaled based on data range
 
     Returns:
         matplotlib Figure with convergence visualization
@@ -163,6 +163,16 @@ def plot_attractor_convergence(
         >>> fig.savefig('convergence.png')
     """
     n_queries = len(queries)
+    
+    # Auto-compute y-axis limits if not provided
+    # Use the 95th percentile to avoid outliers dominating the scale
+    if ylim is None:
+        all_values = []
+        for q, r, t in zip(queries, retrievals, targets):
+            all_values.extend([q.max().item(), r.max().item(), t.max().item()])
+        y_max = np.percentile(all_values, 95)
+        y_margin = y_max * 0.1  # 10% margin
+        ylim = (0, y_max + y_margin)
 
     # Auto-size figure based on number of queries
     if figsize is None:

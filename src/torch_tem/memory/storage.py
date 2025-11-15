@@ -104,27 +104,34 @@ class MemoryStorage:
             multiple experiences in the current training batch.
 
             Mathematical formulation:
-                M_new = λ * M_old + η * mean_batch(outer(p_inf, p_gen)) * mask
+                M_gen_new = λ * M_gen_old + η * mean_batch(outer(p_inf, p_gen)) * mask
+                M_inf_new = λ * M_inf_old + η * mean_batch(outer(p_inf, p_inf)) * mask
+
+            Following original TEM implementation:
+            - M_gen learns associations between inferred and generated locations
+            - M_inf learns associations within inferred locations (sensory-driven)
         """
-        # Compute outer product for each batch element: p_inf[:, :, None] @ p_gen[:, None, :]
+        # Compute outer product for generative memory: p_inf ⊗ p_gen
         # Shape: [B, sum(n_p), 1] @ [B, 1, sum(n_p)] → [B, sum(n_p), sum(n_p)]
         # Then average across batch to get typical association pattern
-        batch_outer = torch.mean(torch.bmm(p_inferred.unsqueeze(2), p_generated.unsqueeze(1)), dim=0)
+        batch_outer_gen = torch.mean(torch.bmm(p_inferred.unsqueeze(2), p_generated.unsqueeze(1)), dim=0)
 
         # Move hierarchical mask to same device as data (handles CPU/GPU transfers)
-        mask = self.p_update_mask.to(batch_outer.device)
+        mask = self.p_update_mask.to(batch_outer_gen.device)
 
-        # Hebbian update with decay (forgetting) and learning (remembering)
+        # Hebbian update for generative memory with decay (forgetting) and learning (remembering)
         # λ term: Exponentially decays old memories over time
         # η term: Strengthens new associations based on current experience
         # mask: Restricts updates to valid hierarchical connections
-        self.M_gen = lamb * self.M_gen.to(batch_outer.device) + eta * (batch_outer * mask)
+        self.M_gen = lamb * self.M_gen.to(batch_outer_gen.device) + eta * (batch_outer_gen * mask)
 
         # Update inference memory (if using dual-memory architecture)
-        # Separate inference memory can learn different association patterns
-        # optimized for sensory-to-location mapping vs. location prediction
+        # Inference memory learns different associations: p_inf ⊗ p_inf
+        # This enables sensory-driven pattern completion (x → p → p retrieval)
         if self.use_dual_memory:
-            self.M_inf = lamb * self.M_inf.to(batch_outer.device) + eta * (batch_outer * mask)
+            # Compute outer product for inference memory: p_inf ⊗ p_inf
+            batch_outer_inf = torch.mean(torch.bmm(p_inferred.unsqueeze(2), p_inferred.unsqueeze(1)), dim=0)
+            self.M_inf = lamb * self.M_inf.to(batch_outer_inf.device) + eta * (batch_outer_inf * mask)
 
     def get_memory(self, for_inference: bool = False) -> Tensor:
         """Get appropriate memory matrix for retrieval.

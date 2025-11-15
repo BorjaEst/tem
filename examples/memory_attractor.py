@@ -172,6 +172,11 @@ if __name__ == "__main__":
     # =========================================================================
     # We need a memory matrix for retrieval. Create one through minimal Hebbian training.
     print("Initializing memory matrix through minimal Hebbian learning...")
+    print("  Note: Using random patterns for demonstration. In real TEM:")
+    print("    - p_inferred comes from sensory → location inference")
+    print("    - p_generated comes from abstract → location prediction")
+    print("    - M_inf learns outer(p_inf, p_inf) for sensory-driven completion")
+    print("    - M_gen learns outer(p_inf, p_gen) for predictive associations")
     storage = MemoryStorage(config)
     n_p_total = sum(config.n_p_calculated)
 
@@ -181,7 +186,13 @@ if __name__ == "__main__":
         storage.update(p_inferred, p_generated, eta=config.eta, lamb=config.lambda_)
 
     m_gen_strength = torch.norm(storage.M_gen).item()
-    print(f"  Memory initialized: M_gen strength={m_gen_strength:.4f}")
+    m_inf_strength = torch.norm(storage.M_inf).item() if storage.use_dual_memory else 0
+    m_diff = torch.norm(storage.M_gen - storage.M_inf).item() if storage.use_dual_memory else 0
+    print(f"  Memory initialized:")
+    print(f"    M_gen strength={m_gen_strength:.4f}")
+    if storage.use_dual_memory:
+        print(f"    M_inf strength={m_inf_strength:.4f}")
+        print(f"    Difference={m_diff:.4f} ({m_diff/m_gen_strength:.1%} relative)")
     print()
 
     # AttractorDynamics implements iterative retrieval with hierarchical masking

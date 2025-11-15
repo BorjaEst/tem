@@ -140,8 +140,9 @@ def plot_attractor_convergence(
     """Visualize attractor convergence for multiple query patterns.
 
     Displays query (noisy), retrieved (after attractor), and target (ground truth)
-    patterns side-by-side for each test case. This shows how attractor dynamics
-    refine noisy or partial queries toward stored patterns.
+    patterns as overlapping grouped bars in the same subplot for each test case.
+    This allows direct visual comparison of how attractor dynamics refine noisy
+    or partial queries toward stored patterns.
 
     Args:
         queries: List of query patterns [n_p_total] (one per test case)
@@ -153,7 +154,8 @@ def plot_attractor_convergence(
         ylim: Y-axis limits for all subplots. If None, auto-scaled based on data range
 
     Returns:
-        matplotlib Figure with convergence visualization
+        matplotlib Figure with convergence visualization showing grouped bars for
+        direct comparison of query, retrieval, and target patterns
 
     Example:
         >>> queries = [noisy_pattern1, noisy_pattern2]
@@ -176,36 +178,37 @@ def plot_attractor_convergence(
 
     # Auto-size figure based on number of queries
     if figsize is None:
-        figsize = (15, 3 * n_queries)
+        figsize = (10, 4 * n_queries)
 
-    fig, axes = plt.subplots(n_queries, 3, figsize=figsize)
+    fig, axes = plt.subplots(n_queries, 1, figsize=figsize)
     if n_queries == 1:
-        axes = axes.reshape(1, -1)
+        axes = [axes]
+
+    # Bar width and positioning for grouped bars
+    n_cells = len(queries[0])
+    x = np.arange(n_cells)
+    width = 0.25  # Width of each bar
 
     for i in range(n_queries):
         # Generate label
         label = query_labels[i] if query_labels is not None else f"{i+1}"
 
-        # Plot query pattern
-        axes[i, 0].bar(range(len(queries[i])), queries[i].cpu().numpy(), alpha=0.7)
-        axes[i, 0].set_title(f"Query {label} (Noisy)")
-        axes[i, 0].set_xlabel("Place Cell Index")
-        axes[i, 0].set_ylabel("Activation")
-        axes[i, 0].set_ylim(ylim)
+        # Convert tensors to numpy arrays
+        query_vals = queries[i].cpu().numpy()
+        retrieval_vals = retrievals[i].cpu().numpy()
+        target_vals = targets[i].cpu().numpy()
 
-        # Plot retrieved pattern
-        axes[i, 1].bar(range(len(retrievals[i])), retrievals[i].cpu().numpy(), alpha=0.7, color="green")
-        axes[i, 1].set_title(f"Retrieved {label} (After Attractor)")
-        axes[i, 1].set_xlabel("Place Cell Index")
-        axes[i, 1].set_ylabel("Activation")
-        axes[i, 1].set_ylim(ylim)
+        # Plot all three patterns as grouped bars with offset positions
+        axes[i].bar(x - width, query_vals, width, alpha=0.7, label="Query (Noisy)", color="C0")
+        axes[i].bar(x, retrieval_vals, width, alpha=0.7, label="Retrieved", color="green")
+        axes[i].bar(x + width, target_vals, width, alpha=0.7, label="Target (Ground Truth)", color="orange")
 
-        # Plot target pattern (ground truth)
-        axes[i, 2].bar(range(len(targets[i])), targets[i].cpu().numpy(), alpha=0.7, color="orange")
-        axes[i, 2].set_title(f"Target {label} (Ground Truth)")
-        axes[i, 2].set_xlabel("Place Cell Index")
-        axes[i, 2].set_ylabel("Activation")
-        axes[i, 2].set_ylim(ylim)
+        axes[i].set_title(f"Pattern {label}: Query → Retrieval vs Target")
+        axes[i].set_xlabel("Place Cell Index")
+        axes[i].set_ylabel("Activation")
+        axes[i].set_ylim(ylim)
+        axes[i].legend(loc="upper right")
+        axes[i].set_xticks(x[:: max(1, n_cells // 10)])  # Show ~10 tick labels max
 
     fig.suptitle(title)
     plt.tight_layout()

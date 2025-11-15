@@ -213,11 +213,11 @@ if __name__ == "__main__":
     noise_logits = torch.randn_like(target_logits) * config.noise_level
     query_logits = target_logits + noise_logits
     test_queries = query_logits.softmax(dim=1)
-    
+
     # Compute signal-to-noise ratio for reporting
-    signal_power = (test_targets ** 2).mean()
+    signal_power = (test_targets**2).mean()
     noise_power = ((test_targets - test_queries) ** 2).mean()
-    snr_db = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float('inf')
+    snr_db = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float("inf")
     print(f"  Signal-to-noise ratio: {snr_db:.2f} dB")
     print()
 
@@ -273,11 +273,11 @@ if __name__ == "__main__":
         retrieved_gen = attractor.retrieve(noisy_queries, storage.get_memory(for_inference=False), for_inference=False)
         error_gen = torch.nn.functional.mse_loss(retrieved_gen, test_targets).item()
         errors_by_mode["Generative"].append(error_gen)
-        
+
         # Compute SNR for this noise level
-        signal_power = (test_targets ** 2).mean()
+        signal_power = (test_targets**2).mean()
         noise_power = ((test_targets - noisy_queries) ** 2).mean()
-        snr_db = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float('inf')
+        snr_db = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float("inf")
 
         print(f"  Noise {noise_level:.1f} (SNR={snr_db:+.1f}dB): Inference MSE={error_inf:.6f}, Generative MSE={error_gen:.6f}")
 

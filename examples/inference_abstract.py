@@ -30,7 +30,7 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
-from torch_tem import figures, utils
+from torch_tem import data, figures, utils
 from torch_tem.inference.abstract import AbstractLocationInference
 
 
@@ -117,101 +117,6 @@ class ExampleConfig(BaseSettings):
 
 
 # ==============================================================================
-# Synthetic Data Generation
-# ==============================================================================
-def generate_transition_predictions(config: ExampleConfig) -> tuple[List[List[Tensor]], List[List[Tensor]]]:
-    """Generate synthetic transition predictions g_gen with uncertainty sigma_g_gen.
-
-    Simulates predictive dynamics with slowly varying means and uncertainty.
-
-    Returns:
-        (g_gen_history, sigma_gen_history): Lists of length T, each containing
-        lists of n_f tensors [B, n_g[f]]
-    """
-    T = config.n_timesteps
-    B = config.batch_size
-    n_f = config.n_frequencies
-    n_g = config.n_g_calculated
-
-    g_gen_history = []
-    sigma_gen_history = []
-
-    # Initialize with random state
-    g_prev = [torch.randn(B, n_g[f]) for f in range(n_f)]
-
-    for t in range(T):
-        # Slowly evolving transition prediction (Ornstein-Uhlenbeck-like)
-        g_gen = [0.95 * g_prev[f] + 0.05 * torch.randn(B, n_g[f]) for f in range(n_f)]
-
-        # Uncertainty that varies over time (simulate varying prediction confidence)
-        sigma_gen = [config.transition_sigma_base * (1.0 + 0.3 * torch.sin(torch.tensor(t / 20.0))) * torch.ones(B, n_g[f]) for f in range(n_f)]
-
-        g_gen_history.append(g_gen)
-        sigma_gen_history.append(sigma_gen)
-        g_prev = g_gen
-
-    return g_gen_history, sigma_gen_history
-
-
-def generate_memory_signals(config: ExampleConfig) -> List[List[Tensor]]:
-    """Generate synthetic memory-based signals p_x.
-
-    Simulates memory retrieval patterns that could come from attractor dynamics.
-
-    Returns:
-        p_x_history: List of length T, each containing lists of n_f tensors [B, n_g_sub[f]]
-    """
-    T = config.n_timesteps
-    B = config.batch_size
-    n_f = config.n_frequencies
-    n_g_sub = config.n_g_subsampled_combined
-
-    p_x_history = []
-
-    for t in range(T):
-        # Memory patterns with temporal correlation
-        p_x = [torch.randn(B, n_g_sub[f]) * (0.8 + 0.4 * np.sin(t / 15.0)) for f in range(n_f)]
-        p_x_history.append(p_x)
-
-    return p_x_history
-
-
-def generate_shiny_signals(config: ExampleConfig) -> tuple[List[List[Tensor]], List[List[Tensor]]]:
-    """Generate synthetic salient object signals with low uncertainty.
-
-    Simulates strong localization cues that appear intermittently.
-
-    Returns:
-        (mu_shiny_history, sigma_shiny_history): Lists of length T, each containing
-        lists of n_f tensors [B, n_g[f]] or None if no signal at that timestep
-    """
-    T = config.n_timesteps
-    B = config.batch_size
-    n_f = config.n_frequencies
-    n_g = config.n_g_calculated
-
-    mu_shiny_history = []
-    sigma_shiny_history = []
-
-    # Shiny signals appear intermittently (every ~20 timesteps)
-    shiny_period = 20
-    shiny_duration = 5
-
-    for t in range(T):
-        if (t % shiny_period) < shiny_duration:
-            # Strong signal with low uncertainty
-            mu_shiny = [torch.randn(B, n_g[f]) * 2.0 for f in range(n_f)]  # Stronger signal
-            sigma_shiny = [config.shiny_sigma_base * torch.ones(B, n_g[f]) for f in range(n_f)]
-            mu_shiny_history.append(mu_shiny)
-            sigma_shiny_history.append(sigma_shiny)
-        else:
-            mu_shiny_history.append(None)
-            sigma_shiny_history.append(None)
-
-    return mu_shiny_history, sigma_shiny_history
-
-
-# ==============================================================================
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
@@ -246,15 +151,25 @@ if __name__ == "__main__":
     print("Generating synthetic source signals...")
 
     # Transition predictions
-    g_gen_history, sigma_gen_history = generate_transition_predictions(config)
+    trans_gen = data.TransitionPredictionGenerator(config)
+    g_gen_history, sigma_gen_history = trans_gen.generate()
     print(f"  ✓ Transition predictions: {len(g_gen_history)} timesteps")
 
     # Memory signals
-    p_x_history = generate_memory_signals(config) if config.use_p_inf else [None] * config.n_timesteps
+    if config.use_p_inf:
+        mem_gen = data.MemorySignalGenerator(config)
+        p_x_history = mem_gen.generate()
+    else:
+        p_x_history = [None] * config.n_timesteps
     print(f"  ✓ Memory signals: {'enabled' if config.use_p_inf else 'disabled'}")
 
     # Shiny signals
-    mu_shiny_history, sigma_shiny_history = generate_shiny_signals(config) if config.use_shiny else ([None] * config.n_timesteps, [None] * config.n_timesteps)
+    if config.use_shiny:
+        shiny_gen = data.ShinySignalGenerator(config)
+        mu_shiny_history, sigma_shiny_history = shiny_gen.generate()
+    else:
+        mu_shiny_history = [None] * config.n_timesteps
+        sigma_shiny_history = [None] * config.n_timesteps
     n_shiny_active = sum(1 for x in mu_shiny_history if x is not None)
     print(f"  ✓ Shiny signals: {n_shiny_active}/{config.n_timesteps} timesteps active")
 

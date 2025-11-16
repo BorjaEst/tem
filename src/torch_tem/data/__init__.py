@@ -5,6 +5,11 @@ synthetic grid cell pattern generation, and memory training pattern generation.
 Replaces the legacy world.py with a modular, Protocol-based architecture.
 """
 
+from torch_tem.data.abstract import (
+    MemorySignalGenerator,
+    ShinySignalGenerator,
+    TransitionPredictionGenerator,
+)
 from torch_tem.data.datamodule import InfiniteWalkDataset, TEMDataModule
 from torch_tem.data.environment import Action, Environment, Location
 from torch_tem.data.patterns import (
@@ -32,4 +37,7 @@ __all__ = [
     "PlaceCellPatternGenerator",
     "GridCellPatternGenerator",
     "PairedPatternGenerator",
+    "TransitionPredictionGenerator",
+    "MemorySignalGenerator",
+    "ShinySignalGenerator",
 ]

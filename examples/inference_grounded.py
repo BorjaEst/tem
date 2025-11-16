@@ -177,7 +177,7 @@ if __name__ == "__main__":
     grounded = GroundedLocationInference(config)
 
     # Generate synthetic grid cell patterns (simulating abstract location)
-    grid_generator = data.SyntheticGridGenerator(config, batch_size=1)
+    grid_generator = data.SyntheticGridGenerator(config, walk_length=config.walk_length, batch_size=1)
     g_history = grid_generator.generate()
 
     # Process observations through full inference pipeline

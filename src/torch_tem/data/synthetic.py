@@ -12,9 +12,10 @@ class SyntheticGridParams(Protocol):
 
     Components implementing this protocol provide the necessary parameters
     for generating synthetic grid cell patterns during testing and examples.
+
+    This protocol is compatible with Parameters instances from torch_tem.config.parameters.
     """
 
-    walk_length: int
     n_g_calculated: List[int]
     f_initial_extended: List[float]
 
@@ -33,17 +34,19 @@ class SyntheticGridGenerator:
     - Random phase offsets for variation across cells
     """
 
-    def __init__(self, params: SyntheticGridParams, batch_size: int = 1, time_scale: float = 10.0, harmonic_weight: float = 0.3, noise_scale: float = 0.2):
+    def __init__(self, params: SyntheticGridParams, walk_length: int, batch_size: int = 1, time_scale: float = 10.0, harmonic_weight: float = 0.3, noise_scale: float = 0.2):
         """Initialize synthetic grid generator.
 
         Args:
-            params: Configuration providing walk_length, n_g_calculated, f_initial_extended
+            params: Configuration providing n_g_calculated, f_initial_extended
+            walk_length: Number of timesteps to generate
             batch_size: Batch size for generation
             time_scale: Time scaling factor for oscillations
             harmonic_weight: Weight for second harmonic component (0.0-1.0)
             noise_scale: Scale of Gaussian noise added to patterns
         """
         self.params = params
+        self.walk_length = walk_length
         self.batch_size = batch_size
         self.time_scale = time_scale
         self.harmonic_weight = harmonic_weight
@@ -67,7 +70,7 @@ class SyntheticGridGenerator:
 
         for f in range(n_f):
             # Create time axis scaled by frequency
-            t = torch.linspace(0, self.time_scale * self.params.f_initial_extended[f], self.params.walk_length)
+            t = torch.linspace(0, self.time_scale * self.params.f_initial_extended[f], self.walk_length)
             t = t.unsqueeze(1).unsqueeze(2)  # [T, 1, 1]
 
             # Random phase offsets per cell
@@ -101,7 +104,6 @@ if __name__ == "__main__":
 
     # Create a minimal config implementing SyntheticGridParams protocol
     class ExampleConfig(BaseModel):
-        walk_length: int = 50
         n_g_calculated: List[int] = [12, 10, 8]
         f_initial_extended: List[float] = [0.1, 0.3, 0.9]
 
@@ -111,16 +113,17 @@ if __name__ == "__main__":
 
     # Configuration
     config = ExampleConfig()
+    walk_length = 50
     batch_size = 2
 
     print(f"\nConfiguration:")
-    print(f"  Steps: {config.walk_length}")
+    print(f"  Steps: {walk_length}")
     print(f"  Frequencies: {config.f_initial_extended}")
     print(f"  Grid dimensions: {config.n_g_calculated}")
     print(f"  Batch size: {batch_size}")
 
     # Generate patterns
-    generator = SyntheticGridGenerator(config, batch_size=batch_size)
+    generator = SyntheticGridGenerator(config, walk_length=walk_length, batch_size=batch_size)
     g_history = generator.generate()
 
     print(f"\nGenerated patterns:")

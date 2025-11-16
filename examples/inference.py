@@ -13,7 +13,7 @@ Pipeline Stages:
 
 2. Grounded Location Inference: Place cell formation via g ⊗ x outer product
    - ProjectionHead: Laplacian transform + downsampling of grid cells
-   - GroundedLocationInference: Compute p = g ⊗ x (hippocampal place cells)
+   - GroundedLocationInference: Compute p = g ⊗ x (includes sensory tiling internally)
 
 3. Memory Integration (optional): Hebbian learning and attractor dynamics
    - MemoryStorage: Learn spatial associations via Hebbian plasticity
@@ -28,7 +28,7 @@ Data Flow:
     x (observation)
     → x_c (compressed/two-hot encoding)
     → x_f (temporal filtering per frequency)
-    → p (grounded location = g ⊗ x)
+    → p (grounded location = g ⊗ x_f, via outer product with W_repeat and W_tile)
     → M^T @ p (memory retrieval)
     → g_inf (abstract location via precision-weighted fusion)
 
@@ -299,7 +299,7 @@ if __name__ == "__main__":
     projection = ProjectionHead(config)
     grounded = GroundedLocationInference(config)
     print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
-    print(f"  ✓ GroundedLocationInference: g ⊗ x → p")
+    print(f"  ✓ GroundedLocationInference: g ⊗ x → p (includes W_tile internally)")
 
     # Memory system
     storage = MemoryStorage(config)
@@ -316,7 +316,7 @@ if __name__ == "__main__":
     # PHASE 3: Generate Synthetic Grid Cell Patterns
     # =========================================================================
     print("Phase 3: Generating synthetic grid cell patterns...")
-    grid_generator = data.SyntheticGridGenerator(config, batch_size=1)
+    grid_generator = data.SyntheticGridGenerator(config, config.walk_length, batch_size=1)
     g_history = grid_generator.generate()
     print(f"  ✓ Generated {config.walk_length} timesteps of grid cell activity")
     print()
@@ -350,6 +350,7 @@ if __name__ == "__main__":
         g_downsampled = projection.downsample(g_transformed)
 
         # Step 5: Compute grounded location via outer product
+        # Note: GroundedLocationInference applies W_tile internally to project x_f to p-space
         p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
 
         # Step 6: Memory retrieval
@@ -463,7 +464,7 @@ if __name__ == "__main__":
     print(f"Stage 3: Grid cell patterns (g) - {config.n_g_calculated}")
     print(f"  ↓ ProjectionHead (transform + downsample)")
     print(f"Stage 4: Downsampled grid cells (g_sub) - {config.n_g_subsampled_combined}")
-    print(f"  ↓ GroundedLocationInference (g ⊗ x)")
+    print(f"  ↓ GroundedLocationInference (g ⊗ x_f with W_repeat and W_tile)")
     print(f"Stage 5: Place cell activity (p) - {config.n_p_calculated}")
     print(f"  ↓ MemoryStorage + AttractorDynamics")
     print(f"Stage 6: Memory-retrieved patterns (p_retrieved)")

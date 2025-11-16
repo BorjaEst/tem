@@ -30,7 +30,7 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
-from torch_tem import utils
+from torch_tem import figures, utils
 from torch_tem.inference.abstract import AbstractLocationInference
 
 
@@ -212,143 +212,6 @@ def generate_shiny_signals(config: ExampleConfig) -> tuple[List[List[Tensor]], L
 
 
 # ==============================================================================
-# Visualization Functions
-# ==============================================================================
-def plot_source_contributions(precisions_history: List[dict[str, List[Tensor]]], timesteps_to_plot: List[int], config: ExampleConfig, figsize: tuple = (14, 4)) -> plt.Figure:
-    """Plot precision contributions from each source over selected timesteps.
-
-    Shows how much each source (transition, memory, shiny) contributes to the
-    final inference based on their relative precisions.
-    """
-    n_f = config.n_frequencies
-    n_t = len(timesteps_to_plot)
-
-    fig, axes = plt.subplots(n_f, n_t, figsize=(figsize[0], figsize[1] * n_f), squeeze=False)
-
-    for freq_idx in range(n_f):
-        for t_idx, t in enumerate(timesteps_to_plot):
-            ax = axes[freq_idx, t_idx]
-
-            # Extract precisions for this timestep and frequency
-            precs = precisions_history[t]
-            source_names = list(precs.keys())
-            source_values = [precs[name][freq_idx].mean().item() for name in source_names]
-
-            # Normalize to percentages
-            total = sum(source_values)
-            percentages = [100 * v / total if total > 0 else 0 for v in source_values]
-
-            # Bar plot
-            colors = ["steelblue", "darkorange", "green"][: len(source_names)]
-            bars = ax.bar(source_names, percentages, color=colors, alpha=0.7, edgecolor="black")
-
-            # Annotate with percentages
-            for bar, pct in zip(bars, percentages):
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2, height + 1, f"{pct:.1f}%", ha="center", va="bottom", fontsize=9)
-
-            ax.set_ylim(0, 105)
-            ax.set_ylabel("Contribution (%)", fontsize=10)
-            ax.grid(axis="y", alpha=0.3)
-
-            if freq_idx == 0:
-                ax.set_title(f"t={t}", fontsize=11, fontweight="bold")
-            if freq_idx == n_f - 1:
-                ax.set_xlabel("Source", fontsize=10)
-            if t_idx == 0:
-                ax.set_ylabel(f"Freq {freq_idx}\nContribution (%)", fontsize=10)
-
-    fig.suptitle("Source Precision Contributions Over Time", fontsize=14, fontweight="bold")
-    plt.tight_layout()
-    return fig
-
-
-def plot_uncertainty_evolution(sigma_history: dict[str, List[List[Tensor]]], config: ExampleConfig, figsize: tuple = (12, 6)) -> plt.Figure:
-    """Plot uncertainty (sigma) evolution for each source over time.
-
-    Shows how confidence in each source varies across the trajectory.
-    """
-    T = config.n_timesteps
-    n_f = config.n_frequencies
-
-    fig, axes = plt.subplots(n_f, 1, figsize=figsize, sharex=True)
-    if n_f == 1:
-        axes = [axes]
-
-    for freq_idx in range(n_f):
-        ax = axes[freq_idx]
-
-        for source_name, sigma_list in sigma_history.items():
-            # Extract mean sigma over batch for this frequency
-            sigma_vals = [sigma_list[t][freq_idx].mean().item() if sigma_list[t] is not None else np.nan for t in range(T)]
-
-            ax.plot(range(T), sigma_vals, label=source_name, linewidth=2, alpha=0.8)
-
-        ax.set_ylabel(f"Freq {freq_idx}\nσ (uncertainty)", fontsize=10)
-        ax.legend(loc="upper right", fontsize=9)
-        ax.grid(alpha=0.3)
-
-    axes[-1].set_xlabel("Timestep", fontsize=11)
-    fig.suptitle("Uncertainty Evolution by Source", fontsize=14, fontweight="bold")
-    plt.tight_layout()
-    return fig
-
-
-def plot_g_inf_evolution(g_inf_history: List[List[Tensor]], config: ExampleConfig, figsize: tuple = (12, 6)) -> plt.Figure:
-    """Plot inferred abstract location g_inf over time.
-
-    Shows the temporal evolution of the fused abstract representation.
-    """
-    T = config.n_timesteps
-    B = config.batch_size
-    n_f = config.n_frequencies
-
-    fig, axes = plt.subplots(n_f, 1, figsize=figsize, sharex=True)
-    if n_f == 1:
-        axes = [axes]
-
-    for freq_idx in range(n_f):
-        ax = axes[freq_idx]
-
-        # Stack into [T, B, n_g[f]] and take first 3 dimensions for visualization
-        g_inf_tensor = torch.stack([g_inf_history[t][freq_idx] for t in range(T)])  # [T, B, n_g]
-        n_dims_to_plot = min(3, g_inf_tensor.shape[2])
-
-        for dim in range(n_dims_to_plot):
-            # Plot first batch trajectory
-            g_vals = g_inf_tensor[:, 0, dim].detach().cpu().numpy()
-            ax.plot(range(T), g_vals, label=f"dim {dim}", linewidth=1.5, alpha=0.8)
-
-        ax.set_ylabel(f"Freq {freq_idx}\ng_inf", fontsize=10)
-        ax.legend(loc="upper right", fontsize=8, ncol=n_dims_to_plot)
-        ax.grid(alpha=0.3)
-
-    axes[-1].set_xlabel("Timestep", fontsize=11)
-    fig.suptitle("Inferred Abstract Location (g_inf) Evolution", fontsize=14, fontweight="bold")
-    plt.tight_layout()
-    return fig
-
-
-def plot_schedule_effect(p2g_schedule: List[float], config: ExampleConfig, figsize: tuple = (10, 4)) -> plt.Figure:
-    """Plot p2g schedule showing how memory influence changes over time."""
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
-
-    ax.plot(range(len(p2g_schedule)), p2g_schedule, linewidth=2, color="darkorange", marker="o", markersize=3, alpha=0.8)
-    ax.set_xlabel("Timestep", fontsize=11)
-    ax.set_ylabel("p2g_scale_offset", fontsize=11)
-    ax.set_title("Memory Influence Schedule\n(higher offset = lower memory influence)", fontsize=12, fontweight="bold")
-    ax.grid(alpha=0.3)
-    ax.axhline(0, color="black", linestyle="--", alpha=0.3)
-
-    # Annotate start and end
-    ax.text(0, p2g_schedule[0] + 0.1, f"Start: {p2g_schedule[0]:.2f}", ha="left", fontsize=9, color="darkred")
-    ax.text(len(p2g_schedule) - 1, p2g_schedule[-1] + 0.1, f"End: {p2g_schedule[-1]:.2f}", ha="right", fontsize=9, color="darkgreen")
-
-    plt.tight_layout()
-    return fig
-
-
-# ==============================================================================
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
@@ -454,25 +317,25 @@ if __name__ == "__main__":
     timesteps_to_plot = [0, config.n_timesteps // 4, config.n_timesteps // 2, 3 * config.n_timesteps // 4, config.n_timesteps - 1]
 
     # Plot 1: Source precision contributions
-    fig1 = plot_source_contributions(precisions_history, timesteps_to_plot, config)
+    fig1 = figures.plot_source_contributions(precisions_history, timesteps_to_plot, config.n_frequencies)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_source_contributions.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '01_source_contributions.png'}")
 
     # Plot 2: Uncertainty evolution
-    fig2 = plot_uncertainty_evolution(sigma_history_dict, config)
+    fig2 = figures.plot_uncertainty_evolution(sigma_history_dict, config.n_frequencies)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_uncertainty_evolution.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '02_uncertainty_evolution.png'}")
 
     # Plot 3: g_inf evolution
-    fig3 = plot_g_inf_evolution(g_inf_history, config)
+    fig3 = figures.plot_g_inf_evolution(g_inf_history, config.n_frequencies, config.n_timesteps)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_g_inf_evolution.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '03_g_inf_evolution.png'}")
 
     # Plot 4: p2g schedule
-    fig4 = plot_schedule_effect(p2g_schedule, config)
+    fig4 = figures.plot_schedule_effect(p2g_schedule)
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_schedule_effect.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '04_schedule_effect.png'}")

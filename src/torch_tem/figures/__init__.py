@@ -13,6 +13,12 @@ All plotting functions follow consistent conventions:
 - Provide both quick-plot and customizable interfaces
 """
 
+from torch_tem.figures.abstract import (
+    plot_g_inf_evolution,
+    plot_schedule_effect,
+    plot_source_contributions,
+    plot_uncertainty_evolution,
+)
 from torch_tem.figures.data import (
     plot_batch_tensors,
     plot_environment_layout,
@@ -67,4 +73,9 @@ __all__ = [
     "plot_normalization_effects",
     "plot_multi_frequency_representation",
     "plot_sensory_projection",
+    # Abstract location inference
+    "plot_source_contributions",
+    "plot_uncertainty_evolution",
+    "plot_g_inf_evolution",
+    "plot_schedule_effect",
 ]

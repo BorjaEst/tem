@@ -116,7 +116,6 @@ class ExampleConfig(BaseSettings):
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
     lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
     kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
-    n_memory_warmup: int = Field(default=20, ge=0, le=100, description="Timesteps for memory initialization")
 
     # Abstract inference configuration
     g_mem_std: float = Field(default=0.01, gt=0, description="Std for memory MLP initialization")
@@ -188,15 +187,7 @@ class ExampleConfig(BaseSettings):
     @computed_field(description="Two-hot encoding table")
     @property
     def two_hot_table_calculated(self) -> List[Tensor]:
-        two_hot_table = []
-        for i in range(self.n_x):
-            code = torch.zeros(self.n_x_c)
-            idx1 = i % self.n_x_c
-            idx2 = (i + 1) % self.n_x_c
-            code[idx1] = 1.0
-            code[idx2] = 1.0
-            two_hot_table.append(code)
-        return two_hot_table
+        return [torch.tensor([1.0 if j in {(i % self.n_x_c), ((i + 1) % self.n_x_c)} else 0.0 for j in range(self.n_x_c)]) for i in range(self.n_x)]
 
     @computed_field(description="Kronecker repeat matrices for outer product")
     @property
@@ -361,31 +352,26 @@ if __name__ == "__main__":
         # Step 5: Compute grounded location via outer product
         p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
 
-        # Step 6: Memory retrieval (after warmup)
-        if t >= config.n_memory_warmup:
-            # Concatenate p across frequencies for memory operations
-            p_concat = torch.cat(p_t, dim=1)  # [1, sum(n_p)]
+        # Step 6: Memory retrieval
+        # Concatenate p across frequencies for memory operations
+        p_concat = torch.cat(p_t, dim=1)  # [1, sum(n_p)]
 
-            # Update memory with Hebbian learning
-            storage.update(p_concat, p_concat, eta=config.eta, lamb=config.lambda_)
+        # Update memory with Hebbian learning
+        storage.update(p_concat, p_concat, eta=config.eta, lamb=config.lambda_)
 
-            # Retrieve from memory via attractor dynamics
-            M_inf = storage.get_memory(for_inference=True)
-            p_retrieved_concat = attractor.retrieve(p_concat, M_inf, for_inference=True)
+        # Retrieve from memory via attractor dynamics
+        M_inf = storage.get_memory(for_inference=True)
+        p_retrieved_concat = attractor.retrieve(p_concat, M_inf, for_inference=True)
 
-            # Split back into per-frequency format for abstract inference
-            p_retrieved_list = []
-            start_idx = 0
-            for n_p in config.n_p_calculated:
-                p_retrieved_list.append(p_retrieved_concat[:, start_idx : start_idx + n_p])
-                start_idx += n_p
+        # Split back into per-frequency format for abstract inference
+        p_retrieved_list = []
+        start_idx = 0
+        for n_p in config.n_p_calculated:
+            p_retrieved_list.append(p_retrieved_concat[:, start_idx : start_idx + n_p])
+            start_idx += n_p
 
-            # Use memory-retrieved p for abstract inference
-            p_for_abstract = p_retrieved_list
-        else:
-            p_retrieved_list = None
-            # Use direct grounded p for abstract inference
-            p_for_abstract = p_t
+        # Use memory-retrieved p for abstract inference
+        p_for_abstract = p_retrieved_list
 
         # Step 7: Abstract location inference via precision-weighted fusion
         # Note: AbstractLocationInference expects full n_g dimensions for g_gen
@@ -459,8 +445,7 @@ if __name__ == "__main__":
         print(f"  Saved: 06_abstract_location.png")
 
     # Plot 6: Memory matrices (if memory enabled)
-    n_training_steps = config.walk_length - config.n_memory_warmup
-    fig6 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), config.n_p_calculated, n_training_steps)
+    fig6 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), config.n_p_calculated, config.walk_length)
     if config.save_plots:
         fig6.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 07_memory_matrices.png")

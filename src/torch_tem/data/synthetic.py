@@ -56,18 +56,21 @@ class SyntheticGridGenerator:
         if len(self.params.n_g_calculated) != len(self.params.f_initial_extended):
             raise ValueError(f"n_g_calculated length ({len(self.params.n_g_calculated)}) must match " f"f_initial_extended length ({len(self.params.f_initial_extended)})")
 
-    def generate(self) -> List[Tensor]:
+    def generate(self) -> List[List[Tensor]]:
         """Generate synthetic grid cell activity patterns.
 
         Creates oscillating patterns with frequency-dependent dynamics to simulate
         grid cell responses during spatial navigation.
 
         Returns:
-            List of [T, B, n_g[f]] tensors with synthetic grid patterns
+            List of timesteps, each containing List[n_f] of [B, n_g[f]] tensors.
+            Structure: g_history[t][f] -> [B, n_g[f]]
+            This time-first structure simplifies iteration through the walk.
         """
         n_f = len(self.params.n_g_calculated)
-        g_history = []
 
+        # Generate per-frequency patterns: [T, B, n_g[f]]
+        patterns_per_freq = []
         for f in range(n_f):
             # Create time axis scaled by frequency
             t = torch.linspace(0, self.time_scale * self.params.f_initial_extended[f], self.walk_length)
@@ -83,7 +86,13 @@ class SyntheticGridGenerator:
             # Add Gaussian noise for biological realism
             pattern = pattern + self.noise_scale * torch.randn_like(pattern)
 
-            g_history.append(pattern)
+            patterns_per_freq.append(pattern)  # [T, B, n_g[f]]
+
+        # Restructure to time-first: List[T] of List[n_f] of [B, n_g[f]]
+        g_history = []
+        for t in range(self.walk_length):
+            g_t = [patterns_per_freq[f][t] for f in range(n_f)]  # List[n_f] of [B, n_g[f]]
+            g_history.append(g_t)
 
         return g_history
 
@@ -127,5 +136,8 @@ if __name__ == "__main__":
     g_history = generator.generate()
 
     print(f"\nGenerated patterns:")
-    for f, g_f in enumerate(g_history):
+    print(f"  Timesteps: {len(g_history)}")
+    print(f"  Structure: g_history[t][f] -> [B, n_g[f]]")
+    print(f"\nSample timestep t=0:")
+    for f, g_f in enumerate(g_history[0]):
         print(f"  Frequency {f} (f={config.f_initial_extended[f]:.2f}): shape={g_f.shape}, " f"mean={g_f.mean():.4f}, std={g_f.std():.4f}")

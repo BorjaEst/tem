@@ -1,0 +1,507 @@
+#!/usr/bin/env python3
+"""Complete TEM inference pipeline example combining all inference components.
+
+This example demonstrates the full torch_tem inference pipeline, integrating components
+from inference_sensory.py, inference_grounded.py, inference_abstract.py, memory_storage.py,
+and memory_attractor.py into a single comprehensive demonstration.
+
+Pipeline Stages:
+----------------
+1. Sensory Processing: Observation encoding and temporal filtering
+   - SensoryEncoder: Two-hot encoding (n_x → n_x_c)
+   - SensoryProcessor: Multi-frequency temporal filtering
+
+2. Grounded Location Inference: Place cell formation via g ⊗ x outer product
+   - ProjectionHead: Laplacian transform + downsampling of grid cells
+   - GroundedLocationInference: Compute p = g ⊗ x (hippocampal place cells)
+
+3. Memory Integration (optional): Hebbian learning and attractor dynamics
+   - MemoryStorage: Learn spatial associations via Hebbian plasticity
+   - AttractorDynamics: Retrieve patterns via iterative dynamics
+
+4. Abstract Location Inference: Precision-weighted fusion of multiple sources
+   - AbstractLocationInference: Fuse generative predictions with memory
+   - Output: Abstract location g_inf representing spatial belief
+
+Data Flow:
+----------
+    x (observation)
+    → x_c (compressed/two-hot encoding)
+    → x_f (temporal filtering per frequency)
+    → p (grounded location = g ⊗ x)
+    → M^T @ p (memory retrieval)
+    → g_inf (abstract location via precision-weighted fusion)
+
+Usage Examples:
+---------------
+    # Default: 50 timesteps, memory enabled, save plots
+    python examples/inference.py
+
+    # Longer walk with different architecture
+    python examples/inference.py --walk_length 100 --n_frequencies 4
+
+    # Disable memory to see feed-forward inference only
+    python examples/inference.py --use_memory false
+
+    # Different grid size and observation mode
+    python examples/inference.py --grid_size 7 --observation_mode tiled
+
+    # Show plots interactively
+    python examples/inference.py --show_plots true --save_plots false
+
+    # Full help
+    python examples/inference.py --help
+
+Outputs:
+--------
+When save_plots=true, generates 6-7 visualizations in outputs/inference/:
+    1. 01_environment.png - Grid layout
+    2. 02_walk_trajectory.png - Agent trajectory
+    3. 03_sensory_processing.png - Temporal filtering heatmaps
+    4. 04_place_cell_activity.png - Place field evolution
+    5. 05_outer_product_structure.png - Decomposition at mid-point
+    6. 06_abstract_location.png - Abstract location over time
+    7. 07_memory_matrices.png - Hebbian associations (if memory enabled)
+"""
+
+from pathlib import Path
+from typing import List, Literal
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from pydantic import Field, computed_field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from torch import Tensor
+
+from torch_tem import data, figures, utils
+from torch_tem.core.encoder import SensoryEncoder
+from torch_tem.core.projection import ProjectionHead
+from torch_tem.inference.abstract import AbstractLocationInference
+from torch_tem.inference.grounded import GroundedLocationInference
+from torch_tem.inference.sensory import SensoryProcessor
+from torch_tem.memory.attractor import AttractorDynamics
+from torch_tem.memory.storage import MemoryStorage
+
+
+# ==============================================================================
+# Configuration
+# ==============================================================================
+class ExampleConfig(BaseSettings):
+    """Configuration for complete TEM inference pipeline example.
+
+    This config implements all inference-related protocols:
+    - EncoderParams, SensoryProcessorParams
+    - GroundedInferenceParams, ProjectionParams
+    - AbstractInferenceParams
+    - MemoryStorageParams, AttractorParams
+    """
+
+    model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="inference")
+
+    # Environment configuration
+    grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for synthetic environment")
+    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
+
+    # Walk generation
+    walk_length: int = Field(default=100, ge=20, le=500, description="Steps in the walk sequence")
+
+    # Architecture configuration
+    n_frequencies: int = Field(default=3, ge=2, le=5, description="Number of frequency modules")
+    n_g_per_module: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
+    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
+
+    # Frequency configuration
+    f_min: float = Field(default=0.1, ge=0.01, le=0.5, description="Minimum frequency (longest memory)")
+    f_max: float = Field(default=0.9, ge=0.5, le=1.0, description="Maximum frequency (shortest memory)")
+
+    # Memory configuration
+    use_memory: bool = Field(default=True, description="Enable memory storage and retrieval")
+    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
+    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
+    kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
+    n_memory_warmup: int = Field(default=20, ge=0, le=100, description="Timesteps for memory initialization")
+
+    # Abstract inference configuration
+    g_mem_std: float = Field(default=0.01, gt=0, description="Std for memory MLP initialization")
+    g_init_std: float = Field(default=0.1, gt=0, description="Std for learnable g_init")
+    p2g_scale_offset: float = Field(default=0.5, ge=0.0, le=5.0, description="Memory influence schedule offset")
+
+    # Output
+    output_dir: Path = Field(default=Path("outputs/inference"), description="Directory for saving plots")
+    show_plots: bool = Field(default=True, description="Display plots interactively")
+    save_plots: bool = Field(default=True, description="Save plots to output directory")
+
+    @field_validator("output_dir")
+    @classmethod
+    def create_output_dir(cls, v: Path) -> Path:
+        """Create output directory if it doesn't exist."""
+        v.mkdir(parents=True, exist_ok=True)
+        return v
+
+    # ==============================================================================
+    # Computed Properties
+    # ==============================================================================
+
+    @computed_field(description="Number of unique observations in the environment")
+    @property
+    def n_x(self) -> int:
+        n_locations = self.grid_size * self.grid_size
+        if self.observation_mode == "unique":
+            return n_locations
+        elif self.observation_mode == "tiled":
+            return 4
+        elif self.observation_mode == "random":
+            return max(4, n_locations // 4)
+        raise ValueError(f"Invalid observation_mode: {self.observation_mode}")
+
+    @computed_field(description="Total number of frequency modules")
+    @property
+    def n_f_calculated(self) -> int:
+        return self.n_frequencies
+
+    @computed_field(description="Grid cell dimensions per frequency")
+    @property
+    def n_g_calculated(self) -> List[int]:
+        if len(self.n_g_per_module) < self.n_frequencies:
+            return self.n_g_per_module + [self.n_g_per_module[-1]] * (self.n_frequencies - len(self.n_g_per_module))
+        return self.n_g_per_module[: self.n_frequencies]
+
+    @computed_field(description="Downsampled grid cell dimensions (1/3 of full)")
+    @property
+    def n_g_subsampled_combined(self) -> List[int]:
+        return [max(1, n_g // 3) for n_g in self.n_g_calculated]
+
+    @computed_field(description="Place cell dimensions per frequency")
+    @property
+    def n_p_calculated(self) -> List[int]:
+        return [n_g * self.n_x_c for n_g in self.n_g_subsampled_combined]
+
+    @computed_field(description="Sensory dimensions per frequency")
+    @property
+    def n_x_f_calculated(self) -> List[int]:
+        return [self.n_x_c for _ in range(self.n_frequencies)]
+
+    @computed_field(description="Frequency values (logarithmic spacing)")
+    @property
+    def f_initial_extended(self) -> List[float]:
+        if self.n_frequencies == 1:
+            return [self.f_max]
+        return np.logspace(np.log10(self.f_min), np.log10(self.f_max), self.n_frequencies).tolist()
+
+    @computed_field(description="Two-hot encoding table")
+    @property
+    def two_hot_table_calculated(self) -> List[Tensor]:
+        two_hot_table = []
+        for i in range(self.n_x):
+            code = torch.zeros(self.n_x_c)
+            idx1 = i % self.n_x_c
+            idx2 = (i + 1) % self.n_x_c
+            code[idx1] = 1.0
+            code[idx2] = 1.0
+            two_hot_table.append(code)
+        return two_hot_table
+
+    @computed_field(description="Kronecker repeat matrices for outer product")
+    @property
+    def W_repeat_calculated(self) -> List[Tensor]:
+        return utils.create_W_repeat(self.n_g_subsampled_combined, self.n_x_f_calculated)
+
+    @computed_field(description="Kronecker tile matrices for outer product")
+    @property
+    def W_tile_calculated(self) -> List[Tensor]:
+        return utils.create_W_tile(self.n_g_subsampled_combined, self.n_x_f_calculated)
+
+    @computed_field(description="Downsampling matrices for grid cells")
+    @property
+    def g_downsample_calculated(self) -> List[Tensor]:
+        return [torch.randn(self.n_g_calculated[f], self.n_g_subsampled_combined[f]) / np.sqrt(self.n_g_calculated[f]) for f in range(self.n_frequencies)]
+
+    @computed_field(description="Memory update mask (hierarchical)")
+    @property
+    def p_update_mask_calculated(self) -> Tensor:
+        return utils.create_p_update_mask(
+            self.n_p_calculated, self.n_frequencies, self.n_frequencies, 0, self.f_initial_extended  # n_f_g (all grid, no OVC)  # n_f_ovc (no object vector cells)
+        )
+
+    @computed_field(description="Attractor retrieval iterations")
+    @property
+    def i_attractor_calculated(self) -> int:
+        return 2 * self.n_frequencies
+
+    @computed_field(description="Max iterations per frequency for inference retrieval")
+    @property
+    def i_attractor_max_freq_inf(self) -> List[int]:
+        # Early stopping: low frequencies stop early, high frequencies continue longer
+        return [2 * (f + 1) for f in range(self.n_frequencies)]
+
+    @computed_field(description="Max iterations per frequency for generative retrieval")
+    @property
+    def i_attractor_max_freq_gen(self) -> List[int]:
+        return self.i_attractor_max_freq_inf  # Use same schedule
+
+    @computed_field(description="Hierarchical masks for inference retrieval")
+    @property
+    def p_retrieve_mask_inf_calculated(self) -> List[Tensor]:
+        masks_inf, _ = utils.create_p_retrieve_masks(self.n_p_calculated, self.i_attractor_calculated, self.i_attractor_max_freq_inf, self.i_attractor_max_freq_gen)
+        return masks_inf
+
+    @computed_field(description="Hierarchical masks for generative retrieval")
+    @property
+    def p_retrieve_mask_gen_calculated(self) -> List[Tensor]:
+        _, masks_gen = utils.create_p_retrieve_masks(self.n_p_calculated, self.i_attractor_calculated, self.i_attractor_max_freq_inf, self.i_attractor_max_freq_gen)
+        return masks_gen
+
+    @computed_field(description="Use inference-based grounded locations")
+    @property
+    def use_p_inf(self) -> bool:
+        return self.use_memory
+
+    @computed_field(description="Use common memory for inference and generation")
+    @property
+    def common_memory(self) -> bool:
+        return False  # Use dual memory
+
+
+# ==============================================================================
+# Main Experiment
+# ==============================================================================
+if __name__ == "__main__":
+    """Run the complete TEM inference pipeline with visualizations."""
+    config = ExampleConfig()
+
+    print("=" * 80)
+    print("Complete TEM Inference Pipeline")
+    print("=" * 80)
+    print(f"Configuration:")
+    print(f"  Environment: {config.grid_size}×{config.grid_size} grid ({config.observation_mode} observations)")
+    print(f"  Walk length: {config.walk_length} timesteps")
+    print(f"  Frequencies: {config.n_frequencies} ({config.f_min:.2f} to {config.f_max:.2f})")
+    print(f"  Architecture: n_g={config.n_g_calculated}, n_p={config.n_p_calculated}, n_x_c={config.n_x_c}")
+    print(f"  Memory: {'enabled' if config.use_memory else 'disabled'}")
+    print()
+
+    # =========================================================================
+    # PHASE 1: Environment and Walk Generation
+    # =========================================================================
+    print("Phase 1: Generating walk trajectory...")
+    env = data.Environment.from_grid(config.grid_size, config.grid_size, config.observation_mode)
+    env.validate()
+
+    policy_gen = data.PolicyGenerator(env)
+    policy = policy_gen.random_policy()
+
+    walk_gen = data.WalkGenerator(env)
+    walks = walk_gen.generate_walks(n_walks=1, walk_length=config.walk_length, policy=policy)
+    walk = walks[0]
+
+    observations = torch.stack([obs.clone().detach() for obs in walk.observations])  # [T, n_x]
+    locations = torch.as_tensor(walk.locations, dtype=torch.long)  # [T]
+    print(f"  ✓ Generated walk: {len(walk)} timesteps")
+    print()
+
+    # =========================================================================
+    # PHASE 2: Initialize All Components
+    # =========================================================================
+    print("Phase 2: Initializing inference components...")
+
+    # Sensory processing
+    encoder = SensoryEncoder(config)
+    processor = SensoryProcessor(config)
+    print(f"  ✓ SensoryEncoder: {config.n_x} → {config.n_x_c} (two-hot)")
+    print(f"  ✓ SensoryProcessor: {config.n_frequencies} frequency channels")
+
+    # Grounded location inference
+    projection = ProjectionHead(config)
+    grounded = GroundedLocationInference(config)
+    print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
+    print(f"  ✓ GroundedLocationInference: g ⊗ x → p")
+
+    # Memory system (if enabled)
+    if config.use_memory:
+        storage = MemoryStorage(config)
+        attractor = AttractorDynamics(config)
+        print(f"  ✓ MemoryStorage: {sum(config.n_p_calculated)}×{sum(config.n_p_calculated)} Hebbian matrix")
+        print(f"  ✓ AttractorDynamics: {config.i_attractor_calculated} iterations with hierarchical masking")
+
+    # Abstract location inference
+    abstract = AbstractLocationInference(config)
+    print(f"  ✓ AbstractLocationInference: precision-weighted fusion")
+    print()
+
+    # =========================================================================
+    # PHASE 3: Generate Synthetic Grid Cell Patterns
+    # =========================================================================
+    print("Phase 3: Generating synthetic grid cell patterns...")
+    grid_generator = data.SyntheticGridGenerator(config, batch_size=1)
+    g_history = grid_generator.generate()
+    print(f"  ✓ Generated {config.walk_length} timesteps of grid cell activity")
+    print()
+
+    # =========================================================================
+    # PHASE 4: Run Complete Inference Pipeline
+    # =========================================================================
+    print("Phase 4: Running complete inference pipeline...")
+
+    x_c_history = []
+    x_f_history = []
+    p_history = []
+    p_retrieved_history = []
+    g_inf_history = []
+
+    x_prev = [torch.zeros(1, config.n_x_c) for _ in range(config.n_frequencies)]
+
+    for t in range(config.walk_length):
+        # Step 1: Encode observation → compressed sensory
+        x_t = observations[t : t + 1]  # [1, n_x]
+        x_c = encoder(x_t)  # [1, n_x_c]
+
+        # Step 2: Temporal filtering → multi-frequency representation
+        x_f = processor(x_c, x_prev)  # List[n_f] of [1, n_x_c]
+
+        # Step 3: Get synthetic grid cells at time t
+        g_t = [g_history[f][t : t + 1, 0, :] for f in range(config.n_frequencies)]  # List[n_f] of [1, n_g[f]]
+
+        # Step 4: Transform and downsample grid cells
+        g_transformed = projection.transform(g_t)
+        g_downsampled = projection.downsample(g_transformed)
+
+        # Step 5: Compute grounded location via outer product
+        p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
+
+        # Step 6: Memory retrieval (if enabled and after warmup)
+        if config.use_memory and t >= config.n_memory_warmup:
+            # Concatenate p across frequencies for memory operations
+            p_concat = torch.cat(p_t, dim=1)  # [1, sum(n_p)]
+
+            # Update memory with Hebbian learning
+            storage.update(p_concat, p_concat, eta=config.eta, lamb=config.lambda_)
+
+            # Retrieve from memory via attractor dynamics
+            M_inf = storage.get_memory(for_inference=True)
+            p_retrieved_concat = attractor.retrieve(p_concat, M_inf, for_inference=True)
+
+            # Split back into per-frequency format for abstract inference
+            p_retrieved_list = []
+            start_idx = 0
+            for n_p in config.n_p_calculated:
+                p_retrieved_list.append(p_retrieved_concat[:, start_idx : start_idx + n_p])
+                start_idx += n_p
+
+            # Use memory-retrieved p for abstract inference
+            p_for_abstract = p_retrieved_list
+        else:
+            p_retrieved_list = None
+            # Use direct grounded p for abstract inference
+            p_for_abstract = p_t
+
+        # Step 7: Abstract location inference via precision-weighted fusion
+        # Note: AbstractLocationInference expects full n_g dimensions for g_gen
+        # and n_g_subsampled dimensions for the memory path (p_x)
+
+        # Use synthetic g (full dimensions) as transition prediction
+        g_gen = g_t  # Full grid cell dimensions [n_g[f]]
+        sigma_gen = [torch.ones(1, n_g) * 0.5 for n_g in config.n_g_calculated]  # Moderate uncertainty
+
+        # For memory path: use downsampled g as proxy for p→g projection
+        # (In full TEM, this would be a learned MLP: p_x → g_mem)
+        p_for_abstract = g_downsampled if config.use_memory else None
+
+        g_inf = abstract(g_gen, sigma_gen, p_for_abstract, shiny_signals=None, p2g_scale_offset=config.p2g_scale_offset)
+
+        # Store history
+        x_c_history.append(x_c.squeeze(0))
+        x_f_history.append([x.squeeze(0) for x in x_f])  # [n_x_c] for temporal filtering plot
+        p_history.append(p_t)  # Keep as List[n_f] of [1, n_p[f]] for outer product plot
+        p_retrieved_history.append(p_retrieved_list)
+        g_inf_history.append(g_inf)
+
+        x_prev = x_f
+
+    print(f"  ✓ Processed {config.walk_length} timesteps through complete pipeline")
+    print()
+
+    # =========================================================================
+    # PHASE 5: Generate Visualizations
+    # =========================================================================
+    print("Phase 5: Generating visualizations...")
+
+    # Stack histories for plotting
+    x_c_stacked = torch.stack(x_c_history)  # [T, n_x_c]
+
+    # Plot 1: Environment and walk trajectory
+    fig1 = figures.plot_environment_layout(env, title=f"Environment: {config.grid_size}×{config.grid_size} Grid")
+    fig1_walks = figures.plot_walks(env, [walk], title=f"Walk Trajectory ({config.walk_length} steps)")
+    if config.save_plots:
+        fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
+        fig1_walks.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 01_environment.png, 02_walk_trajectory.png")
+
+    # Plot 2: Sensory processing (temporal filtering)
+    fig2 = figures.plot_temporal_filtering(x_c_stacked, x_f_history, config.f_initial_extended)
+    if config.save_plots:
+        fig2.savefig(config.output_dir / "03_sensory_processing.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 03_sensory_processing.png")
+
+    # Plot 3: Grounded location activity (place cells)
+    fig3 = figures.plot_grounded_location_activity(p_history, observations, locations, config.f_initial_extended, config.n_p_calculated)
+    if config.save_plots:
+        fig3.savefig(config.output_dir / "04_place_cell_activity.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 04_place_cell_activity.png")
+
+    # Plot 4: Outer product structure (mid-point)
+    mid_point = config.walk_length // 2
+    g_mid = [g_history[f][mid_point : mid_point + 1, 0, :] for f in range(config.n_frequencies)]
+    g_mid_transformed = projection.transform(g_mid)
+    g_mid_downsampled = projection.downsample(g_mid_transformed)
+    # Reconstruct x_f with batch dimension for plotting
+    x_f_mid = [x.unsqueeze(0) for x in x_f_history[mid_point]]
+    fig4 = figures.plot_outer_product_structure(g_mid_downsampled, x_f_mid, p_history[mid_point], config.f_initial_extended)
+    if config.save_plots:
+        fig4.savefig(config.output_dir / "05_outer_product_structure.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 05_outer_product_structure.png")
+
+    # Plot 5: Abstract location evolution
+    fig5 = figures.plot_g_inf_evolution(g_inf_history, config.n_frequencies, config.walk_length)
+    if config.save_plots:
+        fig5.savefig(config.output_dir / "06_abstract_location.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 06_abstract_location.png")
+
+    # Plot 6: Memory matrices (if memory enabled)
+    if config.use_memory:
+        fig6 = figures.plot_memory_matrices(
+            storage.M_gen, storage.get_memory(for_inference=True), n_p_per_freq=config.n_p_calculated, n_training_steps=config.walk_length - config.n_memory_warmup
+        )
+        if config.save_plots:
+            fig6.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
+            print(f"  Saved: 07_memory_matrices.png")
+
+    print()
+    print("=" * 80)
+    print("Pipeline Summary:")
+    print("=" * 80)
+    print(f"Input:  {config.n_x}-dim observations ({config.observation_mode} mode)")
+    print(f"  ↓ SensoryEncoder (two-hot)")
+    print(f"Stage 1: {config.n_x_c}-dim compressed sensory (x_c)")
+    print(f"  ↓ SensoryProcessor ({config.n_frequencies} frequencies)")
+    print(f"Stage 2: Multi-frequency filtered sensory (x_f)")
+    print(f"  ↓ SyntheticGridGenerator")
+    print(f"Stage 3: Grid cell patterns (g) - {config.n_g_calculated}")
+    print(f"  ↓ ProjectionHead (transform + downsample)")
+    print(f"Stage 4: Downsampled grid cells (g_sub) - {config.n_g_subsampled_combined}")
+    print(f"  ↓ GroundedLocationInference (g ⊗ x)")
+    print(f"Stage 5: Place cell activity (p) - {config.n_p_calculated}")
+    if config.use_memory:
+        print(f"  ↓ MemoryStorage + AttractorDynamics")
+        print(f"Stage 6: Memory-retrieved patterns (p_retrieved)")
+    print(f"  ↓ AbstractLocationInference (precision fusion)")
+    print(f"Output: Abstract location (g_inf) - {config.n_g_calculated}")
+    print("=" * 80)
+    print()
+    print(f"All outputs saved to: {config.output_dir}")
+
+    # Show or close plots
+    if config.show_plots:
+        plt.show()
+    else:
+        plt.close("all")

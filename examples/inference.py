@@ -220,9 +220,7 @@ class ExampleConfig(BaseSettings):
     @computed_field(description="Memory update mask (hierarchical)")
     @property
     def p_update_mask_calculated(self) -> Tensor:
-        return utils.create_p_update_mask(
-            self.n_p_calculated, self.n_frequencies, self.n_frequencies, 0, self.f_initial_extended  # n_f_g (all grid, no OVC)  # n_f_ovc (no object vector cells)
-        )
+        return utils.create_p_update_mask(self.n_p_calculated, self.n_frequencies, self.n_frequencies, 0, self.f_initial_extended)
 
     @computed_field(description="Attractor retrieval iterations")
     @property
@@ -469,9 +467,8 @@ if __name__ == "__main__":
 
     # Plot 6: Memory matrices (if memory enabled)
     if config.use_memory:
-        fig6 = figures.plot_memory_matrices(
-            storage.M_gen, storage.get_memory(for_inference=True), n_p_per_freq=config.n_p_calculated, n_training_steps=config.walk_length - config.n_memory_warmup
-        )
+        n_training_steps = config.walk_length - config.n_memory_warmup
+        fig6 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), config.n_p_calculated, n_training_steps)
         if config.save_plots:
             fig6.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
             print(f"  Saved: 07_memory_matrices.png")

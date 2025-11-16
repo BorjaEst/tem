@@ -1,4 +1,36 @@
-"""Abstract location inference for torch_tem package."""
+"""Abstract location inference for the Tolman–Eichenbaum Machine (TEM).
+
+This module computes the abstract location representation (``g``) by
+fusing multiple information sources with uncertainty-aware (precision)
+weighting. It is the integration hub between predictive dynamics and
+episodic memory:
+
+Sources combined per frequency module f:
+1) Transition prediction: ``g_gen[f]`` with uncertainty ``sigma_g_gen[f]``
+2) Memory-based inference (optional): ``p_x[f] -> g`` via a learned MLP
+3) Salient object ("shiny") cues (optional): ``(mu_g_shiny[f], sigma_g_shiny[f])``
+
+Fusion rule (precision-weighted mean):
+
+        precision_i = 1 / (sigma_i^2 + eps)
+        g_inf = sum_i precision_i * mu_i / sum_i precision_i
+
+Key ideas:
+- Memory influence is scheduled via an offset added to ``sigma_g_mem``
+    (``p2g_scale_offset``), delaying strong reliance on memory early on.
+- Memory uncertainty is predicted from simple quality indicators
+    (norm and placeholder reconstruction error) per frequency.
+- The output ``g_inf`` supports structural generalization while remaining
+    anchored to retrieved episodic content when available.
+
+Shapes (per frequency f):
+- ``g_gen[f]``: [B, n_g[f]], ``sigma_g_gen[f]``: [B, n_g[f]]
+- ``p_x[f]`` (if used): [B, n_g_subsampled[f]] → mapped to ``mu_g_mem[f]``
+- Returns ``g_inf[f]``: [B, n_g[f]]
+
+This implementation follows the style/patterns of other TEM modules and
+is designed to be testable with simple parameter stubs.
+"""
 
 from typing import List, Optional, Tuple
 
@@ -146,3 +178,56 @@ class AbstractLocationInference(nn.Module):
             Scaled sigma
         """
         return [s + offset for s in sigma]
+
+
+if __name__ == "__main__":
+    """Minimal usage example (smoke test).
+
+    Demonstrates precision-weighted fusion of transition and memory paths.
+
+    This example builds a lightweight parameter stub implementing the
+    fields accessed by ``AbstractLocationInference`` and runs a forward
+    pass with synthetic inputs.
+    """
+    import types
+
+    # Configuration stub with required fields
+    params = types.SimpleNamespace(
+        n_f_calculated=2,
+        n_g_calculated=[10, 8],  # abstract dims per frequency
+        n_g_subsampled_combined=[6, 5],  # downsampled dims per frequency
+        use_p_inf=True,  # enable memory path
+        g_mem_std=0.01,  # small init for memory MLP
+        g_init_std=0.1,  # init scale for learnable g_init
+    )
+
+    model = AbstractLocationInference(params)
+
+    # Synthetic inputs
+    B = 3
+    n_f = params.n_f_calculated
+    n_g = params.n_g_calculated
+    n_g_sub = params.n_g_subsampled_combined
+
+    # Transition prediction and its uncertainty
+    g_gen = [torch.randn(B, n_g[f]) for f in range(n_f)]
+    sigma_g_gen = [torch.exp(torch.randn(B, n_g[f])) for f in range(n_f)]
+
+    # Memory-based input (projected from p-space to reduced g-space)
+    p_x = [torch.randn(B, n_g_sub[f]) for f in range(n_f)]
+
+    # No shiny cues in this minimal example
+    shiny = None
+
+    # Schedule offset: larger values down-weight memory early in training
+    p2g_scale_offset = 0.1
+
+    with torch.no_grad():
+        g_inf = model(g_gen, sigma_g_gen, p_x, shiny, p2g_scale_offset)
+
+    print("AbstractLocationInference Example")
+    print("=" * 72)
+    print(f"Frequencies: {n_f}")
+    for f in range(n_f):
+        print(f"  f={f}: g_gen {tuple(g_gen[f].shape)} | " f"sigma {tuple(sigma_g_gen[f].shape)} | " f"p_x {tuple(p_x[f].shape)} -> g_inf {tuple(g_inf[f].shape)}")
+    print("✓ Forward pass completed.")

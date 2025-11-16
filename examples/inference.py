@@ -40,9 +40,6 @@ Usage Examples:
     # Longer walk with different architecture
     python examples/inference.py --walk_length 100 --n_frequencies 4
 
-    # Disable memory to see feed-forward inference only
-    python examples/inference.py --use_memory false
-
     # Different grid size and observation mode
     python examples/inference.py --grid_size 7 --observation_mode tiled
 
@@ -116,7 +113,6 @@ class ExampleConfig(BaseSettings):
     f_max: float = Field(default=0.9, ge=0.5, le=1.0, description="Maximum frequency (shortest memory)")
 
     # Memory configuration
-    use_memory: bool = Field(default=True, description="Enable memory storage and retrieval")
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
     lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
     kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
@@ -253,7 +249,7 @@ class ExampleConfig(BaseSettings):
     @computed_field(description="Use inference-based grounded locations")
     @property
     def use_p_inf(self) -> bool:
-        return self.use_memory
+        return True  # This example always uses memory
 
     @computed_field(description="Use common memory for inference and generation")
     @property
@@ -276,7 +272,6 @@ if __name__ == "__main__":
     print(f"  Walk length: {config.walk_length} timesteps")
     print(f"  Frequencies: {config.n_frequencies} ({config.f_min:.2f} to {config.f_max:.2f})")
     print(f"  Architecture: n_g={config.n_g_calculated}, n_p={config.n_p_calculated}, n_x_c={config.n_x_c}")
-    print(f"  Memory: {'enabled' if config.use_memory else 'disabled'}")
     print()
 
     # =========================================================================
@@ -315,12 +310,11 @@ if __name__ == "__main__":
     print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
     print(f"  ✓ GroundedLocationInference: g ⊗ x → p")
 
-    # Memory system (if enabled)
-    if config.use_memory:
-        storage = MemoryStorage(config)
-        attractor = AttractorDynamics(config)
-        print(f"  ✓ MemoryStorage: {sum(config.n_p_calculated)}×{sum(config.n_p_calculated)} Hebbian matrix")
-        print(f"  ✓ AttractorDynamics: {config.i_attractor_calculated} iterations with hierarchical masking")
+    # Memory system
+    storage = MemoryStorage(config)
+    attractor = AttractorDynamics(config)
+    print(f"  ✓ MemoryStorage: {sum(config.n_p_calculated)}×{sum(config.n_p_calculated)} Hebbian matrix")
+    print(f"  ✓ AttractorDynamics: {config.i_attractor_calculated} iterations with hierarchical masking")
 
     # Abstract location inference
     abstract = AbstractLocationInference(config)
@@ -367,8 +361,8 @@ if __name__ == "__main__":
         # Step 5: Compute grounded location via outer product
         p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
 
-        # Step 6: Memory retrieval (if enabled and after warmup)
-        if config.use_memory and t >= config.n_memory_warmup:
+        # Step 6: Memory retrieval (after warmup)
+        if t >= config.n_memory_warmup:
             # Concatenate p across frequencies for memory operations
             p_concat = torch.cat(p_t, dim=1)  # [1, sum(n_p)]
 
@@ -403,8 +397,7 @@ if __name__ == "__main__":
 
         # For memory path: use downsampled g as proxy for p→g projection
         # (In full TEM, this would be a learned MLP: p_x → g_mem)
-        p_for_abstract = g_downsampled if config.use_memory else None
-
+        p_for_abstract = g_downsampled
         g_inf = abstract(g_gen, sigma_gen, p_for_abstract, shiny_signals=None, p2g_scale_offset=config.p2g_scale_offset)
 
         # Store history
@@ -466,12 +459,11 @@ if __name__ == "__main__":
         print(f"  Saved: 06_abstract_location.png")
 
     # Plot 6: Memory matrices (if memory enabled)
-    if config.use_memory:
-        n_training_steps = config.walk_length - config.n_memory_warmup
-        fig6 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), config.n_p_calculated, n_training_steps)
-        if config.save_plots:
-            fig6.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
-            print(f"  Saved: 07_memory_matrices.png")
+    n_training_steps = config.walk_length - config.n_memory_warmup
+    fig6 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), config.n_p_calculated, n_training_steps)
+    if config.save_plots:
+        fig6.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 07_memory_matrices.png")
 
     print()
     print("=" * 80)
@@ -488,9 +480,8 @@ if __name__ == "__main__":
     print(f"Stage 4: Downsampled grid cells (g_sub) - {config.n_g_subsampled_combined}")
     print(f"  ↓ GroundedLocationInference (g ⊗ x)")
     print(f"Stage 5: Place cell activity (p) - {config.n_p_calculated}")
-    if config.use_memory:
-        print(f"  ↓ MemoryStorage + AttractorDynamics")
-        print(f"Stage 6: Memory-retrieved patterns (p_retrieved)")
+    print(f"  ↓ MemoryStorage + AttractorDynamics")
+    print(f"Stage 6: Memory-retrieved patterns (p_retrieved)")
     print(f"  ↓ AbstractLocationInference (precision fusion)")
     print(f"Output: Abstract location (g_inf) - {config.n_g_calculated}")
     print("=" * 80)

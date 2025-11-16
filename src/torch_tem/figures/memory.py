@@ -85,7 +85,7 @@ def plot_memory_matrices(
         axes = [axes]
 
     # Plot generative memory
-    im1 = axes[0].imshow(M_gen.cpu().numpy(), cmap=cmap, aspect="auto")
+    im1 = axes[0].imshow(M_gen.detach().cpu().numpy(), cmap=cmap, aspect="auto")
     axes[0].set_title("Generative Memory (M_gen)")
     axes[0].set_xlabel("To (Place Cell Index)")
     axes[0].set_ylabel("From (Place Cell Index)")
@@ -100,7 +100,7 @@ def plot_memory_matrices(
 
     # Plot inference memory if provided
     if M_inf is not None:
-        im2 = axes[1].imshow(M_inf.cpu().numpy(), cmap=cmap, aspect="auto")
+        im2 = axes[1].imshow(M_inf.detach().cpu().numpy(), cmap=cmap, aspect="auto")
         axes[1].set_title("Inference Memory (M_inf)")
         axes[1].set_xlabel("To (Place Cell Index)")
         axes[1].set_ylabel("From (Place Cell Index)")

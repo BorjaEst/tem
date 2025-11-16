@@ -11,7 +11,7 @@ All functions use Protocol-based typing for flexibility and testability.
 Each function returns a matplotlib Figure object for flexible display/saving.
 """
 
-from typing import List, Protocol, Tuple
+from typing import List, Optional, Protocol, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -362,5 +362,104 @@ def plot_multi_frequency_representation(
         axes[-1, f_idx].set_xlabel("Batch", fontsize=9)
 
     fig.suptitle(title, fontsize=14, fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
+# ==============================================================================
+# Sensory Projection to Hippocampal p-space
+# ==============================================================================
+def plot_sensory_projection(
+    x_p_history: Union[List[List[Tensor]], List[Tensor], Tensor],
+    n_p_per_freq: Optional[List[int]] = None,
+    title: str = "Sensory Projection to Hippocampal p-space (x → p)",
+    figsize: Tuple[float, float] = (12, 4),
+    cmap: str = "magma",
+) -> plt.Figure:
+    """Visualize sensory projection outputs in p-space over time.
+
+    Renders a heatmap with time on the x-axis and place cell indices on the y-axis.
+    If ``n_p_per_freq`` is provided, frequency boundaries are overlaid to highlight
+    the hierarchical structure of p-space.
+
+    Accepted input formats for ``x_p_history``:
+    - List[List[Tensor]]: length T, each entry is a list of n_f tensors shaped
+      [n_p[f]] or [B, n_p[f]] (first batch element is used).
+    - List[Tensor]: length T, each entry is a flattened p-vector [sum(n_p)].
+    - Tensor: [T, sum(n_p)] flattened over frequencies.
+
+    Args:
+        x_p_history: Projection outputs over time in one of the accepted formats.
+        n_p_per_freq: Place cell counts per frequency (for boundary overlays).
+        title: Plot title.
+        figsize: Figure size (width, height).
+        cmap: Matplotlib colormap name.
+
+    Returns:
+        matplotlib Figure with a heatmap of p-space activations over time.
+
+    Example:
+        >>> # x_f_t: [n_f, n_x_f] per timestep; apply projection per timestep
+        >>> x_p_hist = []
+        >>> for t in range(T):
+        ...     # SensoryProjection expects a list of tensors per frequency with batch dim
+        ...     x_list = [x_f_t[f].unsqueeze(0) for f in range(n_f)]  # [1, n_x_f[f]]
+        ...     x_p_f = projection(x_list)  # List of [1, n_p[f]]
+        ...     x_p_hist.append([x_p_f[f].squeeze(0) for f in range(n_f)])
+        >>> fig = plot_sensory_projection(x_p_hist, n_p_per_freq=params.n_p_calculated)
+    """
+
+    # Helper to convert various inputs to a [T, sum(n_p)] numpy array
+    def _to_time_by_p_numpy(inp: Union[List[List[Tensor]], List[Tensor], Tensor]) -> np.ndarray:
+        if isinstance(inp, list):
+            # Case A: List of lists (T x n_f)
+            if len(inp) == 0:
+                return np.zeros((0, 0), dtype=np.float32)
+            if isinstance(inp[0], list):
+                # Concatenate per-frequency tensors at each timestep
+                flat_ts: List[Tensor] = []
+                for t_list in inp:  # type: ignore[assignment]
+                    parts: List[Tensor] = []
+                    for part in t_list:
+                        # Accept [n_p] or [B, n_p] → take first batch if present
+                        if part.dim() == 2:
+                            parts.append(part[0])
+                        else:
+                            parts.append(part)
+                    flat_ts.append(torch.cat(parts, dim=-1))
+                mat = torch.stack(flat_ts, dim=0)  # [T, sum(n_p)]
+                return mat.detach().cpu().numpy()
+            # Case B: List of flattened tensors (T x [sum(n_p)])
+            elif isinstance(inp[0], Tensor):
+                mat = torch.stack([t if t.dim() == 1 else t.view(-1) for t in inp], dim=0)
+                return mat.detach().cpu().numpy()
+        elif isinstance(inp, torch.Tensor):
+            # Case C: Tensor [T, sum(n_p)] (already flattened)
+            if inp.dim() == 2:
+                return inp.detach().cpu().numpy()
+        raise ValueError("Unsupported x_p_history format. Provide List[List[Tensor]], List[Tensor], or Tensor [T, sum(n_p)].")
+
+    x_time_p = _to_time_by_p_numpy(x_p_history)  # [T, sum(n_p)]
+    if x_time_p.size == 0:
+        # Create empty figure gracefully
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        ax.set_axis_off()
+        ax.set_title("No projection data to display")
+        return fig
+
+    # Plot heatmap (transpose so y-axis indexes place cells)
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    im = ax.imshow(x_time_p.T, aspect="auto", cmap=cmap, interpolation="nearest")
+    ax.set_xlabel("Time Step", fontsize=11)
+    ax.set_ylabel("Place Cell Index", fontsize=11)
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Activation")
+
+    # Overlay frequency boundaries if provided
+    if n_p_per_freq is not None and len(n_p_per_freq) > 1:
+        boundaries = [0] + [sum(n_p_per_freq[: i + 1]) for i in range(len(n_p_per_freq))]
+        for b in boundaries:
+            ax.axhline(b - 0.5, color="white", linestyle="--", alpha=0.6, linewidth=1)
+
     fig.tight_layout()
     return fig

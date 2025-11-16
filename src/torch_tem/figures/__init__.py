@@ -38,6 +38,7 @@ from torch_tem.figures.sensory import (
     plot_frequency_comparison,
     plot_multi_frequency_representation,
     plot_normalization_effects,
+    plot_sensory_projection,
     plot_temporal_filtering,
 )
 
@@ -65,4 +66,5 @@ __all__ = [
     "plot_frequency_comparison",
     "plot_normalization_effects",
     "plot_multi_frequency_representation",
+    "plot_sensory_projection",
 ]

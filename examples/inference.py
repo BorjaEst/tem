@@ -51,14 +51,14 @@ Usage Examples:
 
 Outputs:
 --------
-When save_plots=true, generates 6-7 visualizations in outputs/inference/:
+When save_plots=true, generates 7 visualizations in outputs/inference/:
     1. 01_environment.png - Grid layout
     2. 02_walk_trajectory.png - Agent trajectory
     3. 03_sensory_processing.png - Temporal filtering heatmaps
     4. 04_place_cell_activity.png - Place field evolution
     5. 05_outer_product_structure.png - Decomposition at mid-point
     6. 06_abstract_location.png - Abstract location over time
-    7. 07_memory_matrices.png - Hebbian associations (if memory enabled)
+    7. 07_memory_matrices.png - Hebbian associations
 """
 
 from pathlib import Path
@@ -406,48 +406,48 @@ if __name__ == "__main__":
     # Stack histories for plotting
     x_c_stacked = torch.stack(x_c_history)  # [T, n_x_c]
 
-    # Plot 1: Environment and walk trajectory
+    # Plot 1 & 2: Environment and walk trajectory
     fig1 = figures.plot_environment_layout(env, title=f"Environment: {config.grid_size}×{config.grid_size} Grid")
-    fig1_walks = figures.plot_walks(env, [walk], title=f"Walk Trajectory ({config.walk_length} steps)")
+    fig2 = figures.plot_walks(env, [walk], title=f"Walk Trajectory ({config.walk_length} steps)")
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
-        fig1_walks.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
+        fig2.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 01_environment.png, 02_walk_trajectory.png")
 
-    # Plot 2: Sensory processing (temporal filtering)
-    fig2 = figures.plot_temporal_filtering(x_c_stacked, x_f_history, config.f_initial_extended)
+    # Plot 3: Sensory processing (temporal filtering)
+    fig3 = figures.plot_temporal_filtering(x_c_stacked, x_f_history, config.f_initial_extended)
     if config.save_plots:
-        fig2.savefig(config.output_dir / "03_sensory_processing.png", dpi=150, bbox_inches="tight")
+        fig3.savefig(config.output_dir / "03_sensory_processing.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 03_sensory_processing.png")
 
-    # Plot 3: Grounded location activity (place cells)
-    fig3 = figures.plot_grounded_location_activity(p_history, observations, locations, config.f_initial_extended, config.n_p_calculated)
+    # Plot 4: Grounded location activity (place cells)
+    fig4 = figures.plot_grounded_location_activity(p_history, observations, locations, config.f_initial_extended, config.n_p_calculated)
     if config.save_plots:
-        fig3.savefig(config.output_dir / "04_place_cell_activity.png", dpi=150, bbox_inches="tight")
+        fig4.savefig(config.output_dir / "04_place_cell_activity.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 04_place_cell_activity.png")
 
-    # Plot 4: Outer product structure (mid-point)
+    # Plot 5: Outer product structure (mid-point)
     mid_point = config.walk_length // 2
     g_mid = [g_history[f][mid_point : mid_point + 1, 0, :] for f in range(config.n_frequencies)]
     g_mid_transformed = projection.transform(g_mid)
     g_mid_downsampled = projection.downsample(g_mid_transformed)
     # Reconstruct x_f with batch dimension for plotting
     x_f_mid = [x.unsqueeze(0) for x in x_f_history[mid_point]]
-    fig4 = figures.plot_outer_product_structure(g_mid_downsampled, x_f_mid, p_history[mid_point], config.f_initial_extended)
+    fig5 = figures.plot_outer_product_structure(g_mid_downsampled, x_f_mid, p_history[mid_point], config.f_initial_extended)
     if config.save_plots:
-        fig4.savefig(config.output_dir / "05_outer_product_structure.png", dpi=150, bbox_inches="tight")
+        fig5.savefig(config.output_dir / "05_outer_product_structure.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 05_outer_product_structure.png")
 
-    # Plot 5: Abstract location evolution
-    fig5 = figures.plot_g_inf_evolution(g_inf_history, config.n_frequencies, config.walk_length)
+    # Plot 6: Abstract location evolution
+    fig6 = figures.plot_g_inf_evolution(g_inf_history, config.n_frequencies, config.walk_length)
     if config.save_plots:
-        fig5.savefig(config.output_dir / "06_abstract_location.png", dpi=150, bbox_inches="tight")
+        fig6.savefig(config.output_dir / "06_abstract_location.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 06_abstract_location.png")
 
-    # Plot 6: Memory matrices (if memory enabled)
-    fig6 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), config.n_p_calculated, config.walk_length)
+    # Plot 7: Memory matrices
+    fig7 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), config.n_p_calculated, config.walk_length)
     if config.save_plots:
-        fig6.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
+        fig7.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 07_memory_matrices.png")
 
     print()

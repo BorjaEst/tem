@@ -317,7 +317,7 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 3: Generating synthetic grid cell patterns...")
     grid_generator = data.SyntheticGridGenerator(config, config.walk_length, batch_size=1)
-    g_history = grid_generator.generate()
+    g_history = grid_generator.generate()  # List[T] of List[n_f] of [1, n_g[f]]
     print(f"  ✓ Generated {config.walk_length} timesteps of grid cell activity")
     print()
 
@@ -343,7 +343,7 @@ if __name__ == "__main__":
         x_f = processor(x_c, x_prev)  # List[n_f] of [1, n_x_c]
 
         # Step 3: Get synthetic grid cells at time t
-        g_t = [g_history[f][t : t + 1, 0, :] for f in range(config.n_frequencies)]  # List[n_f] of [1, n_g[f]]
+        g_t = g_history[t]  # List[n_f] of [1, n_g[f]]
 
         # Step 4: Transform and downsample grid cells
         g_transformed = projection.transform(g_t)
@@ -428,7 +428,7 @@ if __name__ == "__main__":
 
     # Plot 5: Outer product structure (mid-point)
     mid_point = config.walk_length // 2
-    g_mid = [g_history[f][mid_point : mid_point + 1, 0, :] for f in range(config.n_frequencies)]
+    g_mid = g_history[mid_point]  # List[n_f] of [1, n_g[f]]
     g_mid_transformed = projection.transform(g_mid)
     g_mid_downsampled = projection.downsample(g_mid_transformed)
     # Reconstruct x_f with batch dimension for plotting

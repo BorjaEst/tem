@@ -56,18 +56,20 @@ class SyntheticGridGenerator:
         if len(self.params.n_g_calculated) != len(self.params.f_initial_extended):
             raise ValueError(f"n_g_calculated length ({len(self.params.n_g_calculated)}) must match " f"f_initial_extended length ({len(self.params.f_initial_extended)})")
 
-    def generate(self) -> List[Tensor]:
+    def generate(self) -> List[List[Tensor]]:
         """Generate synthetic grid cell activity patterns.
 
         Creates oscillating patterns with frequency-dependent dynamics to simulate
         grid cell responses during spatial navigation.
 
         Returns:
-            List of [T, B, n_g[f]] tensors with synthetic grid patterns
+            List of T timesteps, each containing a list of n_f tensors [B, n_g[f]]
+            This matches the standard convention: List[T] of List[n_f] of [B, n_g[f]]
         """
         n_f = len(self.params.n_g_calculated)
-        g_history = []
 
+        # Generate patterns per frequency: [T, B, n_g[f]]
+        g_per_freq = []
         for f in range(n_f):
             # Create time axis scaled by frequency
             t = torch.linspace(0, self.time_scale * self.params.f_initial_extended[f], self.walk_length)
@@ -83,17 +85,23 @@ class SyntheticGridGenerator:
             # Add Gaussian noise for biological realism
             pattern = pattern + self.noise_scale * torch.randn_like(pattern)
 
-            g_history.append(pattern)
+            g_per_freq.append(pattern)  # [T, B, n_g[f]]
+
+        # Reorganize to List[T] of List[n_f] of [B, n_g[f]]
+        g_history = []
+        for t in range(self.walk_length):
+            g_t = [g_per_freq[f][t] for f in range(n_f)]  # List[n_f] of [B, n_g[f]]
+            g_history.append(g_t)
 
         return g_history
 
-    def generate_batch(self) -> List[Tensor]:
+    def generate_batch(self) -> List[List[Tensor]]:
         """Generate single batch of synthetic grid patterns.
 
         Convenience method for generating one batch.
 
         Returns:
-            List of [T, B, n_g[f]] tensors
+            List of T timesteps, each with n_f tensors [B, n_g[f]]
         """
         return self.generate()
 
@@ -127,5 +135,10 @@ if __name__ == "__main__":
     g_history = generator.generate()
 
     print(f"\nGenerated patterns:")
-    for f, g_f in enumerate(g_history):
-        print(f"  Frequency {f} (f={config.f_initial_extended[f]:.2f}): shape={g_f.shape}, " f"mean={g_f.mean():.4f}, std={g_f.std():.4f}")
+    print(f"  Total timesteps: {len(g_history)}")
+    print(f"  Frequencies per timestep: {len(g_history[0])}")
+    for f in range(len(g_history[0])):
+        g_f_shape = g_history[0][f].shape
+        # Collect stats across all timesteps for this frequency
+        g_f_values = torch.stack([g_history[t][f] for t in range(len(g_history))])
+        print(f"  Frequency {f} (f={config.f_initial_extended[f]:.2f}): shape=[B, n_g]={g_f_shape}, " f"mean={g_f_values.mean():.4f}, std={g_f_values.std():.4f}")

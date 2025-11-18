@@ -178,7 +178,7 @@ if __name__ == "__main__":
 
     # Generate synthetic grid cell patterns (simulating abstract location)
     grid_generator = data.SyntheticGridGenerator(config, walk_length=config.walk_length, batch_size=1)
-    g_history = grid_generator.generate()
+    g_history = grid_generator.generate()  # List[T] of List[n_f] of [1, n_g[f]]
 
     # Process observations through full inference pipeline
     x_c_history = []
@@ -195,7 +195,7 @@ if __name__ == "__main__":
         x_f = processor(x_c, x_prev)  # [n_f] of [1, n_x_c]
 
         # 3. Get grid cells at time t
-        g_t = [g_history[f][t : t + 1, 0, :] for f in range(config.n_frequencies)]  # [n_f] of [1, n_g[f]]
+        g_t = g_history[t]  # List[n_f] of [1, n_g[f]]
 
         # 4. Transform and downsample grid cells
         g_transformed = projection.transform(g_t)
@@ -211,7 +211,7 @@ if __name__ == "__main__":
         x_prev = x_f
 
     mid_point = config.walk_length // 2
-    g_mid = [g_history[f][mid_point : mid_point + 1, 0, :] for f in range(config.n_frequencies)]
+    g_mid = g_history[mid_point]  # List[n_f] of [1, n_g[f]]
     g_mid_transformed = projection.transform(g_mid)
     g_mid_downsampled = projection.downsample(g_mid_transformed)
 

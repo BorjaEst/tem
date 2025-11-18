@@ -41,7 +41,7 @@ class PlaceCellHistoryProtocol(Protocol):
 # ==============================================================================
 def plot_grounded_location_activity(
     p_history: List[List[Tensor]],
-    observations: Tensor,
+    observations: List[Tensor],
     locations: Tensor,
     frequencies: List[float],
     n_cells_per_freq: List[int],
@@ -57,7 +57,7 @@ def plot_grounded_location_activity(
 
     Args:
         p_history: List[T] of [List[n_f] of [B, n_p[f]]] - place cell activity over time
-        observations: [T, n_x] - one-hot observation vectors
+        observations: List of T timesteps, each a tensor [n_x] or [B, n_x] - one-hot observation vectors
         locations: [T] - location indices
         frequencies: Frequency values per module
         n_cells_per_freq: Number of place cells per frequency module
@@ -93,8 +93,9 @@ def plot_grounded_location_activity(
     if title:
         fig.suptitle(title, fontsize=13, fontweight="bold", y=0.995)
 
-    # Plot observations
-    obs_indices = torch.argmax(observations, dim=1).numpy()
+    # Plot observations - stack list and extract indices
+    obs_stacked = torch.stack([observations[t].squeeze() if observations[t].dim() > 1 else observations[t] for t in range(T)])
+    obs_indices = torch.argmax(obs_stacked, dim=1).numpy()
     axes[0].plot(obs_indices, "o-", linewidth=1, markersize=3, color="black")
     axes[0].set_ylabel("Observation\nIndex", fontsize=10)
     axes[0].set_title("Sensory Input (Observations)", fontsize=11, fontweight="bold")
@@ -220,7 +221,7 @@ def plot_outer_product_structure(
 
 def plot_place_cell_dynamics(
     p_history: List[List[Tensor]],
-    observations: Tensor,
+    observations: List[Tensor],
     frequencies: List[float],
     n_cells_per_freq: List[int],
     cell_indices: List[int] = None,
@@ -235,7 +236,7 @@ def plot_place_cell_dynamics(
 
     Args:
         p_history: List[T] of [List[n_f] of [B, n_p[f]]] - place cell activity
-        observations: [T, n_x] - one-hot observation vectors
+        observations: List of T timesteps, each a tensor [n_x] or [B, n_x] - one-hot observation vectors
         frequencies: Frequency values per module
         n_cells_per_freq: Number of place cells per frequency module
         cell_indices: Specific cell indices to plot (defaults to middle cell per freq)
@@ -287,8 +288,9 @@ def plot_place_cell_dynamics(
         axes[f].set_title(f"Place Cell {cell_idx} (Freq {f}, f={frequencies[f]:.2f})", fontsize=11, fontweight="bold")
         axes[f].grid(True, alpha=0.3)
 
-        # Mark observation changes
-        obs_changes = torch.where(torch.diff(torch.argmax(observations, dim=1)) != 0)[0] + 1
+        # Mark observation changes - stack list and compute changes
+        obs_stacked = torch.stack([observations[t].squeeze() if observations[t].dim() > 1 else observations[t] for t in range(T)])
+        obs_changes = torch.where(torch.diff(torch.argmax(obs_stacked, dim=1)) != 0)[0] + 1
         for change in obs_changes:
             axes[f].axvline(change, color="red", alpha=0.2, linestyle="--", linewidth=0.5)
 

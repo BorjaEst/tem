@@ -167,7 +167,7 @@ if __name__ == "__main__":
     walk = walks[0]
 
     # Extract observations and locations
-    observations = torch.stack([obs.clone().detach() for obs in walk.observations])  # [T, n_x]
+    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_x]
     locations = torch.as_tensor(walk.locations, dtype=torch.long)  # [T]
 
     # Initialize components using config (implements all required protocols)
@@ -188,7 +188,7 @@ if __name__ == "__main__":
 
     for t in range(config.walk_length):
         # 1. Encode observation
-        x_t = observations[t : t + 1]  # [1, n_x]
+        x_t = observations[t].unsqueeze(0)  # [n_x] → [1, n_x]
         x_c = encoder(x_t)  # [1, n_x_c]
 
         # 2. Temporal filtering and normalization

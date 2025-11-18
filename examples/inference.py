@@ -279,7 +279,7 @@ if __name__ == "__main__":
     walks = walk_gen.generate_walks(n_walks=1, walk_length=config.walk_length, policy=policy)
     walk = walks[0]
 
-    observations = torch.stack([obs.clone().detach() for obs in walk.observations])  # [T, n_x]
+    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_x]
     locations = torch.as_tensor(walk.locations, dtype=torch.long)  # [T]
     print(f"  ✓ Generated walk: {len(walk)} timesteps")
     print()
@@ -336,7 +336,7 @@ if __name__ == "__main__":
 
     for t in range(config.walk_length):
         # Step 1: Encode observation → compressed sensory
-        x_t = observations[t : t + 1]  # [1, n_x]
+        x_t = observations[t].unsqueeze(0)  # [n_x] → [1, n_x]
         x_c = encoder(x_t)  # [1, n_x_c]
 
         # Step 2: Temporal filtering → multi-frequency representation

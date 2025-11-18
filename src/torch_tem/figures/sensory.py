@@ -113,8 +113,8 @@ def plot_temporal_filtering(
     - Subsequent panels: Filtered output for each frequency channel
 
     Args:
-        x_c_history: List of T timesteps, each a tensor [n_x_c] or [B, n_x_c]
-        x_f_history: List of T timesteps, each with n_f filtered tensors [n_x_c]
+        x_c_history: List of T timesteps, each a tensor [n_x_c] (single trajectory)
+        x_f_history: List of T timesteps, each with n_f filtered tensors [n_x_c] (single trajectory)
         frequencies: List of frequency values
         title: Plot title
         figsize: Figure size per panel (width, height)
@@ -136,7 +136,7 @@ def plot_temporal_filtering(
     fig, axes = plt.subplots(n_f + 1, 1, figsize=(figsize[0], figsize[1] * (n_f + 1)), sharex=True)
 
     # Plot original compressed sensory - stack list into [T, n_x_c]
-    x_c_stacked = torch.stack([x_c_history[t].squeeze() if x_c_history[t].dim() > 1 else x_c_history[t] for t in range(T)])
+    x_c_stacked = torch.stack(x_c_history)
     x_c_np = x_c_stacked.detach().cpu().numpy()
     im0 = axes[0].imshow(x_c_np.T, aspect="auto", cmap=cmap, interpolation="nearest")
     axes[0].set_ylabel("Feature Dim", fontsize=10)
@@ -180,8 +180,8 @@ def plot_frequency_comparison(
     demonstrating the temporal smoothing effect.
 
     Args:
-        x_c_history: List of T timesteps, each a tensor [n_x_c] or [B, n_x_c]
-        x_f_history: List of T timesteps with n_f filtered tensors
+        x_c_history: List of T timesteps, each a tensor [n_x_c] (single trajectory)
+        x_f_history: List of T timesteps with n_f filtered tensors [n_x_c] (single trajectory)
         frequencies: List of frequency values
         feature_idx: Which feature dimension to plot
         title: Plot title
@@ -201,7 +201,7 @@ def plot_frequency_comparison(
     fig, ax = plt.subplots(1, 1, figsize=figsize)
 
     # Plot original - extract feature from list of timesteps
-    x_c_feature = torch.stack([x_c_history[t].squeeze()[feature_idx] if x_c_history[t].dim() > 1 else x_c_history[t][feature_idx] for t in range(T)])
+    x_c_feature = torch.stack([x_c_history[t][feature_idx] for t in range(T)])
     x_c_feature_np = x_c_feature.detach().cpu().numpy()
     ax.plot(range(T), x_c_feature_np, label="Original (x_c)", linewidth=2, color="black", linestyle="--", alpha=0.7, zorder=n_f + 1)
 

@@ -225,17 +225,21 @@ class ExampleConfig(BaseSettings):
     def i_attractor_max_freq_gen(self) -> List[int]:
         return self.i_attractor_max_freq_inf  # Use same schedule
 
-    @computed_field(description="Hierarchical masks for inference retrieval")
+    @computed_field(description="Hierarchical masks for inference and generative retrieval")
+    @property
+    def p_retrieve_masks_calculated(self) -> tuple[List[Tensor], List[Tensor]]:
+        """Returns (masks_inf, masks_gen) from single function call."""
+        return utils.create_p_retrieve_masks(self.n_p_calculated, self.i_attractor_calculated, self.i_attractor_max_freq_inf, self.i_attractor_max_freq_gen)
+
+    @computed_field(description="Inference retrieval masks")
     @property
     def p_retrieve_mask_inf_calculated(self) -> List[Tensor]:
-        masks_inf, _ = utils.create_p_retrieve_masks(self.n_p_calculated, self.i_attractor_calculated, self.i_attractor_max_freq_inf, self.i_attractor_max_freq_gen)
-        return masks_inf
+        return self.p_retrieve_masks_calculated[0]
 
-    @computed_field(description="Hierarchical masks for generative retrieval")
+    @computed_field(description="Generative retrieval masks")
     @property
     def p_retrieve_mask_gen_calculated(self) -> List[Tensor]:
-        _, masks_gen = utils.create_p_retrieve_masks(self.n_p_calculated, self.i_attractor_calculated, self.i_attractor_max_freq_inf, self.i_attractor_max_freq_gen)
-        return masks_gen
+        return self.p_retrieve_masks_calculated[1]
 
     @computed_field(description="Use inference-based grounded locations")
     @property
@@ -329,7 +333,6 @@ if __name__ == "__main__":
     x_c_history = []
     x_f_history = []
     p_history = []
-    p_retrieved_history = []
     g_inf_history = []
 
     x_prev = [torch.zeros(1, config.n_x_c) for _ in range(config.n_frequencies)]
@@ -354,7 +357,6 @@ if __name__ == "__main__":
         p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
 
         # Step 6: Memory retrieval
-        # Concatenate p across frequencies for memory operations
         p_concat = torch.cat(p_t, dim=1)  # [1, sum(n_p)]
 
         # Update memory with Hebbian learning
@@ -364,34 +366,19 @@ if __name__ == "__main__":
         M_inf = storage.get_memory(for_inference=True)
         p_retrieved_concat = attractor.retrieve(p_concat, M_inf, for_inference=True)
 
-        # Split back into per-frequency format for abstract inference
-        p_retrieved_list = []
-        start_idx = 0
-        for n_p in config.n_p_calculated:
-            p_retrieved_list.append(p_retrieved_concat[:, start_idx : start_idx + n_p])
-            start_idx += n_p
-
-        # Use memory-retrieved p for abstract inference
-        p_for_abstract = p_retrieved_list
-
         # Step 7: Abstract location inference via precision-weighted fusion
-        # Note: AbstractLocationInference expects full n_g dimensions for g_gen
-        # and n_g_subsampled dimensions for the memory path (p_x)
-
-        # Use synthetic g (full dimensions) as transition prediction
+        # Use synthetic g (full dimensions) as generative prediction
         g_gen = g_t  # Full grid cell dimensions [n_g[f]]
-        sigma_gen = [torch.ones(1, n_g) * 0.5 for n_g in config.n_g_calculated]  # Moderate uncertainty
+        sigma_gen = [torch.ones(1, n_g) * 0.5 for n_g in config.n_g_calculated]
 
-        # For memory path: use downsampled g as proxy for p→g projection
-        # (In full TEM, this would be a learned MLP: p_x → g_mem)
-        p_for_abstract = g_downsampled
-        g_inf = abstract(g_gen, sigma_gen, p_for_abstract, shiny_signals=None, p2g_scale_offset=config.p2g_scale_offset)
+        # Use downsampled g as proxy for p→g projection (memory path)
+        # (In full TEM, this would be a learned MLP: p_retrieved → g_mem)
+        g_inf = abstract(g_gen, sigma_gen, g_downsampled, shiny_signals=None, p2g_scale_offset=config.p2g_scale_offset)
 
-        # Store history
-        x_c_history.append(x_c.squeeze(0))
-        x_f_history.append([x.squeeze(0) for x in x_f])  # [n_x_c] for temporal filtering plot
-        p_history.append(p_t)  # Keep as List[n_f] of [1, n_p[f]] for outer product plot
-        p_retrieved_history.append(p_retrieved_list)
+        # Store history (extract batch dimension for single-trajectory storage)
+        x_c_history.append(x_c[0])
+        x_f_history.append([x[0] for x in x_f])
+        p_history.append([p[0] for p in p_t])
         g_inf_history.append(g_inf)
 
         x_prev = x_f
@@ -403,8 +390,6 @@ if __name__ == "__main__":
     # PHASE 5: Generate Visualizations
     # =========================================================================
     print("Phase 5: Generating visualizations...")
-
-    # Note: x_c_history and x_f_history remain as lists for plotting
 
     # Plot 1 & 2: Environment and walk trajectory
     fig1 = figures.plot_environment_layout(env, title=f"Environment: {config.grid_size}×{config.grid_size} Grid")
@@ -429,11 +414,9 @@ if __name__ == "__main__":
     # Plot 5: Outer product structure (mid-point)
     mid_point = config.walk_length // 2
     g_mid = g_history[mid_point]  # List[n_f] of [1, n_g[f]]
-    g_mid_transformed = projection.transform(g_mid)
-    g_mid_downsampled = projection.downsample(g_mid_transformed)
-    # Reconstruct x_f with batch dimension for plotting
-    x_f_mid = [x.unsqueeze(0) for x in x_f_history[mid_point]]
-    fig5 = figures.plot_outer_product_structure(g_mid_downsampled, x_f_mid, p_history[mid_point], config.f_initial_extended)
+    g_mid_downsampled = projection.downsample(projection.transform(g_mid))
+    g_sample = [g_mid_downsampled[f][0] for f in range(config.n_frequencies)]
+    fig5 = figures.plot_outer_product_structure(g_sample, x_f_history[mid_point], p_history[mid_point], config.f_initial_extended)
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_outer_product_structure.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 05_outer_product_structure.png")

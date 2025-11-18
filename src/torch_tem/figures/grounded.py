@@ -45,7 +45,7 @@ def plot_grounded_location_activity(
     locations: Tensor,
     frequencies: List[float],
     n_cells_per_freq: List[int],
-    max_cells: int = 30,
+    max_cells: int = 100,
     figsize: tuple = None,
     title: str = None,
 ) -> plt.Figure:
@@ -56,8 +56,8 @@ def plot_grounded_location_activity(
     spatial locations.
 
     Args:
-        p_history: List[T] of [List[n_f] of [B, n_p[f]]] - place cell activity over time
-        observations: List of T timesteps, each a tensor [n_x] or [B, n_x] - one-hot observation vectors
+        p_history: List[T] of [List[n_f] of [n_p[f]]] - place cell activity over time (single trajectory)
+        observations: List of T timesteps, each a tensor [n_x] - one-hot observation vectors (single trajectory)
         locations: [T] - location indices
         frequencies: Frequency values per module
         n_cells_per_freq: Number of place cells per frequency module
@@ -71,9 +71,12 @@ def plot_grounded_location_activity(
 
     Example:
         >>> # After running grounded inference pipeline
+        >>> # Extract single trajectory (batch index 0) from history
+        >>> p_single = [[p_history[t][f][0] for f in range(n_f)] for t in range(T)]
+        >>> obs_single = [observations[t][0] for t in range(T)]
         >>> fig = plot_grounded_location_activity(
-        ...     p_history=p_history,
-        ...     observations=observations,
+        ...     p_history=p_single,
+        ...     observations=obs_single,
         ...     locations=locations,
         ...     frequencies=[0.1, 0.3, 0.9],
         ...     n_cells_per_freq=[96, 80, 64]
@@ -94,7 +97,7 @@ def plot_grounded_location_activity(
         fig.suptitle(title, fontsize=13, fontweight="bold", y=0.995)
 
     # Plot observations - stack list and extract indices
-    obs_stacked = torch.stack([observations[t].squeeze() if observations[t].dim() > 1 else observations[t] for t in range(T)])
+    obs_stacked = torch.stack(observations)
     obs_indices = torch.argmax(obs_stacked, dim=1).numpy()
     axes[0].plot(obs_indices, "o-", linewidth=1, markersize=3, color="black")
     axes[0].set_ylabel("Observation\nIndex", fontsize=10)
@@ -108,26 +111,44 @@ def plot_grounded_location_activity(
     axes[1].grid(True, alpha=0.3)
 
     # Plot place cell activity per frequency
+    # Collect all activities to determine common color scale
+    all_activities = []
     for f in range(n_f):
         # Extract activity over time [T, n_p[f]]
-        activity = torch.stack([p_history[t][f][0] for t in range(T)])  # [T, n_p[f]]
+        activity = torch.stack([p_history[t][f] for t in range(T)])  # [T, n_p[f]]
 
         # Subsample cells for visualization if too many
         if n_cells_per_freq[f] > max_cells:
             indices = torch.linspace(0, n_cells_per_freq[f] - 1, max_cells).long()
             activity = activity[:, indices]
-            n_vis = max_cells
-        else:
-            n_vis = n_cells_per_freq[f]
 
-        # Plot as heatmap
-        im = axes[f + 2].imshow(activity.T.detach().numpy(), aspect="auto", cmap="viridis", interpolation="nearest")
+        all_activities.append(activity)
+
+    # Determine common color scale
+    vmin = min(act.min().item() for act in all_activities)
+    vmax = max(act.max().item() for act in all_activities)
+
+    # Plot heatmaps with common scale
+    for f in range(n_f):
+        activity = all_activities[f]
+        n_vis = activity.shape[1]
+
+        im = axes[f + 2].imshow(activity.T.detach().numpy(), aspect="auto", cmap="viridis", interpolation="nearest", vmin=vmin, vmax=vmax)
         axes[f + 2].set_ylabel(f"Place Cells\nFreq {f}\n(n={n_vis})", fontsize=9)
         axes[f + 2].set_title(f"Frequency {f} (f={frequencies[f]:.2f}) - Place Cell Activity", fontsize=11, fontweight="bold")
-        plt.colorbar(im, ax=axes[f + 2], label="Activation")
 
     axes[-1].set_xlabel("Time Step", fontsize=10)
+
+    # Add single horizontal colorbar at the bottom
+    # First apply tight_layout to main axes
     plt.tight_layout()
+
+    # Then add colorbar in the space we'll create
+    fig.subplots_adjust(bottom=0.08)
+    cbar_ax = fig.add_axes([0.15, 0.02, 0.7, 0.015])  # [left, bottom, width, height]
+    cbar = fig.colorbar(im, cax=cbar_ax, orientation="horizontal")
+    cbar.set_label("Place Cell Activation", fontsize=10)
+
     return fig
 
 
@@ -146,9 +167,9 @@ def plot_outer_product_structure(
     each frequency module at a single timepoint.
 
     Args:
-        g_sample: Grid cell activity [n_f] of [1, n_g_sub[f]]
-        x_sample: Sensory activity [n_f] of [1, n_x_c]
-        p_sample: Place cell activity [n_f] of [1, n_p[f]]
+        g_sample: Grid cell activity [n_f] of [n_g_sub[f]] (single sample)
+        x_sample: Sensory activity [n_f] of [n_x_c] (single sample)
+        p_sample: Place cell activity [n_f] of [n_p[f]] (single sample)
         frequencies: Frequency values per module
         figsize: Figure size (width, height). Auto-computed if None
         title: Optional main title for the figure
@@ -160,7 +181,7 @@ def plot_outer_product_structure(
     Example:
         >>> # Visualize outer product at specific timepoint
         >>> mid_point = len(g_history) // 2
-        >>> g_mid = [g_history[f][mid_point:mid_point+1, 0, :] for f in range(n_f)]
+        >>> g_mid = [g_history[mid_point][f] for f in range(n_f)]
         >>> fig = plot_outer_product_structure(
         ...     g_sample=g_mid_downsampled,
         ...     x_sample=x_f_history[mid_point],
@@ -186,9 +207,9 @@ def plot_outer_product_structure(
         axes = axes.reshape(1, -1)
 
     for f in range(n_f):
-        g_vec = g_sample[f][0].detach().numpy()  # [n_g_sub[f]]
-        x_vec = x_sample[f][0].detach().numpy()  # [n_x_c]
-        p_vec = p_sample[f][0].detach().numpy()  # [n_p[f]]
+        g_vec = g_sample[f].detach().numpy()  # [n_g_sub[f]]
+        x_vec = x_sample[f].detach().numpy()  # [n_x_c]
+        p_vec = p_sample[f].detach().numpy()  # [n_p[f]]
 
         # Plot grid cells
         axes[f, 0].bar(range(len(g_vec)), g_vec, color="steelblue")
@@ -235,8 +256,8 @@ def plot_place_cell_dynamics(
     frequency-dependent temporal dynamics.
 
     Args:
-        p_history: List[T] of [List[n_f] of [B, n_p[f]]] - place cell activity
-        observations: List of T timesteps, each a tensor [n_x] or [B, n_x] - one-hot observation vectors
+        p_history: List[T] of [List[n_f] of [n_p[f]]] - place cell activity (single trajectory)
+        observations: List of T timesteps, each a tensor [n_x] - one-hot observation vectors (single trajectory)
         frequencies: Frequency values per module
         n_cells_per_freq: Number of place cells per frequency module
         cell_indices: Specific cell indices to plot (defaults to middle cell per freq)
@@ -249,9 +270,12 @@ def plot_place_cell_dynamics(
 
     Example:
         >>> # Plot middle cell from each frequency module
+        >>> # Extract single trajectory (batch index 0) from history
+        >>> p_single = [[p_history[t][f][0] for f in range(n_f)] for t in range(T)]
+        >>> obs_single = [observations[t][0] for t in range(T)]
         >>> fig = plot_place_cell_dynamics(
-        ...     p_history=p_history,
-        ...     observations=observations,
+        ...     p_history=p_single,
+        ...     observations=obs_single,
         ...     frequencies=[0.1, 0.3, 0.9],
         ...     n_cells_per_freq=[96, 80, 64]
         ... )
@@ -281,7 +305,7 @@ def plot_place_cell_dynamics(
     for f in range(n_f):
         # Extract single place cell over time
         cell_idx = cell_indices[f]
-        activity = torch.stack([p_history[t][f][0, cell_idx] for t in range(T)])
+        activity = torch.stack([p_history[t][f][cell_idx] for t in range(T)])
 
         axes[f].plot(activity.detach().numpy(), linewidth=1.5, color=f"C{f}")
         axes[f].set_ylabel(f"Activation\nFreq {f}", fontsize=10)
@@ -289,7 +313,7 @@ def plot_place_cell_dynamics(
         axes[f].grid(True, alpha=0.3)
 
         # Mark observation changes - stack list and compute changes
-        obs_stacked = torch.stack([observations[t].squeeze() if observations[t].dim() > 1 else observations[t] for t in range(T)])
+        obs_stacked = torch.stack(observations)
         obs_changes = torch.where(torch.diff(torch.argmax(obs_stacked, dim=1)) != 0)[0] + 1
         for change in obs_changes:
             axes[f].axvline(change, color="red", alpha=0.2, linestyle="--", linewidth=0.5)

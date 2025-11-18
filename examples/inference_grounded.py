@@ -215,18 +215,25 @@ if __name__ == "__main__":
     g_mid_transformed = projection.transform(g_mid)
     g_mid_downsampled = projection.downsample(g_mid_transformed)
 
+    # Extract single trajectory for plotting (batch index 0)
+    p_single = [[p_history[t][f][0] for f in range(config.n_frequencies)] for t in range(config.walk_length)]
+    obs_single = [observations[t] for t in range(config.walk_length)]  # Already [n_x]
+    x_f_single = [[x_f_history[t][f][0] for f in range(config.n_frequencies)] for t in range(config.walk_length)]
+    g_mid_single = [g_mid_downsampled[f][0] for f in range(config.n_frequencies)]
+    p_mid_single = [p_history[mid_point][f][0] for f in range(config.n_frequencies)]
+
     # Plot 1: Grounded location activity over time
-    fig1 = figures.plot_grounded_location_activity(p_history, observations, locations, config.f_initial_extended, config.n_p_calculated)
+    fig1 = figures.plot_grounded_location_activity(p_single, obs_single, locations, config.f_initial_extended, config.n_p_calculated)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_place_cell_activity.png", dpi=150, bbox_inches="tight")
 
     # Plot 2: Outer product structure at specific timepoint
-    fig2 = figures.plot_outer_product_structure(g_mid_downsampled, x_f_history[mid_point], p_history[mid_point], config.f_initial_extended)
+    fig2 = figures.plot_outer_product_structure(g_mid_single, x_f_single[mid_point], p_mid_single, config.f_initial_extended)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_outer_product_structure.png", dpi=150, bbox_inches="tight")
 
     # Plot 3: Place cell dynamics across frequencies
-    fig3 = figures.plot_place_cell_dynamics(p_history, observations, config.f_initial_extended, config.n_p_calculated)
+    fig3 = figures.plot_place_cell_dynamics(p_single, obs_single, config.f_initial_extended, config.n_p_calculated)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_place_cell_dynamics.png", dpi=150, bbox_inches="tight")
 

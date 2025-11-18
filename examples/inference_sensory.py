@@ -169,7 +169,7 @@ if __name__ == "__main__":
         # Update previous state
         x_prev = x_f
 
-    x_c_history = torch.stack(x_c_history)  # [T, n_x_c]
+    # Note: x_c_history and x_f_history remain as lists for plotting
     x_c_demo = encoder(observations[config.walk_length // 2 : config.walk_length // 2 + 5])  # [5, n_x_c]
     x_prev_demo = [torch.zeros(5, config.n_x_c) for _ in range(config.n_frequencies)]
     x_f_raw = processor.filter_temporal(x_c_demo, x_prev_demo)  # Raw filtering (before normalization)

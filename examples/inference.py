@@ -404,8 +404,7 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 5: Generating visualizations...")
 
-    # Stack histories for plotting
-    x_c_stacked = torch.stack(x_c_history)  # [T, n_x_c]
+    # Note: x_c_history and x_f_history remain as lists for plotting
 
     # Plot 1 & 2: Environment and walk trajectory
     fig1 = figures.plot_environment_layout(env, title=f"Environment: {config.grid_size}×{config.grid_size} Grid")
@@ -416,7 +415,7 @@ if __name__ == "__main__":
         print(f"  Saved: 01_environment.png, 02_walk_trajectory.png")
 
     # Plot 3: Sensory processing (temporal filtering)
-    fig3 = figures.plot_temporal_filtering(x_c_stacked, x_f_history, config.f_initial_extended)
+    fig3 = figures.plot_temporal_filtering(x_c_history, x_f_history, config.f_initial_extended)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_sensory_processing.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 03_sensory_processing.png")

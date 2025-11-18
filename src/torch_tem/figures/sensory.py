@@ -99,7 +99,7 @@ def plot_frequency_bank(frequencies: List[float], title: str = "Frequency Bank C
 # Temporal Filtering Visualization
 # ==============================================================================
 def plot_temporal_filtering(
-    x_c_history: Tensor,
+    x_c_history: List[Tensor],
     x_f_history: List[List[Tensor]],
     frequencies: List[float],
     title: str = "Temporal Filtering Across Frequencies",
@@ -113,7 +113,7 @@ def plot_temporal_filtering(
     - Subsequent panels: Filtered output for each frequency channel
 
     Args:
-        x_c_history: [T, n_x_c] compressed sensory over time
+        x_c_history: List of T timesteps, each a tensor [n_x_c] or [B, n_x_c]
         x_f_history: List of T timesteps, each with n_f filtered tensors [n_x_c]
         frequencies: List of frequency values
         title: Plot title
@@ -124,19 +124,20 @@ def plot_temporal_filtering(
         matplotlib Figure object
 
     Example:
-        >>> x_c_history = torch.randn(100, 10)
+        >>> x_c_history = [torch.randn(10) for _ in range(100)]
         >>> x_f_history = [[torch.randn(10) for _ in range(4)] for _ in range(100)]
         >>> frequencies = [0.1, 0.3, 0.5, 0.9]
         >>> fig = plot_temporal_filtering(x_c_history, x_f_history, frequencies)
     """
     n_f = len(frequencies)
-    T = x_c_history.shape[0]
+    T = len(x_c_history)
 
     # Create subplot grid: original + all frequencies
     fig, axes = plt.subplots(n_f + 1, 1, figsize=(figsize[0], figsize[1] * (n_f + 1)), sharex=True)
 
-    # Plot original compressed sensory
-    x_c_np = x_c_history.detach().cpu().numpy()
+    # Plot original compressed sensory - stack list into [T, n_x_c]
+    x_c_stacked = torch.stack([x_c_history[t].squeeze() if x_c_history[t].dim() > 1 else x_c_history[t] for t in range(T)])
+    x_c_np = x_c_stacked.detach().cpu().numpy()
     im0 = axes[0].imshow(x_c_np.T, aspect="auto", cmap=cmap, interpolation="nearest")
     axes[0].set_ylabel("Feature Dim", fontsize=10)
     axes[0].set_title("Original Compressed Sensory (x_c)", fontsize=11, fontweight="bold")
@@ -166,7 +167,7 @@ def plot_temporal_filtering(
 # Feature Comparison Visualization
 # ==============================================================================
 def plot_frequency_comparison(
-    x_c_history: Tensor,
+    x_c_history: List[Tensor],
     x_f_history: List[List[Tensor]],
     frequencies: List[float],
     feature_idx: int = 0,
@@ -179,7 +180,7 @@ def plot_frequency_comparison(
     demonstrating the temporal smoothing effect.
 
     Args:
-        x_c_history: [T, n_x_c] compressed sensory
+        x_c_history: List of T timesteps, each a tensor [n_x_c] or [B, n_x_c]
         x_f_history: List of T timesteps with n_f filtered tensors
         frequencies: List of frequency values
         feature_idx: Which feature dimension to plot
@@ -190,17 +191,19 @@ def plot_frequency_comparison(
         matplotlib Figure object
 
     Example:
+        >>> x_c_history = [torch.randn(10) for _ in range(100)]
         >>> fig = plot_frequency_comparison(x_c_history, x_f_history, frequencies, feature_idx=0)
         >>> fig.savefig('feature_comparison.png')
     """
     n_f = len(frequencies)
-    T = x_c_history.shape[0]
+    T = len(x_c_history)
 
     fig, ax = plt.subplots(1, 1, figsize=figsize)
 
-    # Plot original
-    x_c_feature = x_c_history[:, feature_idx].detach().cpu().numpy()
-    ax.plot(range(T), x_c_feature, label="Original (x_c)", linewidth=2, color="black", linestyle="--", alpha=0.7, zorder=n_f + 1)
+    # Plot original - extract feature from list of timesteps
+    x_c_feature = torch.stack([x_c_history[t].squeeze()[feature_idx] if x_c_history[t].dim() > 1 else x_c_history[t][feature_idx] for t in range(T)])
+    x_c_feature_np = x_c_feature.detach().cpu().numpy()
+    ax.plot(range(T), x_c_feature_np, label="Original (x_c)", linewidth=2, color="black", linestyle="--", alpha=0.7, zorder=n_f + 1)
 
     # Plot each frequency
     colors = plt.cm.viridis(np.linspace(0, 1, n_f))

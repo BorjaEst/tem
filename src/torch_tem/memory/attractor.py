@@ -100,7 +100,10 @@ class AttractorDynamics:
                           (inference typically requires more iterations for stable convergence)
 
         Returns:
-            p_retrieved: Refined grounded location pattern [B, sum(n_p)] after convergence
+            p_retrieved: Refined grounded location pattern [B, sum(n_p)] after convergence.
+                        **Format**: Concatenated tensor across all frequencies.
+                        Use `utils.split_to_frequencies(p_retrieved, n_p)` to convert to
+                        per-frequency list format for hierarchical processing components.
 
         Note:
             The hierarchical masking implements the following schedule:
@@ -110,6 +113,15 @@ class AttractorDynamics:
 
             This prevents high-frequency noise from destabilizing the coarse spatial
             representation during early retrieval.
+
+        Example:
+            >>> # Memory retrieval returns concatenated format
+            >>> p_retrieved = attractor.retrieve(query, M_inf, for_inference=True)
+            >>> # Convert to per-frequency format for hierarchical inference
+            >>> from torch_tem.utils import split_to_frequencies
+            >>> p_list = split_to_frequencies(p_retrieved, model_config.n_p)
+            >>> # Now ready for AbstractLocationInference
+            >>> g_inf = abstract(g_gen, sigma_gen, p_list, ...)
         """
         # Select appropriate hierarchical masks based on retrieval mode
         retrieve_mask = self.p_retrieve_mask_inf if for_inference else self.p_retrieve_mask_gen

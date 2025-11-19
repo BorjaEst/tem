@@ -32,6 +32,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 from torch_tem import data, figures, utils
+from torch_tem.config import ArchitectureConfig, InferenceConfig
 from torch_tem.memory.storage import MemoryStorage
 
 
@@ -41,8 +42,7 @@ from torch_tem.memory.storage import MemoryStorage
 class ExampleConfig(BaseSettings):
     """Configuration for memory storage example.
 
-    This config implements the MemoryStorageParams protocol, allowing direct
-    instantiation of MemoryStorage component.
+    This config wraps ArchitectureConfig and InferenceConfig for the memory storage demonstration.
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="memory_storage")
@@ -51,22 +51,24 @@ class ExampleConfig(BaseSettings):
     grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for spatial environment")
     observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
 
-    # Memory architecture
-    n_frequencies: int = Field(default=3, ge=2, le=5, description="Number of hierarchical frequency modules")
-    n_g_per_module: int = Field(default=10, ge=5, le=20, description="Grid cells per frequency module")
-    n_x_c: int = Field(default=5, ge=2, le=20, description="Compressed sensory dimensions")
+    # Architecture configuration
+    f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
+    n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
+    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
 
-    # Hebbian learning parameters
-    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Remembering rate (Hebbian learning strength)")
-    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Forgetting rate (memory decay)")
+    @computed_field(description="Sensory observation dimension")
+    @property
+    def n_x(self) -> int:
+        return self.grid_size * self.grid_size
+
+    # Memory configuration
+    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
+    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
+    kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
 
     # Training configuration
     n_training_steps: int = Field(default=50, ge=10, le=500, description="Number of Hebbian updates")
     batch_size: int = Field(default=8, ge=1, le=32, description="Batch size for memory updates")
-
-    # Memory configuration
-    use_dual_memory: bool = Field(default=True, description="Use separate inference/generative memories")
-    common_memory: bool = Field(default=False, description="Share memory between inference and generation")
 
     # Output
     output_dir: Path = Field(default=Path("outputs/memory_storage"), description="Directory for saving plots")
@@ -80,75 +82,51 @@ class ExampleConfig(BaseSettings):
         v.mkdir(parents=True, exist_ok=True)
         return v
 
-    @computed_field(description="Number of unique observations")
-    @property
-    def n_x(self) -> int:
-        n_locations = self.grid_size * self.grid_size
-        return n_locations if self.observation_mode == "unique" else max(4, n_locations // 4)
-
-    # ==============================================================================
-    # MemoryStorageParams Protocol Implementation
-    # ==============================================================================
-
-    @computed_field(description="Neurons for hippocampal grounded location p per frequency")
-    @property
-    def n_p_calculated(self) -> List[int]:
-        return [self.n_g_per_module * self.n_x_c for _ in range(self.n_frequencies)]
-
-    @computed_field(description="Hierarchical mask for memory updates")
-    @property
-    def p_update_mask_calculated(self) -> Tensor:
-        return utils.create_p_update_mask(
-            n_p=self.n_p_calculated,
-            n_f=self.n_frequencies,
-            n_f_g=self.n_frequencies,  # All modules are grid-based
-            n_f_ovc=0,  # No object vector cell modules
-            f_initial=[float(i) for i in range(self.n_frequencies)],  # 0, 1, 2, ... (low to high)
-        )
-
-    @computed_field(description="Whether to use inference-based grounded locations")
-    @property
-    def use_p_inf(self) -> bool:
-        return self.use_dual_memory
-
 
 # ==============================================================================
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
     """Run the memory storage experiment with visualizations."""
-    # Parse CLI arguments and create configuration
-    # This implements MemoryStorageParams protocol for direct instantiation
     config = ExampleConfig()
 
-    print(f"Memory Storage Experiment Configuration:")
-    print(f"  Architecture: {config.n_frequencies} frequencies × {config.n_g_per_module} grid cells × {config.n_x_c} sensory dims")
-    print(f"  Total place cells: {sum(config.n_p_calculated)}")
+    # Create config objects with proper field mapping
+    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
+    model_config = ArchitectureConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+
+    # Compute connectivity matrices from model config
+    p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_initial_extended)
+
+    print("=" * 80)
+    print("Memory Storage Experiment")
+    print("=" * 80)
+    print(f"Configuration:")
+    print(f"  Environment: {config.grid_size}×{config.grid_size} grid ({config.observation_mode} observations)")
+    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_x_c={model_config.n_x_c}")
     print(f"  Hebbian learning: η={config.eta}, λ={config.lambda_}")
-    print(f"  Dual memory: {config.use_dual_memory}")
+    print(f"  Dual memory: {not model_config.common_memory}")
     print(f"  Training steps: {config.n_training_steps}")
     print()
 
     # =========================================================================
     # PHASE 1: Initialize Memory Storage
     # =========================================================================
+    print("Phase 1: Initializing memory storage...")
     # MemoryStorage manages Hebbian memory matrices (M_gen, M_inf)
     # It implements: M = λ*M + η*outer(p_inf, p_gen) * mask
-    storage = MemoryStorage(config)
+    storage = MemoryStorage(model_config, inference_config, p_update_mask)
 
-    n_p_total = sum(config.n_p_calculated)
-    print(f"Initialized memory matrices: {n_p_total}×{n_p_total}")
-    print(f"  M_gen: {storage.M_gen.shape}")
-    if storage.use_dual_memory:
-        print(f"  M_inf: {storage.M_inf.shape}")
+    n_p_total = sum(model_config.n_p)
+    print(f"  ✓ MemoryStorage: {n_p_total}×{n_p_total} Hebbian matrix")
+    print(f"  ✓ M_gen: {storage.M_gen.shape}")
+    if not model_config.common_memory:
+        print(f"  ✓ M_inf: {storage.M_inf.shape}")
     print()
 
     # =========================================================================
     # PHASE 2: Train Memory Through Hebbian Learning
     # =========================================================================
-    print("Training memory through Hebbian learning...")
-    print("  Generating random spatial patterns and updating associations")
-    print()
+    print("Phase 2: Training memory through Hebbian learning...")
 
     # Simulate spatial navigation by generating random place cell patterns
     # In full TEM: p = g ⊗ x (grid cells ⊗ compressed sensory input)
@@ -160,11 +138,9 @@ if __name__ == "__main__":
 
     for step in range(config.n_training_steps):
         # Generate random grounded location patterns (batch_size samples)
-        # softmax ensures valid probability distributions (sum to 1, non-negative)
         # In real TEM: p_inferred comes from sensory→location inference
-        p_inferred = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
-
         # In real TEM: p_generated comes from abstract→location prediction
+        p_inferred = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
         p_generated = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
 
         # Store pre-update state to measure change magnitude
@@ -187,7 +163,7 @@ if __name__ == "__main__":
 
         # Monitor divergence between dual memories (should stay similar if properly tuned)
         # Cosine similarity = 1.0 means identical, 0.0 means orthogonal
-        if storage.use_dual_memory:
+        if not model_config.common_memory:
             m_gen_flat = storage.M_gen.flatten()
             m_inf_flat = storage.M_inf.flatten()
             cosine_sim = torch.nn.functional.cosine_similarity(m_gen_flat, m_inf_flat, dim=0).item()
@@ -196,22 +172,23 @@ if __name__ == "__main__":
         # Progress reporting
         if (step + 1) % 10 == 0 or step == 0:
             msg = f"  Step {step+1}/{config.n_training_steps}: M_gen strength={m_gen_strength:.4f}, update={update_magnitude:.6f}"
-            if storage.use_dual_memory:
+            if not model_config.common_memory:
                 msg += f", similarity={cosine_sim:.4f}"
             print(msg)
 
+    print(f"  ✓ Processed {config.n_training_steps} training steps")
     print()
-    print("Training complete!")
+    print(f"Training Summary:")
     print(f"  Final M_gen strength: {memory_strengths[-1]:.4f}")
     print(f"  Final update magnitude: {update_magnitudes[-1]:.6f}")
-    if storage.use_dual_memory:
+    if not model_config.common_memory:
         print(f"  Final M_gen/M_inf similarity: {cosine_sims[-1]:.4f}")
     print()
 
     # =========================================================================
     # PHASE 3: Analyze Memory Structure
     # =========================================================================
-    print("Analyzing learned memory structure...")
+    print("Phase 3: Analyzing learned memory structure...")
 
     # Compute memory statistics
     M_gen = storage.M_gen
@@ -234,7 +211,7 @@ if __name__ == "__main__":
     # Hierarchical block structure (within vs. between frequency connections)
     block_stats = []
     start_idx = 0
-    for freq_idx, n_p in enumerate(config.n_p_calculated):
+    for freq_idx, n_p in enumerate(model_config.n_p):
         end_idx = start_idx + n_p
         # Within-block strength (same frequency)
         within_block = M_gen[start_idx:end_idx, start_idx:end_idx]
@@ -252,38 +229,45 @@ if __name__ == "__main__":
     # =========================================================================
     # PHASE 4: Generate Visualizations
     # =========================================================================
-    print("Generating visualizations...")
+    print("Phase 4: Generating visualizations...")
 
     # Plot 1: Memory matrix structure
-    # Shows the learned association weights M_gen and M_inf
-    # Block structure reveals hierarchical frequency organization
     fig1 = figures.plot_memory_matrices(
-        storage.M_gen,  # Generative memory (abstract→location associations)
-        storage.get_memory(for_inference=True),  # Inference memory (sensory→location)
-        n_p_per_freq=config.n_p_calculated,  # Dimensions for block visualization
-        n_training_steps=config.n_training_steps,  # For title annotation
+        storage.M_gen,
+        storage.get_memory(for_inference=True),
+        n_p_per_freq=model_config.n_p,
+        n_training_steps=config.n_training_steps,
     )
     if config.save_plots:
-        save_path = config.output_dir / "01_memory_matrices.png"
-        fig1.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"  Saved: {save_path}")
+        fig1.savefig(config.output_dir / "01_memory_matrices.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 01_memory_matrices.png")
 
     # Plot 2: Learning dynamics over training
-    # Track how memory strength grows and dual memories evolve
     fig2 = figures.plot_learning_curve(
-        memory_strengths,  # Frobenius norm trajectory
-        cosine_sims if storage.use_dual_memory else None,  # Dual memory similarity
+        memory_strengths,
+        cosine_sims if not model_config.common_memory else None,
     )
     if config.save_plots:
-        save_path = config.output_dir / "02_learning_curve.png"
-        fig2.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"  Saved: {save_path}")
+        fig2.savefig(config.output_dir / "02_learning_curve.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 02_learning_curve.png")
 
+    print()
+    print("=" * 80)
+    print("Memory Storage Summary:")
+    print("=" * 80)
+    print(f"Architecture: {model_config.n_f} frequencies, {sum(model_config.n_p)} total place cells")
+    print(f"Training: {config.n_training_steps} steps with η={config.eta}, λ={config.lambda_}")
+    print(f"Final memory strength: {memory_strengths[-1]:.4f}")
+    if not model_config.common_memory:
+        print(f"Dual memory similarity: {cosine_sims[-1]:.4f}")
+    print(f"Sparsity: {sparsity_gen*100:.1f}%")
+    print(f"Symmetry error: {symmetry_gen.item():.6f}")
+    print("=" * 80)
     print()
     print(f"All outputs saved to: {config.output_dir}")
 
-    # Display plots interactively or just save them
+    # Show or close plots
     if config.show_plots:
-        plt.show()  # Blocks until user closes windows
+        plt.show()
     else:
-        plt.close("all")  # Clean up memory
+        plt.close("all")

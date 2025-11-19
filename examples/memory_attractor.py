@@ -32,6 +32,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 from torch_tem import data, figures, utils
+from torch_tem.config import ArchitectureConfig, InferenceConfig
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -42,37 +43,27 @@ from torch_tem.memory.storage import MemoryStorage
 class ExampleConfig(BaseSettings):
     """Configuration for attractor dynamics example.
 
-    This config implements the AttractorParams protocol, allowing direct
-    instantiation of AttractorDynamics component.
+    This config handles example-specific parameters, while ArchitectureConfig
+    and InferenceConfig handle the model architecture and inference settings.
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="memory_attractor")
 
-    # Environment configuration (used only for parameter sizing)
-    grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for spatial environment")
-    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
+    # Architecture configuration
+    n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
+    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
+    f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
 
-    # Memory architecture
-    n_frequencies: int = Field(default=3, ge=2, le=5, description="Number of hierarchical frequency modules")
-    n_g_per_module: int = Field(default=10, ge=5, le=20, description="Grid cells per frequency module")
-    n_x_c: int = Field(default=5, ge=2, le=20, description="Compressed sensory dimensions")
-
-    # Attractor dynamics parameters
-    kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor decay term (stability)")
-
-    # Memory initialization (minimal training for realistic memory)
-    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Remembering rate for memory initialization")
-    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Forgetting rate for memory initialization")
+    # Memory configuration
+    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
+    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
+    kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
     n_memory_init_steps: int = Field(default=20, ge=5, le=100, description="Steps for memory initialization")
     batch_size: int = Field(default=8, ge=1, le=32, description="Batch size for memory initialization")
 
     # Retrieval testing configuration
     n_test_queries: int = Field(default=5, ge=1, le=20, description="Number of test retrieval queries")
     noise_level: float = Field(default=1.0, ge=0.0, le=5.0, description="Noise level in logit space (std of Gaussian noise added before softmax)")
-
-    # Memory configuration
-    use_dual_memory: bool = Field(default=True, description="Use separate inference/generative memories")
-    common_memory: bool = Field(default=False, description="Share memory between inference and generation")
 
     # Output
     output_dir: Path = Field(default=Path("outputs/memory_attractor"), description="Directory for saving plots")
@@ -86,99 +77,46 @@ class ExampleConfig(BaseSettings):
         v.mkdir(parents=True, exist_ok=True)
         return v
 
-    @computed_field(description="Number of unique observations")
-    @property
-    def n_x(self) -> int:
-        n_locations = self.grid_size * self.grid_size
-        return n_locations if self.observation_mode == "unique" else max(4, n_locations // 4)
-
-    # ==============================================================================
-    # MemoryStorageParams Protocol Implementation (for initialization)
-    # ==============================================================================
-
-    @computed_field(description="Neurons for hippocampal grounded location p per frequency")
-    @property
-    def n_p_calculated(self) -> List[int]:
-        return [self.n_g_per_module * self.n_x_c for _ in range(self.n_frequencies)]
-
-    @computed_field(description="Hierarchical mask for memory updates")
-    @property
-    def p_update_mask_calculated(self) -> Tensor:
-        return utils.create_p_update_mask(
-            n_p=self.n_p_calculated,
-            n_f=self.n_frequencies,
-            n_f_g=self.n_frequencies,  # All modules are grid-based
-            n_f_ovc=0,  # No object vector cell modules
-            f_initial=[float(i) for i in range(self.n_frequencies)],  # 0, 1, 2, ... (low to high)
-        )
-
-    @computed_field(description="Whether to use inference-based grounded locations")
-    @property
-    def use_p_inf(self) -> bool:
-        return self.use_dual_memory
-
-    # ==============================================================================
-    # AttractorParams Protocol Implementation
-    # ==============================================================================
-
-    @computed_field(description="Number of attractor iterations")
-    @property
-    def i_attractor_calculated(self) -> int:
-        return self.n_frequencies
-
-    @computed_field(description="Hierarchical masks for inference retrieval")
-    @property
-    def p_retrieve_mask_inf_calculated(self) -> List[Tensor]:
-        i_attractor_max_freq = list(range(1, self.n_frequencies + 1))
-        inf_masks, _ = utils.create_p_retrieve_masks(
-            n_p=self.n_p_calculated,  # Pass number of place cells per frequency
-            i_attractor=self.i_attractor_calculated,  # Total iterations
-            i_attractor_max_freq_inf=i_attractor_max_freq,  # Progressive unmasking
-            i_attractor_max_freq_gen=i_attractor_max_freq,  # Not used, but required
-        )
-        return inf_masks
-
-    @computed_field(description="Hierarchical masks for generative retrieval")
-    @property
-    def p_retrieve_mask_gen_calculated(self) -> List[Tensor]:
-        i_attractor_max_freq = list(range(1, self.n_frequencies + 1))
-        _, gen_masks = utils.create_p_retrieve_masks(
-            n_p=self.n_p_calculated,  # Pass number of place cells per frequency
-            i_attractor=self.i_attractor_calculated,  # Total iterations
-            i_attractor_max_freq_inf=i_attractor_max_freq,  # Not used, but required
-            i_attractor_max_freq_gen=i_attractor_max_freq,  # Progressive unmasking
-        )
-        return gen_masks
-
 
 # ==============================================================================
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
     """Run the attractor dynamics experiment with visualizations."""
-    # Parse CLI arguments and create configuration
-    # This implements AttractorParams protocol for direct instantiation
     config = ExampleConfig()
 
-    print(f"Attractor Dynamics Experiment Configuration:")
-    print(f"  Architecture: {config.n_frequencies} frequencies × {config.n_g_per_module} grid cells × {config.n_x_c} sensory dims")
-    print(f"  Total place cells: {sum(config.n_p_calculated)}")
-    print(f"  Attractor parameters: κ={config.kappa}, iterations={config.i_attractor_calculated}")
-    print(f"  Test queries: {config.n_test_queries} with {config.noise_level} noise")
+    # Create config objects with proper field mapping
+    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
+    model_config = ArchitectureConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+
+    # Compute connectivity matrices from model config
+    p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_initial_extended)
+    mask_inf, mask_gen = utils.create_p_retrieve_masks(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf, model_config.max_freq_gen)
+
+    print("=" * 80)
+    print("Attractor Dynamics Memory Retrieval")
+    print("=" * 80)
+    print(f"Configuration:")
+    print(f"  Frequencies: {model_config.n_f} ({model_config.f_initial[0]:.2f} to {model_config.f_initial[-1]:.2f})")
+    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_x_c={model_config.n_x_c}")
+    print(f"  Attractor: κ={config.kappa}, iterations={model_config.i_attractor}")
+    print(f"  Test queries: {config.n_test_queries} with noise_level={config.noise_level}")
     print()
 
     # =========================================================================
     # PHASE 1: Initialize Memory and Attractor
     # =========================================================================
-    # We need a memory matrix for retrieval. Create one through minimal Hebbian training.
-    print("Initializing memory matrix through minimal Hebbian learning...")
+    print("Phase 1: Initializing memory and attractor components...")
     print("  Note: Using random patterns for demonstration. In real TEM:")
     print("    - p_inferred comes from sensory → location inference")
     print("    - p_generated comes from abstract → location prediction")
     print("    - M_inf learns outer(p_inf, p_inf) for sensory-driven completion")
     print("    - M_gen learns outer(p_inf, p_gen) for predictive associations")
-    storage = MemoryStorage(config)
-    n_p_total = sum(config.n_p_calculated)
+
+    # Initialize memory storage with proper config objects
+    storage = MemoryStorage(model_config, inference_config, p_update_mask)
+    n_p_total = sum(model_config.n_p)
+    print(f"  ✓ MemoryStorage: {n_p_total}×{n_p_total} Hebbian matrix")
 
     for step in range(config.n_memory_init_steps):
         p_inferred = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
@@ -188,28 +126,28 @@ if __name__ == "__main__":
     m_gen_strength = torch.norm(storage.M_gen).item()
     m_inf_strength = torch.norm(storage.M_inf).item() if storage.use_dual_memory else 0
     m_diff = torch.norm(storage.M_gen - storage.M_inf).item() if storage.use_dual_memory else 0
-    print(f"  Memory initialized:")
+    print(f"  Memory initialized after {config.n_memory_init_steps} steps:")
     print(f"    M_gen strength={m_gen_strength:.4f}")
     if storage.use_dual_memory:
         print(f"    M_inf strength={m_inf_strength:.4f}")
         print(f"    Difference={m_diff:.4f} ({m_diff/m_gen_strength:.1%} relative)")
+
+    # Initialize attractor dynamics with proper config objects
+    attractor = AttractorDynamics(model_config, inference_config, mask_inf, mask_gen)
+    print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
     print()
 
-    # AttractorDynamics implements iterative retrieval with hierarchical masking
-    # It implements: p[t+1] = κ*p[t] + M^T@p[t] * mask[t]
-    attractor = AttractorDynamics(config)
-
-    print(f"Attractor dynamics initialized with {config.i_attractor_calculated} iterations")
-    print(f"  Hierarchical masking schedule (inference mode):")
+    print(f"Hierarchical masking schedule (inference mode):")
     for it, mask in enumerate(attractor.p_retrieve_mask_inf):
         n_active = mask.sum().item()
-        print(f"    Iteration {it+1}: {n_active}/{n_p_total} neurons active ({n_active/n_p_total*100:.1f}%)")
+        print(f"  Iteration {it+1}: {n_active}/{n_p_total} neurons active ({n_active/n_p_total*100:.1f}%)")
     print()
 
     # =========================================================================
     # PHASE 2: Test Attractor Retrieval Quality
     # =========================================================================
-    print(f"Testing attractor retrieval with {config.n_test_queries} queries...")
+    print("Phase 2: Testing attractor retrieval quality...")
+    print(f"  Test queries: {config.n_test_queries}")
     print(f"  Noise level: {config.noise_level}")
     print()
 
@@ -264,7 +202,7 @@ if __name__ == "__main__":
     # =========================================================================
     # PHASE 3: Robustness Analysis Across Noise Levels
     # =========================================================================
-    print("Testing robustness across noise levels...")
+    print("Phase 3: Testing robustness across noise levels...")
     noise_levels = [0.5, 1.0, 1.5, 2.0, 3.0]  # Logit-space noise levels
     errors_by_mode = {"Inference": [], "Generative": []}  # Compare dual memories
 
@@ -297,13 +235,13 @@ if __name__ == "__main__":
     # =========================================================================
     # PHASE 4: Generate Visualizations
     # =========================================================================
-    print("Generating visualizations...")
+    print("Phase 4: Generating visualizations...")
 
     # Plot 1: Hierarchical retrieval masks
     # Visualize progressive unmasking schedule (coarse→fine)
     fig1 = figures.plot_hierarchical_masks(
         attractor.p_retrieve_mask_inf,  # Binary masks for each iteration
-        n_p_per_freq=config.n_p_calculated,  # Frequency boundaries
+        n_p_per_freq=config.n_p,  # Frequency boundaries
     )
     if config.save_plots:
         save_path = config.output_dir / "01_hierarchical_masks.png"
@@ -334,10 +272,20 @@ if __name__ == "__main__":
         print(f"  Saved: {save_path}")
 
     print()
+    print("=" * 80)
+    print("Experiment Summary:")
+    print("=" * 80)
+    print(f"Memory architecture: {n_p_total} place cells across {model_config.n_f} frequencies")
+    print(f"Attractor dynamics: {model_config.i_attractor} iterations with κ={config.kappa}")
+    print(f"Memory strength: M_gen={m_gen_strength:.4f}, M_inf={m_inf_strength:.4f}")
+    print(f"Test results: {config.n_test_queries} queries, avg improvement={avg_improvement:.1f}%")
+    print(f"Robustness: Tested across {len(noise_levels)} noise levels")
+    print("=" * 80)
+    print()
     print(f"All outputs saved to: {config.output_dir}")
 
-    # Display plots interactively or just save them
+    # Show or close plots
     if config.show_plots:
-        plt.show()  # Blocks until user closes windows
+        plt.show()
     else:
-        plt.close("all")  # Clean up memory
+        plt.close("all")

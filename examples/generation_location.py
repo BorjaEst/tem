@@ -26,11 +26,11 @@ from typing import List, Literal
 
 import matplotlib.pyplot as plt
 import torch
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from torch import Tensor
 
 from torch_tem import data, figures, utils
+from torch_tem.config import ArchitectureConfig, EnvironmentConfig, InferenceConfig
 from torch_tem.generation.location import LocationGenerator
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
@@ -42,20 +42,16 @@ from torch_tem.memory.storage import MemoryStorage
 class ExampleConfig(BaseSettings):
     """Configuration for location generation example.
 
-    This config implements LocationGeneratorParams, MemoryStorageParams, and
-    AttractorParams protocols, allowing direct component instantiation.
+    Provides example-specific parameters and delegates architectural
+    computations to ArchitectureConfig and InferenceConfig.
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="generation_location")
 
-    # Environment configuration
-    grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for spatial environment")
-    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
-
     # Architecture configuration
-    n_frequencies: int = Field(default=3, ge=2, le=5, description="Number of hierarchical frequency modules")
-    n_g_per_module: int = Field(default=10, ge=5, le=20, description="Grid cells per frequency module")
+    n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 10, 10], description="Subsampled grid cells per frequency module")
     n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension")
+    f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.6, 0.3], description="Frequency values per module")
 
     # Hebbian learning parameters
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Remembering rate (Hebbian learning strength)")
@@ -84,112 +80,6 @@ class ExampleConfig(BaseSettings):
         v.mkdir(parents=True, exist_ok=True)
         return v
 
-    @computed_field(description="Number of unique observations")
-    @property
-    def n_x(self) -> int:
-        """Compute number of observations from grid size and mode."""
-        n_locations = self.grid_size * self.grid_size
-        if self.observation_mode == "unique":
-            return n_locations
-        elif self.observation_mode == "tiled":
-            return 4
-        elif self.observation_mode == "random":
-            return max(4, n_locations // 4)
-        raise ValueError(f"Invalid observation_mode: {self.observation_mode}")
-
-    # ==============================================================================
-    # Protocol Implementations (LocationGeneratorParams, MemoryStorageParams, AttractorParams)
-    # ==============================================================================
-
-    @computed_field(description="Total number of frequency modules")
-    @property
-    def n_f_calculated(self) -> int:
-        return self.n_frequencies
-
-    @computed_field(description="Grid cell dimensions per frequency (3x subsampled)")
-    @property
-    def n_g_calculated(self) -> List[int]:
-        return [self.n_g_per_module] * self.n_frequencies
-
-    @computed_field(description="Place cell dimensions per frequency")
-    @property
-    def n_p_calculated(self) -> List[int]:
-        return [g * self.n_x_c for g in self.n_g_calculated]
-
-    @computed_field(description="Number of grid cell frequency modules")
-    @property
-    def n_f_g_calculated(self) -> int:
-        return self.n_frequencies
-
-    @computed_field(description="Number of OVC frequency modules")
-    @property
-    def n_f_ovc_calculated(self) -> int:
-        return 0  # No OVC modules in this example
-
-    @computed_field(description="Initial frequencies for each module")
-    @property
-    def f_initial_extended(self) -> List[float]:
-        """Generate logarithmic frequency spacing."""
-        return [1.0 - (i / (self.n_frequencies - 1)) * 0.9 for i in range(self.n_frequencies)]
-
-    @computed_field(description="Number of attractor iterations")
-    @property
-    def i_attractor_calculated(self) -> int:
-        return self.n_f_g_calculated
-
-    @computed_field(description="Max attractor iterations per frequency in inference model")
-    @property
-    def i_attractor_max_freq_inf_calculated(self) -> List[int]:
-        """All frequencies iterate for all steps."""
-        return [self.i_attractor_calculated for _ in range(self.n_frequencies)]
-
-    @computed_field(description="Max attractor iterations per frequency in generative model")
-    @property
-    def i_attractor_max_freq_gen_calculated(self) -> List[int]:
-        """Hierarchical early-stopping: high freq stops first."""
-        return [self.i_attractor_calculated - freq_nr for freq_nr in range(self.n_frequencies)]
-
-    @computed_field(description="Hierarchical mask for memory updates")
-    @property
-    def p_update_mask_calculated(self) -> Tensor:
-        """Generate hierarchical update mask (low to high frequency)."""
-        return utils.masks.create_p_update_mask(
-            n_p=self.n_p_calculated,
-            n_f=self.n_f_calculated,
-            n_f_g=self.n_f_g_calculated,
-            n_f_ovc=self.n_f_ovc_calculated,
-            f_initial=self.f_initial_extended,
-        )
-
-    @computed_field(description="Whether to use inference-based grounded locations")
-    @property
-    def use_p_inf(self) -> bool:
-        return not self.common_memory
-
-    @computed_field(description="Hierarchical masks for inference retrieval")
-    @property
-    def p_retrieve_mask_inf_calculated(self) -> List[Tensor]:
-        """Generate hierarchical retrieval masks for inference."""
-        inf_masks, _ = utils.masks.create_p_retrieve_masks(
-            n_p=self.n_p_calculated,
-            i_attractor=self.i_attractor_calculated,
-            i_attractor_max_freq_inf=self.i_attractor_max_freq_inf_calculated,
-            i_attractor_max_freq_gen=self.i_attractor_max_freq_gen_calculated,
-        )
-        return inf_masks
-
-    @computed_field(description="Hierarchical masks for generative retrieval")
-    @property
-    def p_retrieve_mask_gen_calculated(self) -> List[Tensor]:
-        """Generate hierarchical retrieval masks for generation."""
-        _, gen_masks = utils.masks.create_p_retrieve_masks(
-            n_p=self.n_p_calculated,
-            i_attractor=self.i_attractor_calculated,
-            i_attractor_max_freq_inf=self.i_attractor_max_freq_inf_calculated,
-            i_attractor_max_freq_gen=self.i_attractor_max_freq_gen_calculated,
-        )
-        return gen_masks
-
 
 # ==============================================================================
 # Main Experiment
@@ -198,38 +88,52 @@ if __name__ == "__main__":
     """Run the location generation experiment with visualizations."""
     config = ExampleConfig()
 
+    # Create config objects with proper field mapping
+    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa, do_sample=config.do_sample)
+    model_config = ArchitectureConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, common_memory=config.common_memory)
+
+    # Compute connectivity matrices from model config
+    p_update_mask = utils.masks.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_initial_extended)
+    mask_inf, mask_gen = utils.masks.create_p_retrieve_masks(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf, model_config.max_freq_gen)
+    W_repeat = utils.matrices.create_W_repeat(model_config.n_g_subsampled_combined, [config.n_x_c] * model_config.n_f)
+
     print("=" * 80)
     print("Location Generation Example: g → p Memory-Based Retrieval")
     print("=" * 80)
     print(f"Configuration:")
-    print(f"  Environment: {config.grid_size}x{config.grid_size} grid")
-    print(f"  Frequencies: {config.n_frequencies} modules")
-    print(f"  Grid cells per module: {config.n_g_per_module}")
-    print(f"  Place cells per module: {config.n_p_calculated}")
-    print(f"  Memory: eta={config.eta}, lambda={config.lambda_}, kappa={config.kappa}")
+    print(f"  Frequencies: {model_config.n_f} ({model_config.f_initial[0]:.2f} to {model_config.f_initial[-1]:.2f})")
+    print(f"  Architecture: n_g={model_config.n_g_subsampled_combined}, n_p={model_config.n_p}, n_x_c={model_config.n_x_c}")
+    print(f"  Memory: η={config.eta}, λ={config.lambda_}, κ={config.kappa}")
+    print(f"  Training: {config.n_training_steps} steps, batch_size={config.batch_size}")
     print(f"  Generation mode: {'stochastic' if config.do_sample else 'deterministic'}")
-    print(f"  Memory type: {'common' if config.common_memory else 'dual (inference/generative)'}")
     print()
 
     # =========================================================================
     # PHASE 1: Initialize Memory Components
     # =========================================================================
     print("Phase 1: Initializing memory components...")
-    storage = MemoryStorage(config)
-    attractor = AttractorDynamics(config)
-    generator = LocationGenerator(config, storage, attractor)
-    print(f"  ✓ MemoryStorage initialized (M_gen: {storage.M_gen.shape})")
-    if not config.common_memory:
-        print(f"  ✓ MemoryStorage initialized (M_inf: {storage.M_inf.shape})")
-    print(f"  ✓ AttractorDynamics initialized ({config.i_attractor_calculated} iterations)")
-    print(f"  ✓ LocationGenerator initialized")
+    storage = MemoryStorage(model_config, inference_config, p_update_mask)
+    attractor = AttractorDynamics(model_config, inference_config, mask_inf, mask_gen)
+
+    # Create params object for LocationGenerator with required protocol fields
+    from types import SimpleNamespace
+
+    gen_params = SimpleNamespace(do_sample=config.do_sample, n_f=model_config.n_f, n_p=model_config.n_p)
+    generator = LocationGenerator(gen_params, storage, attractor, W_repeat)
+
+    print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
+    print(f"  ✓ M_gen: {storage.M_gen.shape}")
+    if not model_config.common_memory:
+        print(f"  ✓ M_inf: {storage.M_inf.shape}")
+    print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations")
+    print(f"  ✓ LocationGenerator: initialized")
     print()
 
     # =========================================================================
     # PHASE 2: Generate Synthetic Training Data
     # =========================================================================
     print("Phase 2: Generating synthetic training patterns...")
-    n_p_total = sum(config.n_p_calculated)
+    n_p_total = sum(model_config.n_p)
 
     # Generate random place cell patterns (simulating spatial experience)
     # In practice, these would come from actual navigation through the environment
@@ -256,7 +160,7 @@ if __name__ == "__main__":
 
     print(f"  ✓ Memory training complete")
     print(f"  ✓ M_gen norm: {storage.M_gen.norm().item():.4f}")
-    if not config.common_memory:
+    if not model_config.common_memory:
         print(f"  ✓ M_inf norm: {storage.M_inf.norm().item():.4f}")
     print()
 
@@ -269,12 +173,12 @@ if __name__ == "__main__":
 
     for i in range(config.n_test_queries):
         # Generate abstract location (grid cell activity)
-        g_test = [torch.randn(1, config.n_g_calculated[f]).softmax(dim=1) for f in range(config.n_frequencies)]
+        g_test = [torch.randn(1, model_config.n_g_subsampled_combined[f]).softmax(dim=1) for f in range(model_config.n_f)]
         test_queries.append(g_test)
         test_labels.append(f"Query {i+1}")
 
     print(f"  ✓ Generated {config.n_test_queries} test queries")
-    print(f"  ✓ Grid cell dimensions: {config.n_g_calculated}")
+    print(f"  ✓ Grid cell dimensions: {model_config.n_g_subsampled_combined}")
     print()
 
     # =========================================================================
@@ -316,7 +220,7 @@ if __name__ == "__main__":
 
     if config.do_sample:
         # Test stochastic mode
-        gen_stoch = LocationGenerator(config, storage, attractor)
+        gen_stoch = LocationGenerator(model_config, inference_config, storage, attractor, W_repeat)
         with torch.no_grad():
             p_stoch_1 = gen_stoch.generate(test_queries[0], for_inference=False)
             p_stoch_2 = gen_stoch.generate(test_queries[0], for_inference=False)
@@ -332,7 +236,7 @@ if __name__ == "__main__":
     # =========================================================================
     # PHASE 7: Analyze Dual Memory (Inference vs. Generative)
     # =========================================================================
-    if not config.common_memory:
+    if not model_config.common_memory:
         print("Phase 7: Analyzing dual memory (inference vs. generative)...")
 
         with torch.no_grad():
@@ -352,15 +256,14 @@ if __name__ == "__main__":
 
     # Plot 1: Memory matrices
     fig1 = figures.plot_memory_matrices(
-        M_gen=storage.M_gen,
-        M_inf=storage.M_inf if not config.common_memory else None,
-        n_p_per_freq=config.n_p_calculated,
-        n_training_steps=config.n_training_steps,
-        title=f"Learned Memory Matrices ({config.n_training_steps} updates)",
+        storage.M_gen,
+        storage.get_memory(for_inference=True),
+        model_config.n_p,
+        config.n_training_steps,
     )
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_memory_matrices.png", dpi=150, bbox_inches="tight")
-    print(f"  ✓ Figure 1: Memory matrices")
+        print(f"  Saved: 01_memory_matrices.png")
 
     # Plot 2: Retrieval patterns
     # Flatten retrievals for visualization
@@ -386,9 +289,9 @@ if __name__ == "__main__":
         axes[i, 1].set_xlabel("Place Cell Index")
 
         # Add frequency boundaries
-        if config.n_frequencies > 1:
-            g_boundaries = [0] + [sum(config.n_g_calculated[: j + 1]) for j in range(config.n_frequencies)]
-            p_boundaries = [0] + [sum(config.n_p_calculated[: j + 1]) for j in range(config.n_frequencies)]
+        if model_config.n_f > 1:
+            g_boundaries = [0] + [sum(model_config.n_g_subsampled_combined[: j + 1]) for j in range(model_config.n_f)]
+            p_boundaries = [0] + [sum(model_config.n_p[: j + 1]) for j in range(model_config.n_f)]
 
             for boundary in g_boundaries[1:-1]:
                 axes[i, 0].axvline(boundary, color="red", linestyle="--", alpha=0.3)
@@ -399,17 +302,16 @@ if __name__ == "__main__":
     plt.tight_layout()
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_retrieval_patterns.png", dpi=150, bbox_inches="tight")
-    print(f"  ✓ Figure 2: Retrieval patterns")
+        print(f"  Saved: 02_retrieval_patterns.png")
 
     # Plot 3: Hierarchical mask schedule
     fig3 = figures.plot_hierarchical_masks(
-        masks=config.p_retrieve_mask_gen_calculated,
-        sizes=config.n_p_calculated,
-        title="Hierarchical Retrieval Schedule (Generative)",
+        mask_gen,
+        model_config.n_p,
     )
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_hierarchical_masks.png", dpi=150, bbox_inches="tight")
-    print(f"  ✓ Figure 3: Hierarchical masks")
+        print(f"  Saved: 03_hierarchical_masks.png")
 
     # Plot 4: Generation mode comparison (if stochastic enabled)
     if config.do_sample:
@@ -425,7 +327,7 @@ if __name__ == "__main__":
                 axes[0, sample_idx].set_ylim(0, p_det_flat.max().item() * 1.2)
 
                 # Stochastic
-                gen_stoch = LocationGenerator(config, storage, attractor)
+                gen_stoch = LocationGenerator(gen_params, storage, attractor, W_repeat)
                 p_stoch = gen_stoch.generate(test_queries[0], for_inference=False)
                 p_stoch_flat = torch.cat(p_stoch, dim=1).squeeze(0)
                 axes[1, sample_idx].bar(range(len(p_stoch_flat)), p_stoch_flat.cpu().numpy())
@@ -441,13 +343,22 @@ if __name__ == "__main__":
         plt.tight_layout()
         if config.save_plots:
             fig4.savefig(config.output_dir / "04_generation_modes.png", dpi=150, bbox_inches="tight")
-        print(f"  ✓ Figure 4: Generation mode comparison")
+            print(f"  Saved: 04_generation_modes.png")
 
     print()
     print("=" * 80)
-    print("Experiment complete!")
-    print(f"Results saved to: {config.output_dir}")
+    print("Location Generation Summary:")
     print("=" * 80)
+    print(f"Architecture: {sum(model_config.n_g_subsampled_combined)} grid cells → {sum(model_config.n_p)} place cells")
+    print(f"Memory training: {config.n_training_steps} steps × {config.batch_size} batch")
+    print(f"Memory strength: M_gen={storage.M_gen.norm().item():.4f}")
+    if not model_config.common_memory:
+        print(f"                 M_inf={storage.M_inf.norm().item():.4f}")
+    print(f"Test retrievals: {config.n_test_queries} queries processed")
+    print(f"Generation mode: {'stochastic' if config.do_sample else 'deterministic'}")
+    print("=" * 80)
+    print()
+    print(f"All outputs saved to: {config.output_dir}")
 
     # Show or close plots
     if config.show_plots:

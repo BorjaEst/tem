@@ -5,32 +5,38 @@ This example demonstrates the full torch_tem inference pipeline, integrating com
 from inference_sensory.py, inference_grounded.py, inference_abstract.py, memory_storage.py,
 and memory_attractor.py into a single comprehensive demonstration.
 
-Pipeline Stages:
-----------------
+Pipeline Stages (Theory-Faithful):
+-----------------------------------
 1. Sensory Processing: Observation encoding and temporal filtering
    - SensoryEncoder: Two-hot encoding (n_x → n_x_c)
    - SensoryProcessor: Multi-frequency temporal filtering
 
-2. Grounded Location Inference: Place cell formation via g ⊗ x outer product
-   - ProjectionHead: Laplacian transform + downsampling of grid cells
-   - GroundedLocationInference: Compute p = g ⊗ x (includes sensory tiling internally)
+2. Sensory to Hippocampus: Project sensory input to place cell space
+   - SensoryProjection: ~x_t = W_tile @ w_p @ f_n(x_f)
+   - AttractorDynamics: p_x = M^T @ ~x_t (retrieve from sensory input)
 
-3. Memory Integration (optional): Hebbian learning and attractor dynamics
-   - MemoryStorage: Learn spatial associations via Hebbian plasticity
-   - AttractorDynamics: Retrieve patterns via iterative dynamics
+3. Abstract Location Inference: Combine memory and generative paths
+   - Memory path: p_x → g_mem via learned projection
+   - Generative path: previous g + action → g_gen via transition
+   - AbstractLocationInference: Precision-weighted fusion g_inf
 
-4. Abstract Location Inference: Precision-weighted fusion of multiple sources
-   - AbstractLocationInference: Fuse generative predictions with memory
-   - Output: Abstract location g_inf representing spatial belief
+4. Grounded Location Inference: Final place cells from abstract location
+   - ProjectionHead: Transform and downsample g_inf
+   - GroundedLocationInference: p = g_inf ⊗ x_f (outer product)
 
-Data Flow:
-----------
+5. Memory Update: Hebbian learning for next timestep
+   - MemoryStorage: M ← λM + η·(p ⊗ p)
+
+Data Flow (Theory):
+-------------------
     x (observation)
     → x_c (compressed/two-hot encoding)
     → x_f (temporal filtering per frequency)
-    → p (grounded location = g ⊗ x_f, via outer product with W_repeat and W_tile)
-    → M^T @ p (memory retrieval)
-    → g_inf (abstract location via precision-weighted fusion)
+    → ~x_t (sensory projected to p-space via W_tile)
+    → p_x (hippocampal retrieval from sensory: M^T @ ~x_t)
+    → g_inf (abstract location from p_x and g_gen fusion)
+    → p (final grounded location: g_inf ⊗ x_f)
+    → M (Hebbian memory update)
 
 Usage Examples:
 ---------------
@@ -74,6 +80,7 @@ from torch import Tensor
 from torch_tem import data, figures, utils
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
+from torch_tem.core.tiling import SensoryProjection
 from torch_tem.inference.abstract import AbstractLocationInference
 from torch_tem.inference.grounded import GroundedLocationInference
 from torch_tem.inference.sensory import SensoryProcessor
@@ -299,6 +306,10 @@ if __name__ == "__main__":
     print(f"  ✓ SensoryEncoder: {config.n_x} → {config.n_x_c} (two-hot)")
     print(f"  ✓ SensoryProcessor: {config.n_frequencies} frequency channels")
 
+    # Sensory projection to p-space
+    sensory_projection = SensoryProjection(config)
+    print(f"  ✓ SensoryProjection: x_f → ~x_t (W_tile transformation to p-space)")
+
     # Grounded location inference
     projection = ProjectionHead(config)
     grounded = GroundedLocationInference(config)
@@ -332,6 +343,8 @@ if __name__ == "__main__":
 
     x_c_history = []
     x_f_history = []
+    x_projected_history = []  # ~x_t: sensory input projected to p-space
+    p_x_history = []  # p_x: hippocampal patterns retrieved from sensory
     p_history = []
     g_inf_history = []
 
@@ -345,39 +358,56 @@ if __name__ == "__main__":
         # Step 2: Temporal filtering → multi-frequency representation
         x_f = processor(x_c, x_prev)  # List[n_f] of [1, n_x_c]
 
-        # Step 3: Get synthetic grid cells at time t
+        # Step 3: Project sensory to p-space (theory: ~x_t = W_tile * w_p * f_n(x_f))
+        x_projected = sensory_projection(x_f)  # List[n_f] of [1, n_p[f]]
+        x_proj_concat = torch.cat(x_projected, dim=1)  # [1, sum(n_p)]
+
+        # Step 4: Retrieve hippocampal patterns from sensory input via attractor
+        M_inf = storage.get_memory(for_inference=True)
+        p_x_concat = attractor.retrieve(x_proj_concat, M_inf, for_inference=True)  # [1, sum(n_p)]
+
+        # Split retrieved patterns back to per-frequency lists
+        p_x = []
+        start_idx = 0
+        for f in range(config.n_frequencies):
+            end_idx = start_idx + config.n_p_calculated[f]
+            p_x.append(p_x_concat[:, start_idx:end_idx])  # [1, n_p[f]]
+            start_idx = end_idx
+
+        # Step 5: Get synthetic grid cells at time t (for generative path)
         g_t = g_history[t]  # List[n_f] of [1, n_g[f]]
 
-        # Step 4: Transform and downsample grid cells
-        g_transformed = projection.transform(g_t)
-        g_downsampled = projection.downsample(g_transformed)
+        # Step 6: Infer abstract location g from memory-retrieved p_x and generative g_t
+        # Theory: g is inferred by precision-weighted fusion of:
+        #   - g_gen (from transition/generative model)
+        #   - g_mem (from p_x via learned projection p→g)
 
-        # Step 5: Compute grounded location via outer product
-        # Note: GroundedLocationInference applies W_tile internally to project x_f to p-space
-        p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
+        # For g_mem path: project p_x to abstract location space
+        # Theory: g_downsampled = p_x @ W_repeat^T (sum over sensory preferences)
+        g_mem_downsampled = [torch.matmul(p_x[f], config.W_repeat_calculated[f].t()) for f in range(config.n_frequencies)]  # List[n_f] of [1, n_g_sub[f]]
 
-        # Step 6: Memory retrieval
-        p_concat = torch.cat(p_t, dim=1)  # [1, sum(n_p)]
-
-        # Update memory with Hebbian learning
-        storage.update(p_concat, p_concat, eta=config.eta, lamb=config.lambda_)
-
-        # Retrieve from memory via attractor dynamics
-        M_inf = storage.get_memory(for_inference=True)
-        p_retrieved_concat = attractor.retrieve(p_concat, M_inf, for_inference=True)
-
-        # Step 7: Abstract location inference via precision-weighted fusion
-        # Use synthetic g (full dimensions) as generative prediction
-        g_gen = g_t  # Full grid cell dimensions [n_g[f]]
+        # Use g_t as generative prediction with moderate uncertainty
         sigma_gen = [torch.ones(1, n_g) * 0.5 for n_g in config.n_g_calculated]
 
-        # Use downsampled g as proxy for p→g projection (memory path)
-        # (In full TEM, this would be a learned MLP: p_retrieved → g_mem)
-        g_inf = abstract(g_gen, sigma_gen, g_downsampled, shiny_signals=None, p2g_scale_offset=config.p2g_scale_offset)
+        # Fuse generative and memory paths to infer abstract location
+        g_inf = abstract(g_t, sigma_gen, g_mem_downsampled, shiny_signals=None, p2g_scale_offset=config.p2g_scale_offset)  # generative path  # memory path from p_x
+
+        # Step 7: Transform and downsample inferred g for final grounded inference
+        g_transformed = projection.transform(g_inf)
+        g_downsampled = projection.downsample(g_transformed)
+
+        # Step 8: Compute final grounded location via outer product g ⊗ x
+        p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
+        p_concat = torch.cat(p_t, dim=1)  # [1, sum(n_p)]
+
+        # Step 9: Update memory with Hebbian learning
+        storage.update(p_concat, p_concat, eta=config.eta, lamb=config.lambda_)
 
         # Store history (extract batch dimension for single-trajectory storage)
         x_c_history.append(x_c[0])
         x_f_history.append([x[0] for x in x_f])
+        x_projected_history.append([x[0] for x in x_projected])
+        p_x_history.append([p[0] for p in p_x])
         p_history.append([p[0] for p in p_t])
         g_inf_history.append(g_inf)
 
@@ -442,16 +472,18 @@ if __name__ == "__main__":
     print(f"Stage 1: {config.n_x_c}-dim compressed sensory (x_c)")
     print(f"  ↓ SensoryProcessor ({config.n_frequencies} frequencies)")
     print(f"Stage 2: Multi-frequency filtered sensory (x_f)")
-    print(f"  ↓ SyntheticGridGenerator")
-    print(f"Stage 3: Grid cell patterns (g) - {config.n_g_calculated}")
+    print(f"  ↓ SensoryProjection (~x_t = W_tile @ x_f)")
+    print(f"Stage 3: Sensory input to hippocampus (~x_t) - {config.n_p_calculated}")
+    print(f"  ↓ AttractorDynamics (M^T @ ~x_t)")
+    print(f"Stage 4: Hippocampal patterns from sensory (p_x) - {config.n_p_calculated}")
+    print(f"  ↓ Projection to abstract (p_x @ W_repeat^T + g_gen fusion)")
+    print(f"Stage 5: Abstract location (g_inf) - {config.n_g_calculated}")
     print(f"  ↓ ProjectionHead (transform + downsample)")
-    print(f"Stage 4: Downsampled grid cells (g_sub) - {config.n_g_subsampled_combined}")
-    print(f"  ↓ GroundedLocationInference (g ⊗ x_f with W_repeat and W_tile)")
-    print(f"Stage 5: Place cell activity (p) - {config.n_p_calculated}")
-    print(f"  ↓ MemoryStorage + AttractorDynamics")
-    print(f"Stage 6: Memory-retrieved patterns (p_retrieved)")
-    print(f"  ↓ AbstractLocationInference (precision fusion)")
-    print(f"Output: Abstract location (g_inf) - {config.n_g_calculated}")
+    print(f"Stage 6: Downsampled abstract (g_sub) - {config.n_g_subsampled_combined}")
+    print(f"  ↓ GroundedLocationInference (g ⊗ x_f)")
+    print(f"Stage 7: Final grounded location (p) - {config.n_p_calculated}")
+    print(f"  ↓ MemoryStorage (Hebbian update)")
+    print(f"Output: Memory-stored patterns (M) for next timestep")
     print("=" * 80)
     print()
     print(f"All outputs saved to: {config.output_dir}")

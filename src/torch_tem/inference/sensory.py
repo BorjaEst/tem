@@ -32,9 +32,9 @@ Parameters
 ``torch_tem.config.facets.SensoryProcessorParams``. Only the following fields
 are required by this implementation:
 
-- ``n_f_calculated``: int, number of frequencies (length of the filter bank)
+- ``n_f``: int, number of frequencies (length of the filter bank)
 - ``n_x_c``: int, feature dimension of the compressed sensory vector
-- ``n_x_f_calculated``: int, optional downstream convenience (unused here)
+- ``n_x_f``: int, optional downstream convenience (unused here)
 - ``f_initial_extended``: Sequence[float], frequency values in (0, 1]
 
 Notes
@@ -45,13 +45,28 @@ Notes
     the original implementation and to prevent scale drift across channels.
 """
 
-from typing import List
+from typing import List, Protocol
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.config.facets import SensoryProcessorParams
+
+class SensoryProcessorParams(Protocol):
+    """Minimal interface for SensoryProcessor.
+
+    Dependencies: n_f, n_x_c, n_x_f, f_initial_extended
+    Complexity: Low (4 parameters)
+    """
+
+    n_x_c: int
+    n_f: int
+    n_x_f: List[int]
+
+    @property
+    def f_initial_extended(self) -> List[float]:
+        """Extended frequency list including OVC modules when they are separate"""
+        ...
 
 
 class SensoryProcessor(nn.Module):
@@ -66,9 +81,9 @@ class SensoryProcessor(nn.Module):
     def __init__(self, params: SensoryProcessorParams):
         super().__init__()
 
-        self.n_f = params.n_f_calculated  # Number of frequencies (filter channels)
+        self.n_f = params.n_f  # Number of frequencies (filter channels)
         self.n_x_c = params.n_x_c  # Feature dimension of compressed sensory input
-        self.n_x_f = params.n_x_f_calculated  # Calculated size for downstream components
+        self.n_x_f = params.n_x_f  # Calculated size for downstream components
         self.f_initial = params.f_initial_extended  # Frequency values in (0, 1]
 
         # Learnable normalization parameters
@@ -144,9 +159,9 @@ if __name__ == "__main__":
 
     # Build a lightweight params stub with the required fields
     params = types.SimpleNamespace(
-        n_f_calculated=n_f,
+        n_f=n_f,
         n_x_c=n_x_c,
-        n_x_f_calculated=n_f * n_x_c,  # not used by this module, but often handy downstream
+        n_x_f=n_f * n_x_c,  # not used by this module, but often handy downstream
         f_initial_extended=[0.1, 0.5, 0.9],
     )
 

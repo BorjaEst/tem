@@ -1,13 +1,27 @@
 """Projection head for torch_tem package."""
 
-from typing import List
+from typing import List, Protocol
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..config.facets import ProjectionParams
+
+class ProjectionParams(Protocol):
+    """Minimal interface for ProjectionHead.
+
+    Dependencies: n_f, n_g, g_downsample, f_initial_extended
+    Complexity: Low (4 parameters)
+    """
+
+    n_f: int  # Total number of frequency modules (grid + optional OVC)
+    n_g: List[int]  # Entorhinal abstract location neurons per frequency
+
+    @property
+    def f_initial_extended(self) -> List[float]:
+        """Extended frequency list including OVC modules when they are separate"""
+        ...
 
 
 class ProjectionHead(nn.Module):
@@ -19,16 +33,16 @@ class ProjectionHead(nn.Module):
     - Downsampling for memory indexing
     """
 
-    def __init__(self, params: ProjectionParams):
+    def __init__(self, params: ProjectionParams, g_downsample: List[Tensor]):
         """Initialize projection head.
 
         Args:
             params: Configuration satisfying ProjectionParams protocol
         """
         super().__init__()
-        self.n_f = params.n_f_calculated
-        self.n_g = params.n_g_calculated
-        self.g_downsample = params.g_downsample_calculated
+        self.n_f = params.n_f
+        self.n_g = params.n_g
+        self.g_downsample = g_downsample
 
         # Learnable Laplacian scales (learned as inverse sigmoid)
         self.alpha = nn.ParameterList(

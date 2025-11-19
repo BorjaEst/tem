@@ -13,12 +13,22 @@ synaptic connections strengthen when pre- and post-synaptic neurons fire togethe
 with gradual decay (forgetting) over time.
 """
 
-from typing import List
+from typing import List, Protocol
 
 import torch
 from torch import Tensor
 
-from torch_tem.config.facets import MemoryStorageParams
+
+class MemoryStorageParams(Protocol):
+    """Minimal interface for MemoryStorage.
+
+    Dependencies: n_p, use_p_inf, common_memory
+    Complexity: Low (4 parameters)
+    """
+
+    use_p_inf: bool
+    common_memory: bool
+    n_p: List[int]
 
 
 class MemoryStorage:
@@ -55,15 +65,15 @@ class MemoryStorage:
         M_inf: Inference memory matrix (optional) [sum(n_p), sum(n_p)]
     """
 
-    def __init__(self, params: MemoryStorageParams):
+    def __init__(self, params: MemoryStorageParams, p_update_mask: Tensor):
         """Initialize memory storage with zero-initialized matrices.
 
         Args:
             params: Protocol providing memory dimensions, masks, and configuration
         """
-        self.n_p = params.n_p_calculated
-        self.p_update_mask = params.p_update_mask_calculated
+        self.n_p = params.n_p
         self.use_dual_memory = params.use_p_inf and not params.common_memory
+        self.p_update_mask = p_update_mask
 
         # Initialize memory matrices as zero matrices
         # These will be populated during training via Hebbian updates
@@ -202,13 +212,13 @@ if __name__ == "__main__":
     # Initialize memory storage
     storage = MemoryStorage(params)
 
-    print(f"Memory dimensions: {sum(params.n_p_calculated)} place cells total")
-    print(f"  Per frequency: {params.n_p_calculated}")
+    print(f"Memory dimensions: {sum(params.n_p)} place cells total")
+    print(f"  Per frequency: {params.n_p}")
     print(f"Dual memory mode: {storage.use_dual_memory}")
 
     # Simulate a sequence of grounded locations during navigation
     batch_size = 8
-    n_p_total = sum(params.n_p_calculated)
+    n_p_total = sum(params.n_p)
 
     # Simulate 5 timesteps of navigation
     for t in range(5):

@@ -46,7 +46,7 @@ def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_i
     return p_update_mask
 
 
-def create_p_retrieve_masks(n_p: List[int], i_attractor: int, i_attractor_max_freq_inf: List[int], i_attractor_max_freq_gen: List[int]) -> tuple[List[Tensor], List[Tensor]]:
+def create_p_retrieve_masks(n_p: List[int], i_attractor: int, max_freq_inf: List[int], max_freq_gen: List[int]) -> tuple[List[Tensor], List[Tensor]]:
     """Create hierarchical masks for memory retrieval with early-stopping.
 
     Hierarchical memory retrieval is implemented by early-stopping low-frequency
@@ -55,8 +55,8 @@ def create_p_retrieve_masks(n_p: List[int], i_attractor: int, i_attractor_max_fr
     Args:
         n_p: Grounded location dimensions per frequency
         i_attractor: Number of attractor iterations
-        i_attractor_max_freq_inf: Max iterations per frequency (inference)
-        i_attractor_max_freq_gen: Max iterations per frequency (generation)
+        max_freq_inf: Max iterations per frequency (inference)
+        max_freq_gen: Max iterations per frequency (generation)
 
     Returns:
         Tuple of (inference_masks, generation_masks), each a list of [i_attractor]
@@ -69,7 +69,7 @@ def create_p_retrieve_masks(n_p: List[int], i_attractor: int, i_attractor_max_fr
     p_retrieve_mask_gen = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
 
     # Build masks for each retrieval iteration
-    for mask, max_iters in zip([p_retrieve_mask_inf, p_retrieve_mask_gen], [i_attractor_max_freq_inf, i_attractor_max_freq_gen]):
+    for mask, max_iters in zip([p_retrieve_mask_inf, p_retrieve_mask_gen], [max_freq_inf, max_freq_gen]):
         for f, max_i in enumerate(max_iters):
             # Update masks up to maximum iteration for this frequency
             for i in range(max_i):

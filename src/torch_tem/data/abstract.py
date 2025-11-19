@@ -23,7 +23,7 @@ class AbstractInferenceParams(Protocol):
     n_timesteps: int
     batch_size: int
     n_frequencies: int
-    n_g_calculated: List[int]
+    n_g: List[int]
     n_g_subsampled_combined: List[int]
     transition_sigma_base: float
     memory_sigma_base: float
@@ -52,7 +52,7 @@ class TransitionPredictionGenerator:
         """Initialize transition prediction generator.
 
         Args:
-            params: Configuration providing timesteps, batch_size, n_frequencies, n_g_calculated, transition_sigma_base
+            params: Configuration providing timesteps, batch_size, n_frequencies, n_g, transition_sigma_base
             decay_rate: Temporal decay for OU dynamics (0-1, higher = slower evolution)
             noise_scale: Innovation noise scale for dynamics
             uncertainty_modulation: Amplitude of uncertainty variation (0-1)
@@ -77,7 +77,7 @@ class TransitionPredictionGenerator:
         T = self.params.n_timesteps
         B = self.params.batch_size
         n_f = self.params.n_frequencies
-        n_g = self.params.n_g_calculated
+        n_g = self.params.n_g
 
         g_gen_history = []
         sigma_gen_history = []
@@ -172,7 +172,7 @@ class ShinySignalGenerator:
         """Initialize shiny signal generator.
 
         Args:
-            params: Configuration providing timesteps, batch_size, n_frequencies, n_g_calculated, shiny_sigma_base
+            params: Configuration providing timesteps, batch_size, n_frequencies, n_g, shiny_sigma_base
             signal_period: Timesteps between signal appearances
             signal_duration: Duration of each signal appearance in timesteps
             signal_strength: Multiplicative strength of signal (relative to noise)
@@ -196,7 +196,7 @@ class ShinySignalGenerator:
         T = self.params.n_timesteps
         B = self.params.batch_size
         n_f = self.params.n_frequencies
-        n_g = self.params.n_g_calculated
+        n_g = self.params.n_g
 
         mu_shiny_history = []
         sigma_shiny_history = []
@@ -228,7 +228,7 @@ if __name__ == "__main__":
         n_timesteps: int = 100
         batch_size: int = 4
         n_frequencies: int = 3
-        n_g_calculated: List[int] = [10, 8, 6]
+        n_g: List[int] = [10, 8, 6]
         n_g_subsampled_combined: List[int] = [6, 5, 4]
         transition_sigma_base: float = 0.5
         memory_sigma_base: float = 0.3
@@ -244,7 +244,7 @@ if __name__ == "__main__":
     print(f"  Timesteps: {config.n_timesteps}")
     print(f"  Batch size: {config.batch_size}")
     print(f"  Frequencies: {config.n_frequencies}")
-    print(f"  Abstract dims: {config.n_g_calculated}")
+    print(f"  Abstract dims: {config.n_g}")
     print(f"  Subsampled dims: {config.n_g_subsampled_combined}")
 
     # Example 1: Transition predictions

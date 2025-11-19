@@ -11,10 +11,22 @@ associations between these grounded locations via Hebbian learning, enabling rec
 spatial relationships and predictive inference.
 """
 
+from typing import List, Protocol
+
 import torch
 from torch import Tensor
 
-from torch_tem.config.facets import AttractorParams
+
+class AttractorParams(Protocol):
+    """Minimal interface for AttractorDynamics.
+
+    Dependencies: kappa, i_attractor, p_retrieve_mask_inf,
+                  p_retrieve_mask_gen
+    Complexity: Low (4 parameters)
+    """
+
+    kappa: float
+    i_attractor: int
 
 
 class AttractorDynamics:
@@ -46,16 +58,21 @@ class AttractorDynamics:
         p_retrieve_mask_gen: Hierarchical masks for generative mode retrieval
     """
 
-    def __init__(self, params: AttractorParams):
+    def __init__(
+        self,
+        params: AttractorParams,
+        p_retrieve_mask_inf: List[Tensor],
+        p_retrieve_mask_gen: List[Tensor],
+    ):
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:
             params: Protocol providing attractor configuration (kappa, iterations, masks)
         """
         self.kappa = params.kappa
-        self.i_attractor = params.i_attractor_calculated
-        self.p_retrieve_mask_inf = params.p_retrieve_mask_inf_calculated
-        self.p_retrieve_mask_gen = params.p_retrieve_mask_gen_calculated
+        self.i_attractor = params.i_attractor
+        self.p_retrieve_mask_inf = p_retrieve_mask_inf
+        self.p_retrieve_mask_gen = p_retrieve_mask_gen
 
     def retrieve(self, p_query: Tensor, M: Tensor, for_inference: bool = False) -> Tensor:
         """Retrieve grounded location from memory via iterative attractor dynamics.
@@ -136,7 +153,7 @@ if __name__ == "__main__":
     attractor = AttractorDynamics(params)
 
     # Create a simple memory matrix (normally learned via Hebbian updates)
-    n_p_total = sum(params.n_p_calculated)
+    n_p_total = sum(params.n_p)
     batch_size = 4
 
     # Random memory matrix (in practice, this is learned during training)

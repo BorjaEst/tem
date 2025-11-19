@@ -28,7 +28,7 @@ from torch import Tensor
 class MemoryParams(Protocol):
     """Minimal interface for memory configuration."""
 
-    n_p_calculated: List[int]
+    n_p: List[int]
     """Place cell counts per frequency module."""
 
 
@@ -73,7 +73,7 @@ def plot_memory_matrices(
         >>> fig = plot_memory_matrices(
         ...     storage.M_gen,
         ...     storage.M_inf,
-        ...     n_p_per_freq=params.n_p_calculated,
+        ...     n_p_per_freq=params.n_p,
         ...     n_training_steps=100
         ... )
         >>> fig.savefig('memory_matrices.png')
@@ -313,7 +313,7 @@ def plot_hierarchical_masks(
         >>> attractor = AttractorDynamics(params)
         >>> fig = plot_hierarchical_masks(
         ...     attractor.p_retrieve_mask_inf,
-        ...     n_p_per_freq=params.n_p_calculated
+        ...     n_p_per_freq=params.n_p
         ... )
         >>> fig.savefig('hierarchical_masks.png')
     """

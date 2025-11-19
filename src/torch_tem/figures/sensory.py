@@ -409,7 +409,7 @@ def plot_sensory_projection(
         ...     x_list = [x_f_t[f].unsqueeze(0) for f in range(n_f)]  # [1, n_x_f[f]]
         ...     x_p_f = projection(x_list)  # List of [1, n_p[f]]
         ...     x_p_hist.append([x_p_f[f].squeeze(0) for f in range(n_f)])
-        >>> fig = plot_sensory_projection(x_p_hist, n_p_per_freq=params.n_p_calculated)
+        >>> fig = plot_sensory_projection(x_p_hist, n_p_per_freq=params.n_p)
     """
 
     # Helper to convert various inputs to a [T, sum(n_p)] numpy array

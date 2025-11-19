@@ -26,7 +26,7 @@ class AbstractInferenceConfig(Protocol):
 
     n_timesteps: int
     n_frequencies: int
-    n_g_calculated: List[int]
+    n_g: List[int]
 
 
 # ==============================================================================

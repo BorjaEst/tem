@@ -18,8 +18,8 @@ class PatternGeneratorParams(Protocol):
     for generating synthetic training patterns for memory networks.
     """
 
-    n_g_calculated: List[int]
-    n_p_calculated: List[int]
+    n_g: List[int]
+    n_p: List[int]
     n_x_c: int
 
 
@@ -45,14 +45,14 @@ class PlaceCellPatternGenerator:
         """Initialize place cell pattern generator.
 
         Args:
-            params: Configuration providing n_p_calculated
+            params: Configuration providing n_p
             sparsity: Target sparsity level (0.0-1.0, lower = sparser)
             noise_scale: Scale of Gaussian noise for variability
         """
         self.params = params
         self.sparsity = sparsity
         self.noise_scale = noise_scale
-        self.n_p_total = sum(params.n_p_calculated)
+        self.n_p_total = sum(params.n_p)
 
     def generate(self, batch_size: int) -> Tensor:
         """Generate batch of place cell activity patterns.
@@ -132,12 +132,12 @@ class GridCellPatternGenerator:
         """Initialize grid cell pattern generator.
 
         Args:
-            params: Configuration providing n_g_calculated
+            params: Configuration providing n_g
             noise_scale: Scale of Gaussian noise for variability
         """
         self.params = params
         self.noise_scale = noise_scale
-        self.n_f = len(params.n_g_calculated)
+        self.n_f = len(params.n_g)
 
     def generate(self, batch_size: int) -> List[Tensor]:
         """Generate batch of grid cell patterns (one per frequency).
@@ -155,7 +155,7 @@ class GridCellPatternGenerator:
 
         for f in range(self.n_f):
             # Generate random pattern for this frequency
-            pattern = torch.randn(batch_size, self.params.n_g_calculated[f])
+            pattern = torch.randn(batch_size, self.params.n_g[f])
 
             # Add noise
             pattern = pattern + self.noise_scale * torch.randn_like(pattern)
@@ -220,7 +220,7 @@ class PairedPatternGenerator:
         """Initialize paired pattern generator.
 
         Args:
-            params: Configuration providing n_g_calculated and n_p_calculated
+            params: Configuration providing n_g and n_p
             correlation: Correlation strength between g and p (0.0-1.0)
             place_sparsity: Sparsity for place cell patterns
             noise_scale: Noise scale for both pattern types
@@ -256,7 +256,7 @@ class PairedPatternGenerator:
             g_flat = torch.cat(g_patterns, dim=1)  # [B, sum(n_g)]
 
             # Project to place cell space (simple linear combination)
-            n_p_total = self.params.n_p_calculated
+            n_p_total = self.params.n_p
             if g_flat.shape[1] < sum(n_p_total):
                 # Repeat and truncate
                 g_expanded = g_flat.repeat(1, (sum(n_p_total) // g_flat.shape[1]) + 1)
@@ -306,8 +306,8 @@ if __name__ == "__main__":
 
     # Create minimal config implementing PatternGeneratorParams protocol
     class ExampleConfig(BaseModel):
-        n_g_calculated: List[int] = [30, 25, 20]
-        n_p_calculated: List[int] = [240, 200, 160]
+        n_g: List[int] = [30, 25, 20]
+        n_p: List[int] = [240, 200, 160]
         n_x_c: int = 8
 
     print("=" * 80)
@@ -319,8 +319,8 @@ if __name__ == "__main__":
     n_steps = 50
 
     print(f"\nConfiguration:")
-    print(f"  Grid dimensions: {config.n_g_calculated}")
-    print(f"  Place dimensions: {config.n_p_calculated}")
+    print(f"  Grid dimensions: {config.n_g}")
+    print(f"  Place dimensions: {config.n_p}")
     print(f"  Batch size: {batch_size}")
 
     # Example 1: Place cell patterns

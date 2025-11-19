@@ -12,13 +12,22 @@ GroundedLocationInference (g ⊗ x_c → p), and ObservationDecoder (reconstruct
 Reference: Whittington et al. (2020). Cell, 183(5), 1249-1263.
 """
 
-from typing import List
+from typing import List, Protocol
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..config.facets import EncoderParams
+
+class EncoderParams(Protocol):
+    """Minimal interface for SensoryEncoder.
+
+    Dependencies: n_x, n_x_c, two_hot_table
+    Complexity: Low (3 parameters)
+    """
+
+    n_x: int
+    n_x_c: int
 
 
 class SensoryEncoder(nn.Module):
@@ -33,22 +42,23 @@ class SensoryEncoder(nn.Module):
         two_hot_table: List[Tensor] of [n_x_c] codes with 2 active elements each
 
     Args:
-        params: EncoderParams with n_x, n_x_c, two_hot_table_calculated
+        params: EncoderParams with n_x, n_x_c, two_hot_table
+        two_hot_table: List[Tensor] of [n_x_c] codes with 2 active elements each
 
     Example:
         >>> params = SimpleNamespace(n_x=10, n_x_c=5,
-        ...     two_hot_table_calculated=create_two_hot_table(10, 5))
+        ...     two_hot_table=create_two_hot_table(10, 5))
         >>> encoder = SensoryEncoder(params)
         >>> x = torch.zeros(2, 10); x[0, 0] = 1.0; x[1, 5] = 1.0
         >>> x_c = encoder(x)  # Shape: [2, 5], each row has 2 active bits
     """
 
-    def __init__(self, params: EncoderParams):
+    def __init__(self, params: EncoderParams, two_hot_table: List[Tensor]):
         """Initialize encoder with two-hot lookup table."""
         super().__init__()
         self.n_x = params.n_x
         self.n_x_c = params.n_x_c
-        self.two_hot_table = params.two_hot_table_calculated
+        self.two_hot_table = two_hot_table
 
     def forward(self, x: Tensor) -> Tensor:
         """Encode one-hot observation [B, n_x] to two-hot [B, n_x_c].
@@ -90,7 +100,7 @@ if __name__ == "__main__":
 
     # Create encoder
     two_hot_table = create_two_hot_table(n_x=n_x, n_x_c=n_x_c)
-    params = types.SimpleNamespace(n_x=n_x, n_x_c=n_x_c, two_hot_table_calculated=two_hot_table)
+    params = types.SimpleNamespace(n_x=n_x, n_x_c=n_x_c, two_hot_table=two_hot_table)
     encoder = SensoryEncoder(params)
 
     # Show encoding table

@@ -134,7 +134,7 @@ if __name__ == "__main__":
 
     # Example: Generate observations from grounded locations
     batch_size = 4
-    p = [torch.randn(batch_size, n_p) for n_p in params.n_p_calculated]
+    p = [torch.randn(batch_size, n_p) for n_p in params.n_p]
 
     # Generate observation predictions
     x_probs, x_logits = generator.generate(p)

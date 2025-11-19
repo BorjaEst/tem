@@ -16,7 +16,7 @@ class SyntheticGridParams(Protocol):
     This protocol is compatible with Parameters instances from torch_tem.config.parameters.
     """
 
-    n_g_calculated: List[int]
+    n_g: List[int]
     f_initial_extended: List[float]
 
 
@@ -38,7 +38,7 @@ class SyntheticGridGenerator:
         """Initialize synthetic grid generator.
 
         Args:
-            params: Configuration providing n_g_calculated, f_initial_extended
+            params: Configuration providing n_g, f_initial_extended
             walk_length: Number of timesteps to generate
             batch_size: Batch size for generation
             time_scale: Time scaling factor for oscillations
@@ -53,8 +53,8 @@ class SyntheticGridGenerator:
         self.noise_scale = noise_scale
 
         # Validate matching lengths
-        if len(self.params.n_g_calculated) != len(self.params.f_initial_extended):
-            raise ValueError(f"n_g_calculated length ({len(self.params.n_g_calculated)}) must match " f"f_initial_extended length ({len(self.params.f_initial_extended)})")
+        if len(self.params.n_g) != len(self.params.f_initial_extended):
+            raise ValueError(f"n_g length ({len(self.params.n_g)}) must match " f"f_initial_extended length ({len(self.params.f_initial_extended)})")
 
     def generate(self) -> List[List[Tensor]]:
         """Generate synthetic grid cell activity patterns.
@@ -66,7 +66,7 @@ class SyntheticGridGenerator:
             List of T timesteps, each containing a list of n_f tensors [B, n_g[f]]
             This matches the standard convention: List[T] of List[n_f] of [B, n_g[f]]
         """
-        n_f = len(self.params.n_g_calculated)
+        n_f = len(self.params.n_g)
 
         # Generate patterns per frequency: [T, B, n_g[f]]
         g_per_freq = []
@@ -76,7 +76,7 @@ class SyntheticGridGenerator:
             t = t.unsqueeze(1).unsqueeze(2)  # [T, 1, 1]
 
             # Random phase offsets per cell
-            phases = torch.randn(1, self.batch_size, self.params.n_g_calculated[f]) * 2 * np.pi  # [1, B, n_g[f]]
+            phases = torch.randn(1, self.batch_size, self.params.n_g[f]) * 2 * np.pi  # [1, B, n_g[f]]
 
             # Combine primary and harmonic oscillations
             pattern = torch.sin(t + phases)
@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     # Create a minimal config implementing SyntheticGridParams protocol
     class ExampleConfig(BaseModel):
-        n_g_calculated: List[int] = [12, 10, 8]
+        n_g: List[int] = [12, 10, 8]
         f_initial_extended: List[float] = [0.1, 0.3, 0.9]
 
     print("=" * 80)
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     print(f"\nConfiguration:")
     print(f"  Steps: {walk_length}")
     print(f"  Frequencies: {config.f_initial_extended}")
-    print(f"  Grid dimensions: {config.n_g_calculated}")
+    print(f"  Grid dimensions: {config.n_g}")
     print(f"  Batch size: {batch_size}")
 
     # Generate patterns

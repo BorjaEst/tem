@@ -1,13 +1,24 @@
 """Observation decoder for torch_tem package."""
 
-from typing import List, Tuple
+from typing import List, Protocol, Tuple
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..config.facets import DecoderParams
 from .mlp import MLP
+
+
+class DecoderParams(Protocol):
+    """Minimal interface for ObservationDecoder.
+
+    Dependencies: n_x, n_x_c, n_x_f
+    Complexity: Low (3 parameters)
+    """
+
+    n_x: int
+    n_x_c: int
+    n_x_f: List[int]
 
 
 class ObservationDecoder(nn.Module):
@@ -26,7 +37,7 @@ class ObservationDecoder(nn.Module):
         super().__init__()
         self.n_x = params.n_x
         self.n_x_c = params.n_x_c
-        self.n_x_f = params.n_x_f_calculated
+        self.n_x_f = params.n_x_f
 
         # MLP for decoding: from compressed sensory to full observation
         # Only use first (highest frequency) module's grounded location

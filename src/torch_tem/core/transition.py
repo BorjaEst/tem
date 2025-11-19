@@ -1,13 +1,29 @@
 """Transition model for torch_tem package."""
 
-from typing import List, Tuple
+from typing import List, Protocol, Tuple
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..config.facets import TransitionParams
 from .mlp import MLP
+
+
+class TransitionParams(Protocol):
+    """Minimal interface for TransitionModel.
+
+    Dependencies: n_f, n_g, n_actions, g_connections,
+                  do_sample, g_init_std, g_mem_std, d_hidden_dim
+    Complexity: Medium (8 parameters)
+    """
+
+    n_actions: int
+    do_sample: bool
+    g_init_std: float
+    g_mem_std: float
+    d_hidden_dim: int
+    n_f: int
+    n_g: List[int]
 
 
 class TransitionModel(nn.Module):
@@ -20,18 +36,18 @@ class TransitionModel(nn.Module):
     - Uncertainty estimation (sigma_g)
     """
 
-    def __init__(self, params: TransitionParams):
+    def __init__(self, params: TransitionParams, g_connections: List[List[bool]]):
         """Initialize transition model.
 
         Args:
             params: Configuration satisfying TransitionParams protocol
         """
         super().__init__()
-        self.n_f = params.n_f_calculated
-        self.n_g = params.n_g_calculated
+        self.n_f = params.n_f
+        self.n_g = params.n_g
         self.n_actions = params.n_actions
-        self.g_connections = params.g_connections_calculated
         self.do_sample = params.do_sample
+        self.g_connections = g_connections
 
         # MLP for action-based transitions
         self.MLP_D_a = MLP(

@@ -32,14 +32,33 @@ This implementation follows the style/patterns of other TEM modules and
 is designed to be testable with simple parameter stubs.
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Protocol, Tuple
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.config.facets import AbstractInferenceParams
 from torch_tem.core.mlp import MLP
+
+
+class AbstractInferenceParams(Protocol):
+    """Minimal interface for AbstractLocationInference.
+
+    Dependencies: n_f, n_g, n_g_subsampled_combined,
+                  use_p_inf, g_init_std, g_mem_std
+    Complexity: Medium (6 parameters)
+    """
+
+    use_p_inf: bool  # Whether to use memory-based inference path
+    g_init_std: float  # Std for learnable initial g
+    g_mem_std: float  # Std for MLP hidden→output weights in g transition network
+    n_f: int  # Number of frequency modules
+    n_g: List[int]  # Abstract location dimensions per frequency
+
+    @property
+    def n_g_subsampled_combined(self) -> List[int]:
+        """Grid + OVC subsampled cell counts per module"""
+        ...
 
 
 class AbstractLocationInference(nn.Module):
@@ -60,8 +79,8 @@ class AbstractLocationInference(nn.Module):
             params: Configuration satisfying AbstractInferenceParams protocol
         """
         super().__init__()
-        self.n_f = params.n_f_calculated
-        self.n_g = params.n_g_calculated
+        self.n_f = params.n_f
+        self.n_g = params.n_g
         self.n_g_subsampled = list(params.n_g_subsampled_combined)
         self.use_p_inf = params.use_p_inf
 
@@ -193,8 +212,8 @@ if __name__ == "__main__":
 
     # Configuration stub with required fields
     params = types.SimpleNamespace(
-        n_f_calculated=2,
-        n_g_calculated=[10, 8],  # abstract dims per frequency
+        n_f=2,
+        n_g=[10, 8],  # abstract dims per frequency
         n_g_subsampled_combined=[6, 5],  # downsampled dims per frequency
         use_p_inf=True,  # enable memory path
         g_mem_std=0.01,  # small init for memory MLP
@@ -205,8 +224,8 @@ if __name__ == "__main__":
 
     # Synthetic inputs
     B = 3
-    n_f = params.n_f_calculated
-    n_g = params.n_g_calculated
+    n_f = params.n_f
+    n_g = params.n_g
     n_g_sub = params.n_g_subsampled_combined
 
     # Transition prediction and its uncertainty

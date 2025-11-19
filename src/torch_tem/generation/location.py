@@ -11,16 +11,27 @@ the hippocampus might retrieve specific place representations given entorhinal
 cortex grid cell input.
 """
 
-from typing import List
+from typing import List, Protocol
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.config.facets import LocationGeneratorParams
 from torch_tem.core.mlp import MLP
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
+
+
+class LocationGeneratorParams(Protocol):
+    """Minimal interface for LocationGenerator.
+
+    Dependencies: n_f, n_p, do_sample
+    Complexity: Low (3 parameters)
+    """
+
+    do_sample: bool
+    n_f: int
+    n_p: List[int]
 
 
 class LocationGenerator(nn.Module):
@@ -56,8 +67,8 @@ class LocationGenerator(nn.Module):
 
         Args:
             params: Configuration parameters providing:
-                - n_f_calculated: Number of frequency modules
-                - n_p_calculated: Place cell dimensions per frequency
+                - n_f: Number of frequency modules
+                - n_p: Place cell dimensions per frequency
                 - do_sample: Whether to enable stochastic sampling
             memory: Hebbian memory storage containing learned g-p associations
             attractor: Iterative attractor mechanism for memory retrieval
@@ -68,8 +79,8 @@ class LocationGenerator(nn.Module):
         """
         super().__init__()
         # Store dimensions from config
-        self.n_f = params.n_f_calculated
-        self.n_p = params.n_p_calculated
+        self.n_f = params.n_f
+        self.n_p = params.n_p
 
         # Store component references
         self.memory = memory
@@ -80,10 +91,10 @@ class LocationGenerator(nn.Module):
         # Uses tanh→exp activations to ensure positive standard deviations
         if self.do_sample:
             self.mlp_sigma_p = MLP(
-                in_dim=params.n_p_calculated,
-                out_dim=params.n_p_calculated,
+                in_dim=params.n_p,
+                out_dim=params.n_p,
                 activation=[torch.tanh, torch.exp],
-                hidden_dim=[2 * p for p in params.n_p_calculated],
+                hidden_dim=[2 * p for p in params.n_p],
             )
 
     def generate(self, g: List[Tensor], for_inference: bool = False) -> List[Tensor]:
@@ -211,7 +222,7 @@ if __name__ == "__main__":
     generator = LocationGenerator(params, memory, attractor)
 
     # Train memory with random patterns (simulating spatial experience)
-    n_p_total = sum(params.n_p_calculated)
+    n_p_total = sum(params.n_p)
     batch_size = 4
 
     for step in range(30):
@@ -219,7 +230,7 @@ if __name__ == "__main__":
         memory.update(p_patterns, p_patterns, eta=params.eta, lamb=params.lambda_)
 
     # Generate from abstract location query
-    g_test = [torch.randn(2, params.n_p_calculated[f]).softmax(dim=1) for f in range(params.n_f_calculated)]
+    g_test = [torch.randn(2, params.n_p[f]).softmax(dim=1) for f in range(params.n_f)]
 
     with torch.no_grad():
         p_generated = generator.generate(g_test, for_inference=False)
@@ -227,7 +238,7 @@ if __name__ == "__main__":
     print("Generated grounded locations:")
     print(f"  Input: {len(g_test)} frequency modules")
     print(f"  Output: {len(p_generated)} frequency modules")
-    print(f"  Dimensions: {params.n_p_calculated}")
+    print(f"  Dimensions: {params.n_p}")
     print(f"  Mean activation: {torch.cat(p_generated, dim=1).mean():.4f}")
 
     # Compare deterministic vs stochastic modes

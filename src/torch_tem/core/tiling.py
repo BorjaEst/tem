@@ -4,13 +4,22 @@ Transforms normalized sensory observations to p-space representation for Hebbian
 memory indexing. Part of the inference pipeline when use_p_inf=True.
 """
 
-from typing import List
+from typing import List, Protocol
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.config.facets import SensoryProjectionParams
+
+class SensoryProjectionParams(Protocol):
+    """Minimal interface for SensoryProjection.
+
+    Dependencies: n_f, n_x_f
+    Complexity: Low (2 parameters)
+    """
+
+    n_f: int
+    n_x_f: List[int]
 
 
 class SensoryProjection(nn.Module):
@@ -31,6 +40,7 @@ class SensoryProjection(nn.Module):
 
     Args:
         params: Configuration providing n_f, n_x_f, and W_tile matrices
+        W_tile: Fixed tiling matrices [n_x_f[f] x n_p[f] for f in n_f]
 
     Attributes:
         n_f: Number of frequency modules
@@ -43,12 +53,12 @@ class SensoryProjection(nn.Module):
         Output: List of [B, n_p[f]] tensors (one per frequency)
     """
 
-    def __init__(self, params: SensoryProjectionParams):
+    def __init__(self, params: SensoryProjectionParams, W_tile: List[Tensor]):
         """Initialize sensory projection with tiling matrices and gate weights."""
         super().__init__()
-        self.n_f = params.n_f_calculated
-        self.n_x_f = params.n_x_f_calculated
-        self.W_tile = params.W_tile_calculated
+        self.n_f = params.n_f
+        self.n_x_f = params.n_x_f
+        self.W_tile = W_tile
 
         # Initialize learnable gate weights (one per frequency module)
         self.w_p = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_f)])
@@ -83,31 +93,27 @@ if __name__ == "__main__":
     class ExampleConfig(BaseModel):
         """Minimal configuration for example."""
 
-        n_f: int = 3  # Number of frequency modules
-        n_x_f: list[int] = [10, 8, 6]  # Sensory dimensions per frequency
-        W_tile: list[Tensor] = [
-            torch.randn(10, 15),  # [n_x_f[0], n_p[0]]
-            torch.randn(8, 12),  # [n_x_f[1], n_p[1]]
-            torch.randn(6, 9),  # [n_x_f[2], n_p[2]]
-        ]
-
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
+        n_f: int = 3  # Number of frequency modules
+        n_x_f: list[int] = [10, 8, 6]  # Sensory dimensions per frequency
+
         @property
-        def n_f_calculated(self) -> int:
+        def n_f(self) -> int:
             return self.n_f
 
         @property
-        def n_x_f_calculated(self) -> list[int]:
+        def n_x_f(self) -> list[int]:
             return self.n_x_f
-
-        @property
-        def W_tile_calculated(self) -> list[Tensor]:
-            return self.W_tile
 
     # Initialize module
     config = ExampleConfig()
-    projection = SensoryProjection(config)
+    W_tile = [
+        torch.randn(10, 15),  # [n_x_f[0], n_p[0]]
+        torch.randn(8, 12),  # [n_x_f[1], n_p[1]]
+        torch.randn(6, 9),  # [n_x_f[2], n_p[2]]
+    ]
+    projection = SensoryProjection(config, W_tile)
 
     # Create example input (batch_size=2, temporally filtered sensory observations)
     x_normalized = [

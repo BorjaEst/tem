@@ -15,13 +15,23 @@ batched computation: p = (g @ W_repeat) ⊙ (x @ W_tile)
 Reference: Whittington et al. (2020). Cell, 183(5), 1249-1263.
 """
 
-from typing import List
+from typing import List, Protocol
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.config.facets import GroundedInferenceParams
+
+class GroundedInferenceParams(Protocol):
+    """Minimal interface for GroundedLocationInference.
+
+    Dependencies: n_f, n_p, n_x_c, W_repeat, W_tile
+    Complexity: Low (5 parameters)
+    """
+
+    n_x_c: int
+    n_f: int
+    n_p: List[int]
 
 
 class GroundedLocationInference(nn.Module):
@@ -39,29 +49,26 @@ class GroundedLocationInference(nn.Module):
         W_tile_{f}: Matrices for expanding x to outer product dimension
 
     Args:
-        params: GroundedInferenceParams with n_f_calculated, n_p_calculated,
-                W_repeat_calculated, W_tile_calculated
+        params: GroundedInferenceParams with n_f, n_p,
+                W_repeat, W_tile
 
     Example:
-        >>> params = SimpleNamespace(n_f_calculated=2, n_p_calculated=[30, 24],
-        ...     W_repeat_calculated=[torch.randn(10, 30), torch.randn(8, 24)],
-        ...     W_tile_calculated=[torch.randn(3, 30), torch.randn(3, 24)])
+        >>> params = SimpleNamespace(n_f=2, n_p=[30, 24],
+        ...     W_repeat=[torch.randn(10, 30), torch.randn(8, 24)],
+        ...     W_tile=[torch.randn(3, 30), torch.randn(3, 24)])
         >>> grounded = GroundedLocationInference(params)
         >>> g = [torch.randn(4, 10), torch.randn(4, 8)]  # batch=4
         >>> x = [torch.randn(4, 3), torch.randn(4, 3)]
         >>> p = grounded(g, x)  # Returns list of [4, 30] and [4, 24]
     """
 
-    def __init__(self, params: GroundedInferenceParams):
+    def __init__(self, params: GroundedInferenceParams, W_repeat: List[Tensor], W_tile: List[Tensor]):
         """Initialize with Kronecker product matrices for efficient outer product computation."""
         super().__init__()
-        self.n_f = params.n_f_calculated
-        self.n_p = params.n_p_calculated
+        self.n_f = params.n_f
+        self.n_p = params.n_p
 
         # Register W_repeat and W_tile as buffers (not trainable)
-        W_repeat = params.W_repeat_calculated
-        W_tile = params.W_tile_calculated
-
         for f in range(self.n_f):
             self.register_buffer(f"W_repeat_{f}", W_repeat[f])
             self.register_buffer(f"W_tile_{f}", W_tile[f])
@@ -141,7 +148,7 @@ if __name__ == "__main__":
         print(f"  Freq {f}: W_repeat {tuple(W_repeat[f].shape)}, W_tile {tuple(W_tile[f].shape)}")
 
     # Create inference module
-    params = types.SimpleNamespace(n_f_calculated=n_f, n_p_calculated=n_p, W_repeat_calculated=W_repeat, W_tile_calculated=W_tile)
+    params = types.SimpleNamespace(n_f=n_f, n_p=n_p, W_repeat=W_repeat, W_tile=W_tile)
 
     grounded = GroundedLocationInference(params)
     print(f"\nModule initialized with {n_f} frequency modules")

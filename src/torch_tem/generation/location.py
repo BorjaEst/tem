@@ -59,7 +59,7 @@ class LocationGenerator(nn.Module):
         mlp_sigma_p: MLP for uncertainty estimation (only if do_sample=True)
     """
 
-    def __init__(self, params: LocationGeneratorParams, memory: MemoryStorage, attractor: AttractorDynamics):
+    def __init__(self, params: LocationGeneratorParams, memory: MemoryStorage, attractor: AttractorDynamics, W_repeat: List[Tensor]):
         """Initialize location generator.
 
         Sets up the g→p generative pathway with memory-based retrieval and
@@ -72,6 +72,7 @@ class LocationGenerator(nn.Module):
                 - do_sample: Whether to enable stochastic sampling
             memory: Hebbian memory storage containing learned g-p associations
             attractor: Iterative attractor mechanism for memory retrieval
+            W_repeat: Matrices for projecting g to p dimensions, one per frequency module
 
         Note:
             The uncertainty MLP (mlp_sigma_p) is only created when do_sample=True,
@@ -86,6 +87,10 @@ class LocationGenerator(nn.Module):
         self.memory = memory
         self.attractor = attractor
         self.do_sample = params.do_sample
+
+        # Register W_repeat matrices as buffers (not trainable)
+        for f, W in enumerate(W_repeat):
+            self.register_buffer(f"W_repeat_{f}", W)
 
         # Create uncertainty estimation network (only for stochastic mode)
         # Uses tanh→exp activations to ensure positive standard deviations
@@ -122,16 +127,20 @@ class LocationGenerator(nn.Module):
             p = p_mu + σ(p_mu) * ε  if do_sample, else p_mu
             where ε ~ N(0, I) and σ is learned via MLP
         """
-        # Concatenate all frequency modules into single query vector
-        # Shape: [B, sum(n_g_subsampled)]
-        g_flat = torch.cat(g, dim=1)
+        # Project grid cells to place cell dimensions using W_repeat matrices
+        # This expands g from [B, sum(n_g_subsampled)] to [B, sum(n_p)]
+        p_query_list = []
+        for f in range(self.n_f):
+            W_repeat = getattr(self, f"W_repeat_{f}")
+            p_query_list.append(torch.matmul(g[f], W_repeat))
+        p_query = torch.cat(p_query_list, dim=1)
 
         # Select memory matrix based on network mode
         M = self.memory.get_memory(for_inference=for_inference)
 
         # Retrieve place cell activity via attractor dynamics
-        # This iteratively refines the retrieval using: p_t+1 = f(M @ p_t + g)
-        p_flat_mu = self.attractor.retrieve(g_flat, M, for_inference=for_inference)
+        # This iteratively refines the retrieval using: p_t+1 = f(M @ p_t + κ*p_t)
+        p_flat_mu = self.attractor.retrieve(p_query, M, for_inference=for_inference)
 
         # Split concatenated result back to per-frequency structure
         p_mu = self._split_to_frequencies(p_flat_mu)

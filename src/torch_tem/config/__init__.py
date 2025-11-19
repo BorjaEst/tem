@@ -1,15 +1,12 @@
 """Configuration system for torch_tem package.
 
 Provides:
-- Parameters: Composition of 4 focused config classes (backward compatible)
 - ArchitectureConfig: Model structure (dimensions, connectivity, memory)
 - TrainingConfig: Optimization schedule (LR, curricula, loss weights)
 - EnvironmentConfig: Task definition (action space, shiny objects)
 - InferenceConfig: Runtime behavior (sampling, memory dynamics)
-- Protocol facets: Narrow interface contracts for components
 """
 
-from torch_tem.config import facets
 from torch_tem.config.architecture import ArchitectureConfig
 from torch_tem.config.environment import EnvironmentConfig
 from torch_tem.config.inference import InferenceConfig
@@ -20,5 +17,4 @@ __all__ = [
     "TrainingConfig",
     "EnvironmentConfig",
     "InferenceConfig",
-    "facets",
 ]

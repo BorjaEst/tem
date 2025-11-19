@@ -45,6 +45,24 @@ class ArchitectureConfig(BaseModel):
     # ===================================================================================
     # DERIVED DIMENSIONS (computed properties)
     # ===================================================================================
+    # These are computed from base dimensions and define the full architecture.
+    # Order: OVC structure → module counts → neuron counts per module → attractor dynamics
+
+    @computed_field(description="Grid + OVC subsampled cell counts per module")
+    @property
+    def n_g_subsampled_combined(self) -> List[int]:
+        if not self.n_ovc:
+            return self.n_g_subsampled
+        if self.separate_ovc:
+            return self.n_g_subsampled + self.n_ovc
+        return [grid + ovc for grid, ovc in zip(self.n_g_subsampled, self.n_ovc)]
+
+    @computed_field(description="Number of hierarchical frequency modules that are OVC-only")
+    @property
+    def n_f_ovc(self) -> int:
+        if not self.n_ovc:
+            return 0
+        return len(self.n_ovc) if self.separate_ovc else 0
 
     @computed_field(description="Number of hierarchical frequency modules for standard grid cells")
     @property
@@ -55,6 +73,13 @@ class ArchitectureConfig(BaseModel):
     @property
     def n_f(self) -> int:
         return len(self.n_g_subsampled_combined)
+
+    @computed_field(description="Extended frequency list including OVC modules when they are separate")
+    @property
+    def f_initial_extended(self) -> List[float]:
+        if self.separate_ovc and self.n_ovc:
+            return self.f_initial + self.f_initial[0 : self.n_f_ovc]
+        return self.f_initial
 
     @computed_field(description="Entorhinal abstract location neurons per frequency (3 × n_g_subsampled_combined)")
     @property

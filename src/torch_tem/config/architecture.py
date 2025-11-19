@@ -103,13 +103,13 @@ class ArchitectureConfig(BaseModel):
 
     @computed_field(description="Per-frequency attractor iteration cap for the inference model")
     @property
-    def i_attractor_max_freq_inf(self) -> List[int]:
+    def max_freq_inf(self) -> List[int]:
         attractor = self.i_attractor
         return [attractor for _ in range(self.n_f)]
 
     @computed_field(description="Per-frequency attractor iteration cap for the generative model (OVC not early-stopped)")
     @property
-    def i_attractor_max_freq_gen(self) -> List[int]:
+    def max_freq_gen(self) -> List[int]:
         attractor = self.i_attractor
         n_f_g = self.n_f_g
         n_f_ovc = self.n_f_ovc

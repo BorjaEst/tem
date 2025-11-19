@@ -17,16 +17,16 @@ import torch
 from torch import Tensor
 
 
-class AttractorParams(Protocol):
-    """Minimal interface for AttractorDynamics.
+class ArchitectureParams(Protocol):
+    """Architecture parameters needed by AttractorDynamics."""
 
-    Dependencies: kappa, i_attractor, p_retrieve_mask_inf,
-                  p_retrieve_mask_gen
-    Complexity: Low (4 parameters)
-    """
+    i_attractor: int
+
+
+class InferenceParams(Protocol):
+    """Inference parameters needed by AttractorDynamics."""
 
     kappa: float
-    i_attractor: int
 
 
 class AttractorDynamics:
@@ -60,17 +60,21 @@ class AttractorDynamics:
 
     def __init__(
         self,
-        params: AttractorParams,
+        arch_params: ArchitectureParams,
+        inf_params: InferenceParams,
         p_retrieve_mask_inf: List[Tensor],
         p_retrieve_mask_gen: List[Tensor],
     ):
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:
-            params: Protocol providing attractor configuration (kappa, iterations, masks)
+            arch_params: Architecture configuration (i_attractor)
+            inf_params: Inference configuration (kappa)
+            p_retrieve_mask_inf: Hierarchical masks for inference retrieval
+            p_retrieve_mask_gen: Hierarchical masks for generative retrieval
         """
-        self.kappa = params.kappa
-        self.i_attractor = params.i_attractor
+        self.kappa = inf_params.kappa
+        self.i_attractor = arch_params.i_attractor
         self.p_retrieve_mask_inf = p_retrieve_mask_inf
         self.p_retrieve_mask_gen = p_retrieve_mask_gen
 

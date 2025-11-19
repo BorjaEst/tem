@@ -151,7 +151,7 @@ if __name__ == "__main__":
 
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)
-    g_downsampled = utils.create_g_downsample(model_config.n_g, model_config.n_g_subsampled_combined)
+    g_downsample = utils.create_g_downsample(model_config.n_g, model_config.n_g_subsampled_combined)
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_initial_extended)
     mask_inf, mask_gen = utils.create_p_retrieve_masks(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf, model_config.max_freq_gen)
     W_repeat = utils.create_W_repeat(model_config.n_g_subsampled_combined, model_config.n_x_f)
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     print(f"  ✓ SensoryProjection: x_f → ~x_t (W_tile transformation to p-space)")
 
     # Grounded location inference
-    projection = ProjectionHead(model_config, g_downsampled)
+    projection = ProjectionHead(model_config, g_downsample)
     grounded = GroundedLocationInference(model_config, W_repeat, W_tile)
     print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
     print(f"  ✓ GroundedLocationInference: g ⊗ x → p (includes W_tile internally)")
@@ -271,17 +271,23 @@ if __name__ == "__main__":
         # Step 6: Infer abstract location g from memory-retrieved p_x and generative g_t
         # Theory: g is inferred by precision-weighted fusion of:
         #   - g_gen (from transition/generative model)
-        #   - g_mem (from p_x via learned projection p→g)
+        #   - g_mem (from p_x via learned MLP projection p→g)
 
-        # For g_mem path: project p_x to abstract location space
-        # Theory: g_downsampled = p_x @ W_repeat^T (sum over sensory preferences)
-        g_mem_downsampled = [torch.matmul(p_x[f], W_repeat[f].t()) for f in range(model_config.n_f)]  # List[n_f] of [1, n_g_sub[f]]
+        # For g_mem path: First project p_x to downsampled grid cell space using W_repeat^T
+        # This "sums over sensory preferences" to collapse place cells to grid cells
+        p_x_downsampled = projection.inverse_project(p_x, W_repeat)  # List[n_f] of [1, n_g_sub[f]]
+
+        # Then AbstractLocationInference will:
+        # 1. Apply learned MLP: g_mem = f_mu_g_mem(p_x_downsampled)
+        # 2. Compute uncertainty based on memory quality
+        # 3. Fuse with g_gen via precision-weighted mean
 
         # Use g_t as generative prediction with moderate uncertainty
         sigma_gen = [torch.ones(1, n_g) * 0.5 for n_g in model_config.n_g]
 
         # Fuse generative and memory paths to infer abstract location
-        g_inf = abstract(g_t, sigma_gen, g_mem_downsampled, shiny_signals=None, p2g_scale_offset=0.5)  # Use default offset
+        # AbstractLocationInference internally applies MLP to p_x_downsampled
+        g_inf = abstract(g_t, sigma_gen, p_x_downsampled, shiny_signals=None, p2g_scale_offset=0.5)
 
         # Step 7: Transform and downsample inferred g for final grounded inference
         g_transformed = projection.transform(g_inf)
@@ -367,12 +373,14 @@ if __name__ == "__main__":
     print(f"Stage 3: Sensory input to hippocampus (~x_t) - {model_config.n_p}")
     print(f"  ↓ AttractorDynamics (M^T @ ~x_t)")
     print(f"Stage 4: Hippocampal patterns from sensory (p_x) - {model_config.n_p}")
-    print(f"  ↓ Projection to abstract (p_x @ W_repeat^T + g_gen fusion)")
-    print(f"Stage 5: Abstract location (g_inf) - {model_config.n_g}")
-    print(f"  ↓ ProjectionHead (transform + downsample)")
-    print(f"Stage 6: Downsampled abstract (g_sub) - {model_config.n_g_subsampled_combined}")
+    print(f"  ↓ Inverse projection (p_x @ W_repeat^T)")
+    print(f"Stage 5: Downsampled from memory (p_x_down) - {model_config.n_g_subsampled_combined}")
+    print(f"  ↓ AbstractLocationInference (MLP + precision-weighted fusion)")
+    print(f"Stage 6: Abstract location (g_inf) - {model_config.n_g}")
+    print(f"  ↓ ProjectionHead (Laplacian transform + downsample)")
+    print(f"Stage 7: Downsampled abstract (g_sub) - {model_config.n_g_subsampled_combined}")
     print(f"  ↓ GroundedLocationInference (g ⊗ x_f)")
-    print(f"Stage 7: Final grounded location (p) - {model_config.n_p}")
+    print(f"Stage 8: Final grounded location (p) - {model_config.n_p}")
     print(f"  ↓ MemoryStorage (Hebbian update)")
     print(f"Output: Memory-stored patterns (M) for next timestep")
     print("=" * 80)

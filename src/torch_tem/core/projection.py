@@ -93,6 +93,28 @@ class ProjectionHead(nn.Module):
         """
         return [torch.matmul(g[f], self.g_downsample[f].to(g[f].device)) for f in range(self.n_f)]
 
+    def inverse_project(self, p: List[Tensor], W_repeat: List[Tensor]) -> List[Tensor]:
+        """Project from grounded location (p) back to abstract location space (g).
+
+        This implements the reverse transformation p → g used in the memory inference path,
+        where hippocampal place cell patterns are projected back to grid cell space via
+        the transpose of the W_repeat matrix (sum over sensory preferences).
+
+        Args:
+            p: Grounded location [n_f] of [B, n_p[f]]
+            W_repeat: Matrices for reverse projection [n_f] of [n_g_subsampled[f], n_p[f]]
+
+        Returns:
+            g_downsampled: Projected abstract location [n_f] of [B, n_g_subsampled[f]]
+
+        Note:
+            This does NOT apply inverse Laplacian transform. The original TEM stores
+            transformed g in memory (via g2g_), so the retrieval from memory already
+            includes the transform implicitly. The transpose W_repeat^T provides the
+            geometric inverse (sum over sensory dimensions).
+        """
+        return [torch.matmul(p[f], W_repeat[f].t().to(p[f].device)) for f in range(self.n_f)]
+
     def forward(self, g: List[Tensor]) -> List[Tensor]:
         """Full forward pass: transform and downsample.
 

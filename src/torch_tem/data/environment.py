@@ -7,6 +7,8 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from scipy.sparse.csgraph import shortest_path
 
+from torch_tem.config import EnvironmentConfig
+
 
 class Action(BaseModel):
     """Action with transition probabilities.
@@ -171,7 +173,13 @@ class Environment:
         return True
 
     @classmethod
-    def from_grid(cls, width: int, height: int, observation_mode: str = "unique") -> "Environment":
+    def from_grid(
+        cls,
+        width: int,
+        height: int,
+        observation_mode: str = "unique",
+        env_config: Optional[EnvironmentConfig] = None,
+    ) -> "Environment":
         """Generate grid-world environment programmatically.
 
         Args:
@@ -181,6 +189,13 @@ class Environment:
                 - "unique": Each location has unique observation
                 - "tiled": Observations tile in 2x2 pattern
                 - "random": Random observation assignment
+            env_config: Optional ``EnvironmentConfig`` used to validate the
+                action-space settings (``n_actions`` and ``has_static_action``)
+                against the generated grid. The grid implementation encodes
+                four directional movement actions and no explicit static
+                action; if provided, ``env_config`` must therefore satisfy
+                ``has_static_action is True/False`` without contradicting that
+                structure and ``n_actions == 4``.
 
         Returns:
             Environment: Generated grid-world environment
@@ -205,6 +220,26 @@ class Environment:
 
         # 4 actions: up, right, down, left
         n_actions = 4
+
+        # Validate against optional EnvironmentConfig
+        if env_config is not None:
+            if env_config.n_actions != n_actions:
+                raise ValueError(
+                    f"EnvironmentConfig.n_actions={env_config.n_actions} does not match "
+                    f"grid action count {n_actions}. Adjust the config or use a custom "
+                    f"environment generator."
+                )
+
+            # The current grid implementation does not add an explicit static
+            # action. If the config requires one, surface a clear error to
+            # avoid silent mismatch.
+            if env_config.has_static_action:
+                raise ValueError(
+                    "Environment.from_grid currently implements only directional actions "
+                    "(no explicit static/stand-still action), but EnvironmentConfig "
+                    "has_static_action=True. Either disable has_static_action or "
+                    "provide a custom environment specification."
+                )
 
         # Build adjacency matrix and locations
         adjacency = [[0.0] * n_locations for _ in range(n_locations)]

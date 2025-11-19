@@ -7,6 +7,7 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
+from torch_tem.config import EnvironmentConfig
 from torch_tem.data.environment import Environment, Location
 
 
@@ -42,15 +43,23 @@ class WalkGenerator:
     Applies repeat-action bias for straight-line movement.
     """
 
-    def __init__(self, environment: Environment, repeat_bias: float = 2.0):
+    def __init__(self, environment: Environment, repeat_bias: float = 2.0, env_config: EnvironmentConfig | None = None):
         """Initialize walk generator.
 
         Args:
             environment: Environment to generate walks in
-            repeat_bias: Multiplicative bias for repeating previous action
+            repeat_bias: Multiplicative bias for repeating previous action. If
+                ``env_config`` is provided its ``explore_bias`` field is used
+                as the default value when ``repeat_bias`` is left at the
+                constructor default.
+            env_config: Optional ``EnvironmentConfig`` driving exploration
+                behaviour.
         """
         self.env = environment
-        self.repeat_bias = repeat_bias
+        if env_config is not None and repeat_bias == 2.0:
+            self.repeat_bias = env_config.explore_bias
+        else:
+            self.repeat_bias = repeat_bias
 
     def generate_walk(self, walk_length: int, policy: Optional[List[Location]] = None) -> Walk:
         """Generate single walk from optional policy.

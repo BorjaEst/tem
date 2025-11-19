@@ -6,6 +6,7 @@ from typing import List
 import numpy as np
 from pydantic import BaseModel, Field, model_validator
 
+from torch_tem.config import EnvironmentConfig
 from torch_tem.data.environment import Environment, Location
 from torch_tem.data.policies import PolicyGenerator
 
@@ -29,6 +30,25 @@ class ShinyConfig(BaseModel):
         if self.n > 1 and self.min_separation > 0.9:
             raise ValueError("Cannot place multiple shiny objects with min_separation > 0.9")
         return self
+
+    @classmethod
+    def from_environment_config(cls, env_config: EnvironmentConfig, min_separation: float = 0.3) -> "ShinyConfig":
+        """Create shiny configuration from an ``EnvironmentConfig``.
+
+        Args:
+            env_config: Global environment configuration.
+            min_separation: Minimum distance ratio between shiny objects.
+
+        Returns:
+            ShinyConfig: Constructed shiny configuration.
+        """
+        return cls(
+            n=env_config.shiny_n,
+            returns=env_config.shiny_returns,
+            gamma=env_config.shiny_gamma,
+            beta=env_config.shiny_beta,
+            min_separation=min_separation,
+        )
 
 
 class ShinyEnvironmentBuilder:

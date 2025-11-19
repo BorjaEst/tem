@@ -6,6 +6,7 @@ import lightning as L
 from torch import Tensor
 from torch.utils.data import DataLoader, IterableDataset
 
+from torch_tem.config import EnvironmentConfig
 from torch_tem.data.environment import Environment, Location
 from torch_tem.data.policies import PolicyGenerator
 from torch_tem.data.shiny import ShinyConfig, ShinyEnvironmentBuilder
@@ -55,6 +56,7 @@ class TEMDataModule(L.LightningDataModule):
         shiny_config: Optional[ShinyConfig] = None,
         randomize_observations: bool = False,
         repeat_bias: float = 2.0,
+        env_config: Optional[EnvironmentConfig] = None,
         curriculum_schedule: Optional[Callable[[int], Dict]] = None,
         num_workers: int = 0,
     ):
@@ -66,7 +68,11 @@ class TEMDataModule(L.LightningDataModule):
             walk_length: Steps per walk
             shiny_config: Optional shiny object configuration
             randomize_observations: Shuffle observation assignments
-            repeat_bias: Action repeat bias for straight-line movement
+            repeat_bias: Action repeat bias for straight-line movement. If
+                ``env_config`` is provided and ``repeat_bias`` is left at its
+                default, ``env_config.explore_bias`` is used instead.
+            env_config: Optional ``EnvironmentConfig`` controlling exploration
+                and shiny behaviour.
             curriculum_schedule: Optional epoch -> policy_params mapping
             num_workers: Number of dataloader workers
         """
@@ -76,6 +82,7 @@ class TEMDataModule(L.LightningDataModule):
         self.repeat_bias = repeat_bias
         self.curriculum_schedule = curriculum_schedule
         self.num_workers = num_workers
+        self.env_config = env_config
 
         # Build environment
         if isinstance(env_spec, Environment):
@@ -101,7 +108,10 @@ class TEMDataModule(L.LightningDataModule):
             self.shiny_policies = builder.generate_shiny_policies(self.shiny_locations)
 
         # Walk generator
-        self.walk_gen = WalkGenerator(self.env, repeat_bias)
+        if self.env_config is not None and self.repeat_bias == 2.0:
+            self.walk_gen = WalkGenerator(self.env, env_config=self.env_config)
+        else:
+            self.walk_gen = WalkGenerator(self.env, repeat_bias=self.repeat_bias)
 
     def setup(self, stage: Optional[str] = None):
         """Prepare data for training/validation/testing.

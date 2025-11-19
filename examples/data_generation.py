@@ -23,6 +23,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
+from torch_tem.config import EnvironmentConfig
 
 
 # ==============================================================================
@@ -71,6 +72,7 @@ class ExampleConfig(BaseSettings):
 if __name__ == "__main__":
     """Run the data generation example with visualizations."""
     config = ExampleConfig()
+    environment_config = EnvironmentConfig()
 
     # Load or create environment
     env = data.Environment.from_grid(config.grid_size, config.grid_size, config.observation_mode)
@@ -86,13 +88,13 @@ if __name__ == "__main__":
     }
 
     # Generate walks
-    walk_gen = data.WalkGenerator(env, repeat_bias=config.repeat_bias)
+    walk_gen = data.WalkGenerator(env, repeat_bias=environment_config.explore_bias)
     policy = policies[config.policy_type]
     walks = walk_gen.generate_walks(config.n_walks, config.walk_length, policy)
 
     # DataModule and batch generation
-    shiny_config = data.ShinyConfig(n=config.n_shiny, returns=config.shiny_returns, min_separation=config.shiny_separation, gamma=config.gamma, beta=config.beta)
-    dm = data.TEMDataModule(env_spec=env, batch_size=config.n_walks, walk_length=config.walk_length, shiny_config=shiny_config, repeat_bias=config.repeat_bias)
+    shiny_config = data.ShinyConfig.from_environment_config(environment_config, min_separation=config.shiny_separation)
+    dm = data.TEMDataModule(env_spec=env, batch_size=config.n_walks, walk_length=config.walk_length, shiny_config=shiny_config, env_config=environment_config)
     obs, actions, locations = dm.generate_batch()
 
     # Plot environment layout

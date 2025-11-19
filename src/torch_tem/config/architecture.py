@@ -2,7 +2,7 @@
 
 from typing import List
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 from torch import Tensor
 
 from torch_tem import utils
@@ -114,3 +114,27 @@ class ArchitectureConfig(BaseModel):
         n_f_g = self.n_f_g
         n_f_ovc = self.n_f_ovc
         return [attractor - freq_nr for freq_nr in range(n_f_g)] + [attractor for _ in range(n_f_ovc)]
+
+    # ===================================================================================
+    # VALIDATION
+    # ===================================================================================
+
+    @model_validator(mode="after")
+    def validate_frequency_configuration(self) -> "ArchitectureConfig":
+        """Validate that base frequency configuration is self-consistent.
+
+        Ensures that:
+        - ``f_initial`` has the same length as ``n_g_subsampled`` (the grid
+          frequency modules), since these jointly define the base modules.
+        - When OVCs are separate, the extended frequency list
+          (``f_initial_extended``) matches the total number of modules
+          (``n_f``).
+        """
+
+        if len(self.f_initial) != len(self.n_g_subsampled):
+            raise ValueError("Length of f_initial must match length of n_g_subsampled; " f"got {len(self.f_initial)} frequencies and " f"{len(self.n_g_subsampled)} grid modules.")
+
+        if self.separate_ovc and self.n_ovc and len(self.f_initial_extended) != self.n_f:
+            raise ValueError("When separate_ovc is True and n_ovc is non-empty, the " "extended frequency list (f_initial_extended) must have " "one entry per module (n_f).")
+
+        return self

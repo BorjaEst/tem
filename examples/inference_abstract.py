@@ -139,7 +139,7 @@ if __name__ == "__main__":
     config = ExampleConfig()
 
     # Create config objects with proper field mapping
-    environment_config = EnvironmentConfig()
+    environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
     inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa, use_p_inf=config.use_p_inf)
     model_config = ArchitectureConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
 
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     # PHASE 1: Environment and Walk Generation
     # =========================================================================
     print("Phase 1: Generating walk trajectory...")
-    env = data.Environment.from_grid(config.grid_size, config.grid_size, config.observation_mode)
+    env = data.Environment(environment_config)
     env.validate()
 
     policy_gen = data.PolicyGenerator(env)

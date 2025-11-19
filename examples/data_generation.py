@@ -72,10 +72,8 @@ class ExampleConfig(BaseSettings):
 if __name__ == "__main__":
     """Run the data generation example with visualizations."""
     config = ExampleConfig()
-    environment_config = EnvironmentConfig()
-
-    # Load or create environment
-    env = data.Environment.from_grid(config.grid_size, config.grid_size, config.observation_mode)
+    environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
+    env = data.Environment(environment_config)
     env.validate()
 
     # Create policies for comparison
@@ -94,7 +92,7 @@ if __name__ == "__main__":
 
     # DataModule and batch generation
     shiny_config = data.ShinyConfig.from_environment_config(environment_config, min_separation=config.shiny_separation)
-    dm = data.TEMDataModule(env_spec=env, batch_size=config.n_walks, walk_length=config.walk_length, shiny_config=shiny_config, env_config=environment_config)
+    dm = data.TEMDataModule(env=env, batch_size=config.n_walks, walk_length=config.walk_length, shiny_config=shiny_config, env_config=environment_config)
     obs, actions, locations = dm.generate_batch()
 
     # Plot environment layout

@@ -47,7 +47,7 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, utils
-from torch_tem.config import ArchitectureConfig
+from torch_tem.config import ArchitectureConfig, EnvironmentConfig
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.inference.sensory import SensoryProcessor
 
@@ -73,6 +73,7 @@ class ExampleConfig(BaseSettings):
 
     # Architecture configuration
     f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
+    n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 8, 6], description="Subsampled grid cells per frequency module")
     n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
 
     # Output
@@ -101,7 +102,8 @@ if __name__ == "__main__":
     config = ExampleConfig()
 
     # Create model config using ArchitectureConfig
-    model_config = ArchitectureConfig(n_x=config.n_x, n_x_c=config.n_x_c, f_initial=config.f_initial)
+    environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
+    model_config = ArchitectureConfig(n_x=config.n_x, n_x_c=config.n_x_c, f_initial=config.f_initial, n_g_subsampled=config.n_g_subsampled)
 
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)
@@ -120,7 +122,7 @@ if __name__ == "__main__":
     # PHASE 1: Environment and Walk Generation
     # =========================================================================
     print("Phase 1: Generating walk trajectory...")
-    env = data.Environment.from_grid(config.grid_size, config.grid_size, config.observation_mode)
+    env = data.Environment(environment_config)
     env.validate()
 
     policy_gen = data.PolicyGenerator(env)

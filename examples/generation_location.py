@@ -22,6 +22,7 @@ Usage:
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Literal
 
 import matplotlib.pyplot as plt
@@ -116,8 +117,6 @@ if __name__ == "__main__":
     attractor = AttractorDynamics(model_config, inference_config, mask_inf, mask_gen)
 
     # Create params object for LocationGenerator with required protocol fields
-    from types import SimpleNamespace
-
     gen_params = SimpleNamespace(do_sample=config.do_sample, n_f=model_config.n_f, n_p=model_config.n_p)
     generator = LocationGenerator(gen_params, storage, attractor, W_repeat)
 

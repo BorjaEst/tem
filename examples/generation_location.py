@@ -193,7 +193,7 @@ if __name__ == "__main__":
             retrievals.append(p_retrieved)
 
             # Compute total activity
-            p_flat = torch.cat(p_retrieved, dim=1)
+            p_flat = utils.concatenate_frequencies(p_retrieved)
             activity = p_flat.sum().item()
             sparsity = (p_flat > 0.1).float().mean().item()
 
@@ -266,7 +266,7 @@ if __name__ == "__main__":
 
     # Plot 2: Retrieval patterns
     # Flatten retrievals for visualization
-    retrievals_flat = [torch.cat(p_list, dim=1).squeeze(0) for p_list in retrievals]
+    retrievals_flat = [utils.concatenate_frequencies(p_list).squeeze(0) for p_list in retrievals]
     queries_flat = [torch.cat([g.squeeze(0) for g in g_list], dim=0) for g_list in test_queries]
 
     # Create visualization figure
@@ -320,7 +320,7 @@ if __name__ == "__main__":
             for sample_idx in range(3):
                 # Deterministic
                 p_det = generator.generate(test_queries[0], for_inference=False)
-                p_det_flat = torch.cat(p_det, dim=1).squeeze(0)
+                p_det_flat = utils.concatenate_frequencies(p_det).squeeze(0)
                 axes[0, sample_idx].bar(range(len(p_det_flat)), p_det_flat.cpu().numpy())
                 axes[0, sample_idx].set_title(f"Deterministic - Sample {sample_idx+1}")
                 axes[0, sample_idx].set_ylim(0, p_det_flat.max().item() * 1.2)
@@ -328,7 +328,7 @@ if __name__ == "__main__":
                 # Stochastic
                 gen_stoch = LocationGenerator(gen_params, storage, attractor, W_repeat)
                 p_stoch = gen_stoch.generate(test_queries[0], for_inference=False)
-                p_stoch_flat = torch.cat(p_stoch, dim=1).squeeze(0)
+                p_stoch_flat = utils.concatenate_frequencies(p_stoch).squeeze(0)
                 axes[1, sample_idx].bar(range(len(p_stoch_flat)), p_stoch_flat.cpu().numpy())
                 axes[1, sample_idx].set_title(f"Stochastic - Sample {sample_idx+1}")
                 axes[1, sample_idx].set_ylim(0, p_stoch_flat.max().item() * 1.2)

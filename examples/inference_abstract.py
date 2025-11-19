@@ -260,13 +260,8 @@ if __name__ == "__main__":
         M_inf = storage.get_memory(for_inference=True)
         p_x_concat = attractor.retrieve(x_proj_concat, M_inf, for_inference=True)  # [1, sum(n_p)]
 
-        # Split retrieved patterns back to per-frequency lists
-        p_x = []
-        start_idx = 0
-        for f in range(model_config.n_f):
-            end_idx = start_idx + model_config.n_p[f]
-            p_x.append(p_x_concat[:, start_idx:end_idx])  # [1, n_p[f]]
-            start_idx = end_idx
+        # Split retrieved patterns back to per-frequency lists for hierarchical processing
+        p_x = utils.split_to_frequencies(p_x_concat, model_config.n_p)  # List[n_f] of [1, n_p[f]]
 
         # Step 5: Get synthetic grid cells at time t (for generative path)
         g_t = g_history[t]  # List[n_f] of [1, n_g[f]]

@@ -114,11 +114,6 @@ class ExampleConfig(BaseSettings):
     n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
     n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
 
-    @computed_field(description="Per-frequency attractor iteration cap for the generative model (OVC not early-stopped)")
-    @property
-    def n_x(self) -> List[int]:
-        return self.grid_size * self.grid_size
-
     # Memory configuration
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
     lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
@@ -147,7 +142,7 @@ if __name__ == "__main__":
     # Create config objects with proper field mapping
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
     inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
-    model_config = ArchitectureConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ArchitectureConfig(n_x=environment_config.n_locations, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
 
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)
@@ -257,13 +252,8 @@ if __name__ == "__main__":
         M_inf = storage.get_memory(for_inference=True)
         p_x_concat = attractor.retrieve(x_proj_concat, M_inf, for_inference=True)  # [1, sum(n_p)]
 
-        # Split retrieved patterns back to per-frequency lists
-        p_x = []
-        start_idx = 0
-        for f in range(model_config.n_f):
-            end_idx = start_idx + model_config.n_p[f]
-            p_x.append(p_x_concat[:, start_idx:end_idx])  # [1, n_p[f]]
-            start_idx = end_idx
+        # Split retrieved patterns back to per-frequency lists for hierarchical processing
+        p_x = utils.split_to_frequencies(p_x_concat, model_config.n_p)  # List[n_f] of [1, n_p[f]]
 
         # Step 5: Get synthetic grid cells at time t (for generative path)
         g_t = g_history[t]  # List[n_f] of [1, n_g[f]]
@@ -295,7 +285,7 @@ if __name__ == "__main__":
 
         # Step 8: Compute final grounded location via outer product g ⊗ x
         p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
-        p_concat = torch.cat(p_t, dim=1)  # [1, sum(n_p)]
+        p_concat = utils.concatenate_frequencies(p_t)  # [1, sum(n_p)]
 
         # Step 9: Update memory with Hebbian learning
         storage.update(p_concat, p_concat, eta=config.eta, lamb=config.lambda_)

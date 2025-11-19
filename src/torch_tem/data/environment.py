@@ -1,13 +1,10 @@
 """Graph-world environment structure and validation."""
 
-import json
-from typing import Dict, List, Optional, Union
+from typing import List, Literal, Optional, Protocol
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from scipy.sparse.csgraph import shortest_path
-
-from torch_tem.config import EnvironmentConfig
 
 
 class Action(BaseModel):
@@ -54,6 +51,27 @@ class Location(BaseModel):
         return v
 
 
+class EnvironmentParams(Protocol):
+    """Protocol for objects that can parameterize an ``Environment``.
+
+    ``EnvironmentConfig`` in ``torch_tem.config.environment`` is the primary
+    implementation of this protocol in practice.
+    """
+
+    width: int
+    height: int
+    observation_mode: Literal["unique", "tiled", "random"]
+    n_actions: int
+
+    @property
+    def n_locations(self) -> int:  # pragma: no cover - simple protocol
+        ...
+
+    @property
+    def n_observations(self) -> int:  # pragma: no cover - simple protocol
+        ...
+
+
 class Environment:
     """Graph-world environment with locations and transitions.
 
@@ -68,46 +86,91 @@ class Environment:
         locations: List of Location Pydantic models
     """
 
-    def __init__(self, env_spec: Union[str, Dict], randomize_observations: bool = False):
-        """Load environment from JSON file or dictionary.
+    def __init__(self, params: EnvironmentParams, randomize_observations: bool = False):
+        """Construct environment from validated ``EnvironmentParams``.
 
         Args:
-            env_spec: Path to JSON file or environment dictionary with keys:
-                     'adjacency', 'locations', 'n_actions', 'n_locations', 'n_observations'
-            randomize_observations: Shuffle observation assignments after loading
-
-        Raises:
-            ValueError: If environment specification is invalid
-            FileNotFoundError: If JSON file not found
-            json.JSONDecodeError: If JSON is malformed
+            params: Environment configuration implementing ``EnvironmentParams``.
+            randomize_observations: Shuffle observation assignments after loading.
         """
-        # Load from file if string path provided
-        if isinstance(env_spec, str):
-            with open(env_spec, "r") as f:
-                env_dict = json.load(f)
-        else:
-            env_dict = env_spec
+        # Derive basic attributes from high-level params
+        width = params.width
+        height = params.height
+        n_locations = params.n_locations
+        n_observations = params.n_observations
 
-        # Validate required fields
-        required_fields = ["adjacency", "locations", "n_actions", "n_locations", "n_observations"]
-        missing = [f for f in required_fields if f not in env_dict]
-        if missing:
-            raise ValueError(f"Environment specification missing required fields: {missing}")
+        # Generate observations based on mode (mirrors legacy grid helper)
+        if params.observation_mode == "unique":
+            observations = list(range(n_locations))
+        elif params.observation_mode == "tiled":
+            observations = [(i % 2) * 2 + (j % 2) for i in range(height) for j in range(width)]
+        elif params.observation_mode == "random":
+            observations = [int(np.random.randint(n_observations)) for _ in range(n_locations)]
+        else:
+            raise ValueError(f"Invalid observation_mode: {params.observation_mode}")
+
+        # 4 directional actions: up, right, down, left
+        n_actions = params.n_actions
+        adjacency: List[List[float]] = [[0.0] * n_locations for _ in range(n_locations)]
+        locations: List[Location] = []
+
+        for loc_id in range(n_locations):
+            i = loc_id // width  # row
+            j = loc_id % width  # column
+
+            actions: List[Action] = []
+
+            # Up (action 0)
+            if i > 0:
+                next_loc = (i - 1) * width + j
+                adjacency[loc_id][next_loc] = 1.0
+                transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
+            else:
+                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
+            actions.append(Action(id=0, probability=0.25, transition=transition))
+
+            # Right (action 1)
+            if j < width - 1:
+                next_loc = i * width + (j + 1)
+                adjacency[loc_id][next_loc] = 1.0
+                transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
+            else:
+                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
+            actions.append(Action(id=1, probability=0.25, transition=transition))
+
+            # Down (action 2)
+            if i < height - 1:
+                next_loc = (i + 1) * width + j
+                adjacency[loc_id][next_loc] = 1.0
+                transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
+            else:
+                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
+            actions.append(Action(id=2, probability=0.25, transition=transition))
+
+            # Left (action 3)
+            if j > 0:
+                next_loc = i * width + (j - 1)
+                adjacency[loc_id][next_loc] = 1.0
+                transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
+            else:
+                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
+            actions.append(Action(id=3, probability=0.25, transition=transition))
+
+            locations.append(
+                Location(
+                    id=loc_id,
+                    observation=observations[loc_id],
+                    actions=actions,
+                    shiny=None,
+                )
+            )
 
         # Store basic attributes
-        self.n_locations = env_dict["n_locations"]
-        self.n_observations = env_dict["n_observations"]
-        self.n_actions = env_dict["n_actions"]
-        self.adjacency = env_dict["adjacency"]
-
-        # Convert locations to Pydantic models
-        self.locations: List[Location] = []
-        for loc_dict in env_dict["locations"]:
-            # Convert actions to Action models
-            actions = [Action(**action) for action in loc_dict["actions"]]
-            # Create Location model
-            location = Location(id=loc_dict["id"], observation=loc_dict["observation"], actions=actions, shiny=loc_dict.get("shiny", None))
-            self.locations.append(location)
+        self.n_locations = n_locations
+        self.n_observations = n_observations
+        self.n_actions = n_actions
+        self.adjacency = adjacency
+        self.locations = locations
 
         # Randomize observations if requested
         if randomize_observations:
@@ -171,124 +234,3 @@ class Environment:
                     raise ValueError(f"Location {loc.id} action {action.id} transition has " f"{len(action.transition)} elements, expected {self.n_locations}")
 
         return True
-
-    @classmethod
-    def from_grid(
-        cls,
-        width: int,
-        height: int,
-        observation_mode: str = "unique",
-        env_config: Optional[EnvironmentConfig] = None,
-    ) -> "Environment":
-        """Generate grid-world environment programmatically.
-
-        Args:
-            width: Grid width
-            height: Grid height
-            observation_mode:
-                - "unique": Each location has unique observation
-                - "tiled": Observations tile in 2x2 pattern
-                - "random": Random observation assignment
-            env_config: Optional ``EnvironmentConfig`` used to validate the
-                action-space settings (``n_actions`` and ``has_static_action``)
-                against the generated grid. The grid implementation encodes
-                four directional movement actions and no explicit static
-                action; if provided, ``env_config`` must therefore satisfy
-                ``has_static_action is True/False`` without contradicting that
-                structure and ``n_actions == 4``.
-
-        Returns:
-            Environment: Generated grid-world environment
-
-        Raises:
-            ValueError: If observation_mode is invalid
-        """
-        n_locations = width * height
-
-        # Generate observations based on mode
-        if observation_mode == "unique":
-            n_observations = n_locations
-            observations = list(range(n_locations))
-        elif observation_mode == "tiled":
-            n_observations = 4
-            observations = [(i % 2) * 2 + (j % 2) for i in range(height) for j in range(width)]
-        elif observation_mode == "random":
-            n_observations = max(4, n_locations // 4)
-            observations = [np.random.randint(n_observations) for _ in range(n_locations)]
-        else:
-            raise ValueError(f"Invalid observation_mode: {observation_mode}")
-
-        # 4 actions: up, right, down, left
-        n_actions = 4
-
-        # Validate against optional EnvironmentConfig
-        if env_config is not None:
-            if env_config.n_actions != n_actions:
-                raise ValueError(
-                    f"EnvironmentConfig.n_actions={env_config.n_actions} does not match "
-                    f"grid action count {n_actions}. Adjust the config or use a custom "
-                    f"environment generator."
-                )
-
-            # The current grid implementation does not add an explicit static
-            # action. If the config requires one, surface a clear error to
-            # avoid silent mismatch.
-            if env_config.has_static_action:
-                raise ValueError(
-                    "Environment.from_grid currently implements only directional actions "
-                    "(no explicit static/stand-still action), but EnvironmentConfig "
-                    "has_static_action=True. Either disable has_static_action or "
-                    "provide a custom environment specification."
-                )
-
-        # Build adjacency matrix and locations
-        adjacency = [[0.0] * n_locations for _ in range(n_locations)]
-        locations = []
-
-        for loc_id in range(n_locations):
-            i = loc_id // width  # row
-            j = loc_id % width  # column
-
-            actions = []
-
-            # Up (action 0)
-            if i > 0:
-                next_loc = (i - 1) * width + j
-                adjacency[loc_id][next_loc] = 1.0
-                transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
-            else:
-                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append({"id": 0, "probability": 0.25, "transition": transition})
-
-            # Right (action 1)
-            if j < width - 1:
-                next_loc = i * width + (j + 1)
-                adjacency[loc_id][next_loc] = 1.0
-                transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
-            else:
-                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append({"id": 1, "probability": 0.25, "transition": transition})
-
-            # Down (action 2)
-            if i < height - 1:
-                next_loc = (i + 1) * width + j
-                adjacency[loc_id][next_loc] = 1.0
-                transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
-            else:
-                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append({"id": 2, "probability": 0.25, "transition": transition})
-
-            # Left (action 3)
-            if j > 0:
-                next_loc = i * width + (j - 1)
-                adjacency[loc_id][next_loc] = 1.0
-                transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
-            else:
-                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append({"id": 3, "probability": 0.25, "transition": transition})
-
-            locations.append({"id": loc_id, "observation": observations[loc_id], "actions": actions})
-
-        env_dict = {"n_locations": n_locations, "n_observations": n_observations, "n_actions": n_actions, "adjacency": adjacency, "locations": locations}
-
-        return cls(env_dict)

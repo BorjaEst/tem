@@ -1,6 +1,6 @@
 """Environment configuration for the Temporal Experience Model (TEM)."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -12,6 +12,14 @@ class EnvironmentConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
+
+    # ===================================================================================
+    # GEOMETRY / GRID LAYOUT
+    # ===================================================================================
+
+    width: int = Field(default=5, ge=1, description="Grid width (number of columns)")
+    height: int = Field(default=5, ge=1, description="Grid height (number of rows)")
+    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation assignment strategy; mirrors Environment.from_grid observation_mode")
 
     # ===================================================================================
     # ACTION SPACE
@@ -36,3 +44,22 @@ class EnvironmentConfig(BaseModel):
     @property
     def shiny_dict(self) -> dict[str, Any]:
         return {"gamma": self.shiny_gamma, "beta": self.shiny_beta, "n": self.shiny_n, "returns": self.shiny_returns}
+
+    # ===================================================================================
+    # DERIVED GEOMETRY (for wiring into data/architecture)
+    # ===================================================================================
+
+    @computed_field(description="Total number of discrete locations in the grid")
+    @property
+    def n_locations(self) -> int:
+        return self.width * self.height
+
+    @computed_field(description="Number of unique sensory observations implied by geometry and observation_mode")
+    @property
+    def n_observations(self) -> int:
+        if self.observation_mode == "unique":
+            return self.n_locations
+        if self.observation_mode == "tiled":
+            return 4
+        # "random": mirror Environment.from_grid behaviour
+        return max(4, self.n_locations // 4)

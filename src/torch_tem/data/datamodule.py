@@ -1,13 +1,13 @@
 """PyTorch Lightning DataModule for TEM training."""
 
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple
 
 import lightning as L
 from torch import Tensor
 from torch.utils.data import DataLoader, IterableDataset
 
 from torch_tem.config import EnvironmentConfig
-from torch_tem.data.environment import Environment, Location
+from torch_tem.data.environment import Environment, EnvironmentParams, Location
 from torch_tem.data.policies import PolicyGenerator
 from torch_tem.data.shiny import ShinyConfig, ShinyEnvironmentBuilder
 from torch_tem.data.walks import Walk, WalkGenerator
@@ -50,7 +50,7 @@ class TEMDataModule(L.LightningDataModule):
 
     def __init__(
         self,
-        env_spec: Union[str, Dict, Environment],
+        env: Environment,
         batch_size: int,
         walk_length: int,
         shiny_config: Optional[ShinyConfig] = None,
@@ -63,7 +63,7 @@ class TEMDataModule(L.LightningDataModule):
         """Initialize TEM DataModule.
 
         Args:
-            env_spec: Environment specification (path, dict, or Environment instance)
+            env: Pre-built ``Environment`` instance
             batch_size: Walks per batch
             walk_length: Steps per walk
             shiny_config: Optional shiny object configuration
@@ -77,18 +77,13 @@ class TEMDataModule(L.LightningDataModule):
             num_workers: Number of dataloader workers
         """
         super().__init__()
+        self.env = env
         self.batch_size = batch_size
         self.walk_length = walk_length
         self.repeat_bias = repeat_bias
         self.curriculum_schedule = curriculum_schedule
         self.num_workers = num_workers
         self.env_config = env_config
-
-        # Build environment
-        if isinstance(env_spec, Environment):
-            self.env = env_spec
-        else:
-            self.env = Environment(env_spec, randomize_observations)
 
         # Validate environment
         self.env.validate()

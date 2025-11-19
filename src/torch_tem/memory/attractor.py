@@ -17,7 +17,7 @@ import torch
 from torch import Tensor
 
 
-class ArchitectureParams(Protocol):
+class ModelParams(Protocol):
     """Architecture parameters needed by AttractorDynamics."""
 
     i_attractor: int
@@ -60,7 +60,7 @@ class AttractorDynamics:
 
     def __init__(
         self,
-        arch_params: ArchitectureParams,
+        model_params: ModelParams,
         inf_params: InferenceParams,
         p_retrieve_mask_inf: List[Tensor],
         p_retrieve_mask_gen: List[Tensor],
@@ -68,13 +68,13 @@ class AttractorDynamics:
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:
-            arch_params: Architecture configuration (i_attractor)
+            model_params: Architecture configuration (i_attractor)
             inf_params: Inference configuration (kappa)
             p_retrieve_mask_inf: Hierarchical masks for inference retrieval
             p_retrieve_mask_gen: Hierarchical masks for generative retrieval
         """
         self.kappa = inf_params.kappa
-        self.i_attractor = arch_params.i_attractor
+        self.i_attractor = model_params.i_attractor
         self.p_retrieve_mask_inf = p_retrieve_mask_inf
         self.p_retrieve_mask_gen = p_retrieve_mask_gen
 

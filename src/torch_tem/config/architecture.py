@@ -8,7 +8,7 @@ from torch import Tensor
 from torch_tem import utils
 
 
-class ArchitectureConfig(BaseModel):
+class ModelConfig(BaseModel):
     """Neural architecture configuration: dimensions, modules, connectivity, and memory structure.
 
     This defines the static structure of the model that would be serialized with trained weights.
@@ -120,7 +120,7 @@ class ArchitectureConfig(BaseModel):
     # ===================================================================================
 
     @model_validator(mode="after")
-    def validate_frequency_configuration(self) -> "ArchitectureConfig":
+    def validate_frequency_configuration(self) -> "ModelConfig":
         """Validate that base frequency configuration is self-consistent.
 
         Ensures that:

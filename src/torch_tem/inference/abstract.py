@@ -41,7 +41,7 @@ from torch import Tensor
 from torch_tem.core.mlp import MLP
 
 
-class ArchitectureParams(Protocol):
+class ModelParams(Protocol):
     """Architecture parameters needed by AbstractLocationInference."""
 
     n_f: int
@@ -68,29 +68,29 @@ class AbstractLocationInference(nn.Module):
     Combines via precision-weighted mean.
     """
 
-    def __init__(self, arch_params: ArchitectureParams, inf_params: InferenceParams):
+    def __init__(self, model_params: ModelParams, inf_params: InferenceParams):
         """Initialize abstract location inference.
 
         Args:
-            arch_params: Architecture configuration (n_f, n_g, n_g_subsampled_combined, g_init_std, g_mem_std)
+            model_params: Architecture configuration (n_f, n_g, n_g_subsampled_combined, g_init_std, g_mem_std)
             inf_params: Inference configuration (use_p_inf)
         """
         super().__init__()
-        self.n_f = arch_params.n_f
-        self.n_g = arch_params.n_g
-        self.n_g_subsampled = list(arch_params.n_g_subsampled_combined)
+        self.n_f = model_params.n_f
+        self.n_g = model_params.n_g
+        self.n_g_subsampled = list(model_params.n_g_subsampled_combined)
         self.use_p_inf = inf_params.use_p_inf
 
         # MLPs for memory-based g inference
         self.mlp_mu_g_mem = MLP(in_dim=self.n_g_subsampled, out_dim=self.n_g, hidden_dim=[2 * g for g in self.n_g])
         # Initialize with small random weights
-        self.mlp_mu_g_mem.set_weights(-1, [torch.randn_like(w) * arch_params.g_mem_std for w in self.mlp_mu_g_mem.get_weights(-1)])
+        self.mlp_mu_g_mem.set_weights(-1, [torch.randn_like(w) * model_params.g_mem_std for w in self.mlp_mu_g_mem.get_weights(-1)])
 
         self.mlp_sigma_g_mem = MLP(in_dim=[2] * self.n_f, out_dim=self.n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in self.n_g])
 
         # Learnable initial g for new environments
-        self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * arch_params.g_init_std) for g in self.n_g])
-        self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * arch_params.g_init_std) for g in self.n_g])
+        self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * model_params.g_init_std) for g in self.n_g])
+        self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * model_params.g_init_std) for g in self.n_g])
 
     def forward(
         self, g_gen: List[Tensor], sigma_g_gen: List[Tensor], p_x: Optional[List[Tensor]], shiny_signals: Optional[Tuple[List[Tensor], List[Tensor]]], p2g_scale_offset: float

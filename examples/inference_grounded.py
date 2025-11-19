@@ -63,7 +63,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 from torch_tem import data, figures, utils
-from torch_tem.config import ArchitectureConfig, EnvironmentConfig, InferenceConfig
+from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
 from torch_tem.inference.grounded import GroundedLocationInference
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     # Create config objects with proper field mapping
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
     inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
-    model_config = ArchitectureConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
 
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)

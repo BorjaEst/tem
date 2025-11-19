@@ -19,7 +19,7 @@ import torch
 from torch import Tensor
 
 
-class ArchitectureParams(Protocol):
+class ModelParams(Protocol):
     """Architecture parameters needed by MemoryStorage."""
 
     n_p: List[int]
@@ -66,16 +66,16 @@ class MemoryStorage:
         M_inf: Inference memory matrix (optional) [sum(n_p), sum(n_p)]
     """
 
-    def __init__(self, arch_params: ArchitectureParams, inf_params: InferenceParams, p_update_mask: Tensor):
+    def __init__(self, model_params: ModelParams, inf_params: InferenceParams, p_update_mask: Tensor):
         """Initialize memory storage with zero-initialized matrices.
 
         Args:
-            arch_params: Architecture configuration (n_p, common_memory)
+            model_params: Architecture configuration (n_p, common_memory)
             inf_params: Inference configuration (use_p_inf)
             p_update_mask: Hierarchical mask for Hebbian updates
         """
-        self.n_p = arch_params.n_p
-        self.use_dual_memory = inf_params.use_p_inf and not arch_params.common_memory
+        self.n_p = model_params.n_p
+        self.use_dual_memory = inf_params.use_p_inf and not model_params.common_memory
         self.p_update_mask = p_update_mask
 
         # Initialize memory matrices as zero matrices

@@ -47,7 +47,7 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, utils
-from torch_tem.config import ArchitectureConfig, EnvironmentConfig
+from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.inference.sensory import SensoryProcessor
 
@@ -58,7 +58,7 @@ from torch_tem.inference.sensory import SensoryProcessor
 class ExampleConfig(BaseSettings):
     """Configuration for sensory processing example.
 
-    Uses ArchitectureConfig to initialize components, matching the pattern from
+    Uses ModelConfig to initialize components, matching the pattern from
     the main inference.py example.
     """
 
@@ -101,9 +101,9 @@ if __name__ == "__main__":
     """Run the sensory processing experiment with visualizations."""
     config = ExampleConfig()
 
-    # Create model config using ArchitectureConfig
+    # Create model config using ModelConfig
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
-    model_config = ArchitectureConfig(n_x=config.n_x, n_x_c=config.n_x_c, f_initial=config.f_initial, n_g_subsampled=config.n_g_subsampled)
+    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, f_initial=config.f_initial, n_g_subsampled=config.n_g_subsampled)
 
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)

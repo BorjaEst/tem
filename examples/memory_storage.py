@@ -32,7 +32,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 from torch_tem import data, figures, utils
-from torch_tem.config import ArchitectureConfig, InferenceConfig
+from torch_tem.config import InferenceConfig, ModelConfig
 from torch_tem.memory.storage import MemoryStorage
 
 
@@ -42,7 +42,7 @@ from torch_tem.memory.storage import MemoryStorage
 class ExampleConfig(BaseSettings):
     """Configuration for memory storage example.
 
-    This config wraps ArchitectureConfig and InferenceConfig for the memory storage demonstration.
+    This config wraps ModelConfig and InferenceConfig for the memory storage demonstration.
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="memory_storage")
@@ -92,7 +92,7 @@ if __name__ == "__main__":
 
     # Create config objects with proper field mapping
     inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
-    model_config = ArchitectureConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
 
     # Compute connectivity matrices from model config
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_initial_extended)

@@ -32,7 +32,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 from torch_tem import data, figures, utils
-from torch_tem.config import ArchitectureConfig, InferenceConfig
+from torch_tem.config import InferenceConfig, ModelConfig
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -43,7 +43,7 @@ from torch_tem.memory.storage import MemoryStorage
 class ExampleConfig(BaseSettings):
     """Configuration for attractor dynamics example.
 
-    This config handles example-specific parameters, while ArchitectureConfig
+    This config handles example-specific parameters, while ModelConfig
     and InferenceConfig handle the model architecture and inference settings.
     """
 
@@ -87,7 +87,7 @@ if __name__ == "__main__":
 
     # Create config objects with proper field mapping
     inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
-    model_config = ArchitectureConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ModelConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
 
     # Compute connectivity matrices from model config
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_initial_extended)

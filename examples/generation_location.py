@@ -31,7 +31,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, utils
-from torch_tem.config import ArchitectureConfig, EnvironmentConfig, InferenceConfig
+from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
 from torch_tem.generation.location import LocationGenerator
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
@@ -44,7 +44,7 @@ class ExampleConfig(BaseSettings):
     """Configuration for location generation example.
 
     Provides example-specific parameters and delegates architectural
-    computations to ArchitectureConfig and InferenceConfig.
+    computations to ModelConfig and InferenceConfig.
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="generation_location")
@@ -91,7 +91,7 @@ if __name__ == "__main__":
 
     # Create config objects with proper field mapping
     inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa, do_sample=config.do_sample)
-    model_config = ArchitectureConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, common_memory=config.common_memory)
+    model_config = ModelConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, common_memory=config.common_memory)
 
     # Compute connectivity matrices from model config
     p_update_mask = utils.masks.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_initial_extended)

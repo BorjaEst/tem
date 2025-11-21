@@ -1,0 +1,408 @@
+%% Tolman-Eichenbaum Machine (TEM) Architecture
+%% This document contains comprehensive Mermaid diagrams showing the modular
+%% implementation of TEM using torch_tem components.
+
+---
+title: TEM Overall Architecture
+---
+graph TB
+    %% Input/Output
+    Walk[("Walk Sequence<br/>(locations, x, a)")]
+    Steps[("Steps<br/>(Iteration objects)")]
+    
+    %% Main Model
+    TEMModel["TEMModel<br/>(nn.Module)"]
+    
+    %% Configuration
+    Config["ModelConfig<br/>(architecture + environment<br/>+ inference + training)"]
+    
+    %% Core Components
+    subgraph Core["Core Components (torch_tem.core)"]
+        Encoder["SensoryEncoder<br/>x → x_c<br/>(one-hot → two-hot)"]
+        Decoder["ObservationDecoder<br/>p → x<br/>(place → observation)"]
+        Projection["ProjectionHead<br/>g transformations<br/>(downsample, normalize, clamp)"]
+        Tiling["SensoryProjection<br/>x_f → x_<br/>(tile + weight)"]
+        Transition["TransitionModel<br/>a, g → g'<br/>(action-based dynamics)"]
+    end
+    
+    %% Inference Components
+    subgraph Inference["Inference Components (torch_tem.inference)"]
+        Sensory["SensoryProcessor<br/>temporal filtering<br/>& normalization"]
+        Grounded["GroundedLocationInference<br/>g ⊗ x → p<br/>(outer product)"]
+        Abstract["AbstractLocationInference<br/>precision-weighted fusion<br/>(path + memory + shiny)"]
+    end
+    
+    %% Memory Components
+    subgraph Memory["Memory Components (torch_tem.memory)"]
+        Storage["MemoryStorage<br/>Hebbian learning<br/>(M_inf, M_gen)"]
+        Attractor["AttractorDynamics<br/>iterative retrieval<br/>(hierarchical early-stop)"]
+    end
+    
+    %% Data Flow
+    Config -->|initialize| TEMModel
+    Walk -->|forward| TEMModel
+    TEMModel -->|returns| Steps
+    
+    TEMModel -->|uses| Core
+    TEMModel -->|uses| Inference
+    TEMModel -->|uses| Memory
+    
+    %% Component Dependencies
+    Encoder -.->|x_c| Sensory
+    Sensory -.->|x_f| Tiling
+    Tiling -.->|x_| Grounded
+    Tiling -.->|x_| Attractor
+    
+    Transition -.->|g_gen| Abstract
+    Attractor -.->|p_x| Abstract
+    Abstract -.->|g_inf| Grounded
+    
+    Grounded -.->|p_inf| Storage
+    Attractor -.->|p_gen| Storage
+    Storage -.->|M| Attractor
+    
+    Projection -.->|g_| Attractor
+    Attractor -.->|p| Decoder
+
+    style TEMModel fill:#e1f5ff
+    style Config fill:#fff4e1
+    style Core fill:#f0f0f0
+    style Inference fill:#e8f5e9
+    style Memory fill:#fce4ec
+
+---
+title: TEM Inference Pathway
+---
+graph LR
+    %% Input
+    X["x<br/>(sensory<br/>observation)"]
+    Locations["locations<br/>(environment<br/>metadata)"]
+    G_gen["g_gen<br/>(path-integrated<br/>abstract location)"]
+    M_prev["M_prev<br/>(previous<br/>memory)"]
+    X_prev["x_prev<br/>(previous<br/>filtered sensory)"]
+    
+    %% Processing Steps
+    X -->|"f_c"| X_c["x_c<br/>(compressed<br/>sensory)"]
+    X_c -->|"x_prev2x<br/>(temporal filter)"| X_f["x_f<br/>(filtered<br/>sensory)"]
+    X_prev -.->|"mix with"| X_f
+    
+    X_f -->|"x2x_<br/>(tile + normalize)"| X_["x_<br/>(tiled sensory<br/>per frequency)"]
+    
+    %% Memory Retrieval (Sensory)
+    X_ -->|"attractor<br/>(M_inf)"| P_x["p_x<br/>(grounded location<br/>from sensory)"]
+    M_prev -.->|"M_inf"| P_x
+    
+    %% Abstract Location Inference
+    P_x -->|"p2g<br/>(inverse project)"| G_downsampled["g_downsampled<br/>(from memory)"]
+    G_downsampled -->|"precision<br/>fusion"| G_inf["g_inf<br/>(inferred<br/>abstract location)"]
+    G_gen -.->|"combine"| G_inf
+    Locations -.->|"shiny objects"| G_inf
+    
+    %% Grounded Location Inference
+    G_inf -->|"g2g_<br/>(downsample)"| G_["g_<br/>(prepared<br/>abstract)"]
+    X_f -.->|"combine"| P_inf
+    G_ -->|"inf_p<br/>(g ⊗ x)"| P_inf["p_inf<br/>(inferred<br/>grounded location)"]
+    
+    %% Output
+    P_inf -->|"output"| OUT_P["p<br/>(hippocampal<br/>code)"]
+    G_inf -->|"output"| OUT_G["g<br/>(entorhinal<br/>code)"]
+    X_f -->|"output"| OUT_X["x_f<br/>(filtered<br/>sensory)"]
+    P_x -->|"output"| OUT_PX["p_x<br/>(retrieved<br/>from sensory)"]
+    
+    style X fill:#ffebee
+    style OUT_P fill:#c8e6c9
+    style OUT_G fill:#c8e6c9
+    style OUT_X fill:#c8e6c9
+    style OUT_PX fill:#c8e6c9
+
+---
+title: TEM Generative Pathway
+---
+graph LR
+    %% Input
+    G_inf["g_inf<br/>(inferred<br/>abstract location)"]
+    G_gen["g_gen<br/>(path-integrated<br/>abstract location)"]
+    P_inf["p_inf<br/>(inferred<br/>grounded location)"]
+    M_prev["M_prev<br/>(previous<br/>memory)"]
+    
+    %% Route 1: Direct from p_inf
+    P_inf -->|"gen_x<br/>(decode)"| X_p["x_p<br/>(observation from<br/>inferred p)"]
+    P_inf -.->|"logits"| X_p_logits["x_p_logits"]
+    
+    %% Route 2: From g_inf via memory
+    G_inf -->|"g2g_<br/>(normalize)"| G_inf_["g_inf_<br/>(prepared)"]
+    G_inf_ -->|"attractor<br/>(M_gen)"| P_g_inf["p_g_inf<br/>(retrieved from<br/>inferred g)"]
+    M_prev -.->|"M_gen"| P_g_inf
+    P_g_inf -->|"gen_x<br/>(decode)"| X_g["x_g<br/>(observation from<br/>g_inf via memory)"]
+    P_g_inf -.->|"logits"| X_g_logits["x_g_logits"]
+    
+    %% Route 3: From g_gen via memory
+    G_gen -->|"g2g_<br/>(normalize)"| G_gen_["g_gen_<br/>(prepared)"]
+    G_gen_ -->|"attractor<br/>(M_gen)"| P_g_gen["p_g_gen<br/>(retrieved from<br/>path-integrated g)"]
+    M_prev -.->|"M_gen"| P_g_gen
+    P_g_gen -->|"gen_x<br/>(decode)"| X_gt["x_gt<br/>(observation from<br/>g_gen via memory)"]
+    P_g_gen -.->|"logits"| X_gt_logits["x_gt_logits"]
+    
+    %% Output
+    X_p -->|"tuple"| OUT_X["x_gen<br/>(x_p, x_g, x_gt)"]
+    X_g -.->|"tuple"| OUT_X
+    X_gt -.->|"tuple"| OUT_X
+    
+    X_p_logits -->|"tuple"| OUT_LOGITS["x_logits<br/>(x_p_logits,<br/>x_g_logits,<br/>x_gt_logits)"]
+    X_g_logits -.->|"tuple"| OUT_LOGITS
+    X_gt_logits -.->|"tuple"| OUT_LOGITS
+    
+    P_g_inf -->|"output"| OUT_P["p_gen<br/>(retrieved<br/>grounded location)"]
+    
+    style G_inf fill:#ffebee
+    style G_gen fill:#ffebee
+    style P_inf fill:#ffebee
+    style OUT_X fill:#c8e6c9
+    style OUT_LOGITS fill:#c8e6c9
+    style OUT_P fill:#c8e6c9
+
+---
+title: TEM Memory System
+---
+graph TB
+    %% Input
+    P_inf["p_inf<br/>(inferred<br/>grounded location)"]
+    P_gen["p_gen<br/>(generated<br/>grounded location)"]
+    P_x["p_x<br/>(from sensory)"]
+    Eta["η<br/>(learning rate)"]
+    Lambda["λ<br/>(decay rate)"]
+    
+    %% Memory Storage
+    subgraph MemoryStorage["MemoryStorage (Hebbian Learning)"]
+        M_gen_storage["M_gen<br/>(generative memory)<br/>p_inf ⊗ p_gen"]
+        M_inf_storage["M_inf<br/>(inference memory)<br/>p_inf ⊗ p_x<br/>(optional)"]
+        
+        Update["Hebbian Update<br/>M' = λM + η(p_inferred ⊗ p_generated)"]
+        Hierarchical["Hierarchical Mask<br/>(low → high frequency<br/>connections only)"]
+    end
+    
+    %% Update Flow
+    P_inf -->|"concatenate"| Update
+    P_gen -->|"concatenate"| Update
+    P_x -.->|"if use_p_inf"| M_inf_storage
+    Eta -.-> Update
+    Lambda -.-> Update
+    Update -->|"apply mask"| Hierarchical
+    Hierarchical --> M_gen_storage
+    Hierarchical -.-> M_inf_storage
+    
+    %% Attractor Dynamics
+    subgraph AttractorDynamics["AttractorDynamics (Retrieval)"]
+        Query["p_query<br/>(x_ or g_)"]
+        Iterate["Iterative Refinement<br/>p' = tanh(p_query + Mp)"]
+        EarlyStop["Early Stopping<br/>(hierarchical:<br/>low freq first)"]
+        Retrieved["p_retrieved<br/>(pattern completion)"]
+    end
+    
+    %% Retrieval Flow
+    M_gen_storage -->|"M_gen"| Iterate
+    M_inf_storage -.->|"M_inf"| Iterate
+    Query --> Iterate
+    Iterate --> EarlyStop
+    EarlyStop -->|"converged"| Retrieved
+    EarlyStop -.->|"not converged"| Iterate
+    
+    %% Format Conversion
+    subgraph Formats["Data Formats"]
+        PerFreq["Per-Frequency<br/>List[[B, n_p[f]]]<br/>(hierarchical ops)"]
+        Concat["Concatenated<br/>[B, sum(n_p)]<br/>(memory ops)"]
+    end
+    
+    P_inf -.->|"concatenate_frequencies"| Concat
+    Concat -.->|"split_to_frequencies"| PerFreq
+    Retrieved --> PerFreq
+    
+    %% Output
+    Retrieved -->|"for inference"| OUT_INF["p_x<br/>(from x_)"]
+    Retrieved -->|"for generation"| OUT_GEN["p_gen<br/>(from g_)"]
+    M_gen_storage --> OUT_M["M<br/>(updated memory)"]
+    M_inf_storage -.-> OUT_M
+    
+    style MemoryStorage fill:#fce4ec
+    style AttractorDynamics fill:#e1f5ff
+    style Formats fill:#fff9c4
+
+---
+title: TEM Single Iteration Data Flow
+---
+sequenceDiagram
+    participant Walk as Walk Input<br/>(locations, x, a)
+    participant TEMModel as TEMModel
+    participant Trans as TransitionModel
+    participant Inf as Inference Path
+    participant Gen as Generative Path
+    participant Mem as Memory System
+    participant Loss as Loss Computation
+    
+    Walk->>TEMModel: forward(walk, prev_iter, prev_M)
+    
+    loop For each (locations, x, a)
+        TEMModel->>TEMModel: iteration(x, locations, a_prev, M_prev, x_prev, g_prev)
+        
+        %% Transition
+        TEMModel->>Trans: gen_g(a_prev, g_prev, locations)
+        Trans-->>TEMModel: g_gen (+ uncertainty σ)
+        
+        %% Inference
+        TEMModel->>Inf: inference(x, locations, M_prev, x_prev, g_gen)
+        Inf->>Inf: encode: x → x_c
+        Inf->>Inf: filter: x_c, x_prev → x_f
+        Inf->>Inf: tile: x_f → x_
+        Inf->>Mem: retrieve p_x from M_inf using x_
+        Mem-->>Inf: p_x
+        Inf->>Inf: inf_g: fuse(g_gen, p_x, shiny)
+        Note over Inf: precision-weighted fusion
+        Inf->>Inf: inf_p: g_inf ⊗ x_f → p_inf
+        Inf-->>TEMModel: (x_f, g_inf, p_x, p_inf)
+        
+        %% Generation
+        TEMModel->>Gen: generative(M_prev, p_inf, g_inf, g_gen)
+        Gen->>Gen: Route 1: p_inf → x_p
+        Gen->>Mem: Route 2: g_inf → p_g_inf
+        Mem-->>Gen: p_g_inf
+        Gen->>Gen: p_g_inf → x_g
+        Gen->>Mem: Route 3: g_gen → p_g_gen
+        Mem-->>Gen: p_g_gen
+        Gen->>Gen: p_g_gen → x_gt
+        Gen-->>TEMModel: (x_gen, x_logits, p_gen)
+        
+        %% Memory Update
+        TEMModel->>Mem: hebbian(M_prev, p_inf, p_gen, η, λ)
+        Mem->>Mem: M_gen = λM + η(p_inf ⊗ p_gen)
+        Mem->>Mem: M_inf = λM + η(p_inf ⊗ p_x)
+        Mem-->>TEMModel: M (updated)
+        
+        %% Loss
+        TEMModel->>Loss: compute(g_gen, p_gen, x_logits, x, g_inf, p_inf, p_x, M_prev)
+        Loss->>Loss: L_p_g: ||p_inf - p_gen||²
+        Loss->>Loss: L_p_x: ||p_inf - p_x||²
+        Loss->>Loss: L_x_gen: -log P(x | x_gt)
+        Loss->>Loss: L_x_g: -log P(x | x_g)
+        Loss->>Loss: L_x_p: -log P(x | x_p)
+        Loss->>Loss: L_g: ||g_inf - g_gen||²
+        Loss->>Loss: L_reg_g: ||g_inf||²
+        Loss->>Loss: L_reg_p: ||p_inf||²
+        Loss-->>TEMModel: L (8 components)
+        
+        TEMModel->>TEMModel: store Iteration(L, M, g_gen, p_gen, x_gen, ...)
+    end
+    
+    TEMModel-->>Walk: steps (list of Iterations)
+
+---
+title: Component Relationships and Dependencies
+---
+classDiagram
+    class ModelConfig {
+        +ArchitectureConfig architecture
+        +EnvironmentConfig environment
+        +InferenceConfig inference
+        +TrainingConfig training
+        +validate() ModelConfig
+    }
+    
+    class TEMModel {
+        +ModelConfig config
+        +SensoryEncoder encoder
+        +SensoryProcessor processor
+        +TransitionModel transition
+        +GroundedLocationInference grounded
+        +AbstractLocationInference abstract
+        +MemoryStorage storage
+        +AttractorDynamics attractor
+        +ProjectionHead projection
+        +ObservationDecoder decoder
+        +forward(walk) steps
+        +iteration(...) tuple
+        +inference(...) tuple
+        +generative(...) tuple
+        +loss(...) list
+    }
+    
+    class SensoryEncoder {
+        +Tensor two_hot_table
+        +forward(x) x_c
+    }
+    
+    class SensoryProcessor {
+        +Parameter w_n
+        +Parameter b_n
+        +filter(x_c, x_prev) x_f
+        +normalize(x_f) x_normalized
+    }
+    
+    class TransitionModel {
+        +MLP mlp_transition
+        +MLP mlp_uncertainty
+        +MLP mlp_no_direc
+        +Parameter frequencies
+        +forward(a, g, no_direc) g_gen
+    }
+    
+    class GroundedLocationInference {
+        +Tensor W_repeat
+        +Tensor W_tile
+        +Parameter w_x
+        +Parameter w_g
+        +Parameter w_pc
+        +forward(g, x_f) p_inf
+    }
+    
+    class AbstractLocationInference {
+        +MLP mlp_mem
+        +MLP mlp_shiny
+        +forward(g_gen, σ_gen, p_x, shiny) g_inf
+    }
+    
+    class MemoryStorage {
+        +Tensor M_gen
+        +Optional~Tensor~ M_inf
+        +Tensor p_update_mask
+        +update(p_inf, p_gen, η, λ)
+        +get_memory(for_inference) M
+    }
+    
+    class AttractorDynamics {
+        +List~Tensor~ p_retrieve_masks
+        +retrieve(p_query, M, for_inference) p
+    }
+    
+    class ProjectionHead {
+        +Parameter frequencies
+        +Tensor g_downsample
+        +downsample(g) g_downsampled
+        +normalize_g(g) g_normalized
+        +clamp_g(g) g_clamped
+        +p_to_g(p) g
+    }
+    
+    class ObservationDecoder {
+        +MLP mlp_decompressor
+        +forward(p) x_probs, x_logits
+    }
+    
+    ModelConfig --> TEMModel : initializes
+    TEMModel --> SensoryEncoder : uses
+    TEMModel --> SensoryProcessor : uses
+    TEMModel --> TransitionModel : uses
+    TEMModel --> GroundedLocationInference : uses
+    TEMModel --> AbstractLocationInference : uses
+    TEMModel --> MemoryStorage : uses
+    TEMModel --> AttractorDynamics : uses
+    TEMModel --> ProjectionHead : uses
+    TEMModel --> ObservationDecoder : uses
+    
+    SensoryEncoder ..> SensoryProcessor : x_c
+    SensoryProcessor ..> GroundedLocationInference : x_f
+    TransitionModel ..> AbstractLocationInference : g_gen, σ_gen
+    AttractorDynamics ..> AbstractLocationInference : p_x
+    AbstractLocationInference ..> GroundedLocationInference : g_inf
+    GroundedLocationInference ..> MemoryStorage : p_inf
+    AttractorDynamics ..> ObservationDecoder : p
+    MemoryStorage ..> AttractorDynamics : M
+    ProjectionHead ..> AttractorDynamics : g_

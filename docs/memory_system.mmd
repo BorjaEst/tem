@@ -1,0 +1,63 @@
+%% TEM Memory System
+graph TB
+    %% Input
+    P_inf["p_inf<br/>(inferred<br/>grounded location)"]
+    P_gen["p_gen<br/>(generated<br/>grounded location)"]
+    P_x["p_x<br/>(from sensory)"]
+    Eta["η<br/>(learning rate)"]
+    Lambda["λ<br/>(decay rate)"]
+    
+    %% Memory Storage
+    subgraph MemoryStorage["MemoryStorage - Hebbian Learning"]
+        M_gen_storage["M_gen<br/>(generative memory)<br/>p_inf ⊗ p_gen"]
+        M_inf_storage["M_inf<br/>(inference memory)<br/>p_inf ⊗ p_x<br/>(optional)"]
+        
+        Update["Hebbian Update<br/>M' = λM + η outer product"]
+        Hierarchical["Hierarchical Mask<br/>(low → high frequency<br/>connections only)"]
+    end
+    
+    %% Update Flow
+    P_inf -->|"concatenate"| Update
+    P_gen -->|"concatenate"| Update
+    P_x -.->|"if use_p_inf"| M_inf_storage
+    Eta -.-> Update
+    Lambda -.-> Update
+    Update -->|"apply mask"| Hierarchical
+    Hierarchical --> M_gen_storage
+    Hierarchical -.-> M_inf_storage
+    
+    %% Attractor Dynamics
+    subgraph AttractorDynamics["AttractorDynamics - Retrieval"]
+        Query["p_query<br/>(x_ or g_)"]
+        Iterate["Iterative Refinement<br/>p' = tanh query + Mp"]
+        EarlyStop["Early Stopping<br/>(hierarchical:<br/>low freq first)"]
+        Retrieved["p_retrieved<br/>(pattern completion)"]
+    end
+    
+    %% Retrieval Flow
+    M_gen_storage -->|"M_gen"| Iterate
+    M_inf_storage -.->|"M_inf"| Iterate
+    Query --> Iterate
+    Iterate --> EarlyStop
+    EarlyStop -->|"converged"| Retrieved
+    EarlyStop -.->|"not converged"| Iterate
+    
+    %% Format Conversion
+    subgraph Formats["Data Formats"]
+        PerFreq["Per-Frequency<br/>List B n_p f<br/>(hierarchical ops)"]
+        Concat["Concatenated<br/>B sum n_p<br/>(memory ops)"]
+    end
+    
+    P_inf -.->|"concatenate_frequencies"| Concat
+    Concat -.->|"split_to_frequencies"| PerFreq
+    Retrieved --> PerFreq
+    
+    %% Output
+    Retrieved -->|"for inference"| OUT_INF["p_x<br/>(from x_)"]
+    Retrieved -->|"for generation"| OUT_GEN["p_gen<br/>(from g_)"]
+    M_gen_storage --> OUT_M["M<br/>(updated memory)"]
+    M_inf_storage -.-> OUT_M
+    
+    style MemoryStorage fill:#fce4ec
+    style AttractorDynamics fill:#e1f5ff
+    style Formats fill:#fff9c4

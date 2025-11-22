@@ -1,0 +1,64 @@
+%% TEM Single Iteration Data Flow
+sequenceDiagram
+    participant Walk as Walk Input
+    participant TEMModel as TEMModel
+    participant Trans as TransitionModel
+    participant Inf as Inference Path
+    participant Gen as Generative Path
+    participant Mem as Memory System
+    participant Loss as Loss Computation
+    
+    Walk->>TEMModel: forward walk prev_iter prev_M
+    
+    loop For each location x a
+        TEMModel->>TEMModel: iteration x locations a_prev M_prev x_prev g_prev
+        
+        Note over TEMModel,Trans: Transition Phase
+        TEMModel->>Trans: gen_g a_prev g_prev locations
+        Trans-->>TEMModel: g_gen plus uncertainty σ
+        
+        Note over TEMModel,Mem: Inference Phase
+        TEMModel->>Inf: inference x locations M_prev x_prev g_gen
+        Inf->>Inf: encode x to x_c
+        Inf->>Inf: filter x_c x_prev to x_f
+        Inf->>Inf: tile x_f to x_
+        Inf->>Mem: retrieve p_x from M_inf using x_
+        Mem-->>Inf: p_x
+        Inf->>Inf: inf_g fuse g_gen p_x shiny
+        Note over Inf: precision-weighted fusion
+        Inf->>Inf: inf_p g_inf tensor x_f to p_inf
+        Inf-->>TEMModel: x_f g_inf p_x p_inf
+        
+        Note over TEMModel,Mem: Generative Phase
+        TEMModel->>Gen: generative M_prev p_inf g_inf g_gen
+        Gen->>Gen: Route 1 p_inf to x_p
+        Gen->>Mem: Route 2 g_inf to p_g_inf
+        Mem-->>Gen: p_g_inf
+        Gen->>Gen: p_g_inf to x_g
+        Gen->>Mem: Route 3 g_gen to p_g_gen
+        Mem-->>Gen: p_g_gen
+        Gen->>Gen: p_g_gen to x_gt
+        Gen-->>TEMModel: x_gen x_logits p_gen
+        
+        Note over TEMModel,Mem: Memory Update
+        TEMModel->>Mem: hebbian M_prev p_inf p_gen η λ
+        Mem->>Mem: M_gen update
+        Mem->>Mem: M_inf update
+        Mem-->>TEMModel: M updated
+        
+        Note over TEMModel,Loss: Loss Computation
+        TEMModel->>Loss: compute all parameters
+        Loss->>Loss: L_p_g place match
+        Loss->>Loss: L_p_x sensory match
+        Loss->>Loss: L_x_gen generation quality
+        Loss->>Loss: L_x_g inference quality
+        Loss->>Loss: L_x_p direct quality
+        Loss->>Loss: L_g abstract match
+        Loss->>Loss: L_reg_g regularization
+        Loss->>Loss: L_reg_p regularization
+        Loss-->>TEMModel: L 8 components
+        
+        TEMModel->>TEMModel: store Iteration
+    end
+    
+    TEMModel-->>Walk: steps list of Iterations

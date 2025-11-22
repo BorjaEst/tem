@@ -1,0 +1,43 @@
+%% TEM Generative Pathway
+graph LR
+    %% Input
+    G_inf["g_inf<br/>(inferred<br/>abstract location)"]
+    G_gen["g_gen<br/>(path-integrated<br/>abstract location)"]
+    P_inf["p_inf<br/>(inferred<br/>grounded location)"]
+    M_prev["M_prev<br/>(previous<br/>memory)"]
+    
+    %% Route 1: Direct from p_inf
+    P_inf -->|"gen_x<br/>(decode)"| X_p["x_p<br/>(observation from<br/>inferred p)"]
+    P_inf -.->|"logits"| X_p_logits["x_p_logits"]
+    
+    %% Route 2: From g_inf via memory
+    G_inf -->|"g2g_<br/>(normalize)"| G_inf_["g_inf_<br/>(prepared)"]
+    G_inf_ -->|"attractor<br/>(M_gen)"| P_g_inf["p_g_inf<br/>(retrieved from<br/>inferred g)"]
+    M_prev -.->|"M_gen"| P_g_inf
+    P_g_inf -->|"gen_x<br/>(decode)"| X_g["x_g<br/>(observation from<br/>g_inf via memory)"]
+    P_g_inf -.->|"logits"| X_g_logits["x_g_logits"]
+    
+    %% Route 3: From g_gen via memory
+    G_gen -->|"g2g_<br/>(normalize)"| G_gen_["g_gen_<br/>(prepared)"]
+    G_gen_ -->|"attractor<br/>(M_gen)"| P_g_gen["p_g_gen<br/>(retrieved from<br/>path-integrated g)"]
+    M_prev -.->|"M_gen"| P_g_gen
+    P_g_gen -->|"gen_x<br/>(decode)"| X_gt["x_gt<br/>(observation from<br/>g_gen via memory)"]
+    P_g_gen -.->|"logits"| X_gt_logits["x_gt_logits"]
+    
+    %% Output
+    X_p -->|"tuple"| OUT_X["x_gen<br/>(x_p, x_g, x_gt)"]
+    X_g -.->|"tuple"| OUT_X
+    X_gt -.->|"tuple"| OUT_X
+    
+    X_p_logits -->|"tuple"| OUT_LOGITS["x_logits<br/>(x_p_logits,<br/>x_g_logits,<br/>x_gt_logits)"]
+    X_g_logits -.->|"tuple"| OUT_LOGITS
+    X_gt_logits -.->|"tuple"| OUT_LOGITS
+    
+    P_g_inf -->|"output"| OUT_P["p_gen<br/>(retrieved<br/>grounded location)"]
+    
+    style G_inf fill:#ffebee
+    style G_gen fill:#ffebee
+    style P_inf fill:#ffebee
+    style OUT_X fill:#c8e6c9
+    style OUT_LOGITS fill:#c8e6c9
+    style OUT_P fill:#c8e6c9

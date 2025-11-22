@@ -1,0 +1,110 @@
+%% Component Relationships and Dependencies
+classDiagram
+    class ModelConfig {
+        +ArchitectureConfig architecture
+        +EnvironmentConfig environment
+        +InferenceConfig inference
+        +TrainingConfig training
+        +validate() ModelConfig
+    }
+    
+    class TEMModel {
+        +ModelConfig config
+        +SensoryEncoder encoder
+        +SensoryProcessor processor
+        +TransitionModel transition
+        +GroundedLocationInference grounded
+        +AbstractLocationInference abstract
+        +MemoryStorage storage
+        +AttractorDynamics attractor
+        +ProjectionHead projection
+        +ObservationDecoder decoder
+        +forward(walk) steps
+        +iteration(...) tuple
+        +inference(...) tuple
+        +generative(...) tuple
+        +loss(...) list
+    }
+    
+    class SensoryEncoder {
+        +Tensor two_hot_table
+        +forward(x) x_c
+    }
+    
+    class SensoryProcessor {
+        +Parameter w_n
+        +Parameter b_n
+        +filter(x_c, x_prev) x_f
+        +normalize(x_f) x_normalized
+    }
+    
+    class TransitionModel {
+        +MLP mlp_transition
+        +MLP mlp_uncertainty
+        +MLP mlp_no_direc
+        +Parameter frequencies
+        +forward(a, g, no_direc) g_gen
+    }
+    
+    class GroundedLocationInference {
+        +Tensor W_repeat
+        +Tensor W_tile
+        +Parameter w_x
+        +Parameter w_g
+        +Parameter w_pc
+        +forward(g, x_f) p_inf
+    }
+    
+    class AbstractLocationInference {
+        +MLP mlp_mem
+        +MLP mlp_shiny
+        +forward(g_gen, σ_gen, p_x, shiny) g_inf
+    }
+    
+    class MemoryStorage {
+        +Tensor M_gen
+        +Optional Tensor M_inf
+        +Tensor p_update_mask
+        +update(p_inf, p_gen, η, λ)
+        +get_memory(for_inference) M
+    }
+    
+    class AttractorDynamics {
+        +List Tensor p_retrieve_masks
+        +retrieve(p_query, M, for_inference) p
+    }
+    
+    class ProjectionHead {
+        +Parameter frequencies
+        +Tensor g_downsample
+        +downsample(g) g_downsampled
+        +normalize_g(g) g_normalized
+        +clamp_g(g) g_clamped
+        +p_to_g(p) g
+    }
+    
+    class ObservationDecoder {
+        +MLP mlp_decompressor
+        +forward(p) x_probs x_logits
+    }
+    
+    ModelConfig --> TEMModel : initializes
+    TEMModel --> SensoryEncoder : uses
+    TEMModel --> SensoryProcessor : uses
+    TEMModel --> TransitionModel : uses
+    TEMModel --> GroundedLocationInference : uses
+    TEMModel --> AbstractLocationInference : uses
+    TEMModel --> MemoryStorage : uses
+    TEMModel --> AttractorDynamics : uses
+    TEMModel --> ProjectionHead : uses
+    TEMModel --> ObservationDecoder : uses
+    
+    SensoryEncoder ..> SensoryProcessor : x_c
+    SensoryProcessor ..> GroundedLocationInference : x_f
+    TransitionModel ..> AbstractLocationInference : g_gen σ_gen
+    AttractorDynamics ..> AbstractLocationInference : p_x
+    AbstractLocationInference ..> GroundedLocationInference : g_inf
+    GroundedLocationInference ..> MemoryStorage : p_inf
+    AttractorDynamics ..> ObservationDecoder : p
+    MemoryStorage ..> AttractorDynamics : M
+    ProjectionHead ..> AttractorDynamics : g_

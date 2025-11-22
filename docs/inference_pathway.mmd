@@ -1,0 +1,42 @@
+%% TEM Inference Pathway
+graph LR
+    %% Input
+    X["x<br/>(sensory<br/>observation)"]
+    Locations["locations<br/>(environment<br/>metadata)"]
+    G_gen["g_gen<br/>(path-integrated<br/>abstract location)"]
+    M_prev["M_prev<br/>(previous<br/>memory)"]
+    X_prev["x_prev<br/>(previous<br/>filtered sensory)"]
+    
+    %% Processing Steps
+    X -->|"f_c"| X_c["x_c<br/>(compressed<br/>sensory)"]
+    X_c -->|"x_prev2x<br/>(temporal filter)"| X_f["x_f<br/>(filtered<br/>sensory)"]
+    X_prev -.->|"mix with"| X_f
+    
+    X_f -->|"x2x_<br/>(tile + normalize)"| X_["x_<br/>(tiled sensory<br/>per frequency)"]
+    
+    %% Memory Retrieval Sensory
+    X_ -->|"attractor<br/>(M_inf)"| P_x["p_x<br/>(grounded location<br/>from sensory)"]
+    M_prev -.->|"M_inf"| P_x
+    
+    %% Abstract Location Inference
+    P_x -->|"p2g<br/>(inverse project)"| G_downsampled["g_downsampled<br/>(from memory)"]
+    G_downsampled -->|"precision<br/>fusion"| G_inf["g_inf<br/>(inferred<br/>abstract location)"]
+    G_gen -.->|"combine"| G_inf
+    Locations -.->|"shiny objects"| G_inf
+    
+    %% Grounded Location Inference
+    G_inf -->|"g2g_<br/>(downsample)"| G_["g_<br/>(prepared<br/>abstract)"]
+    X_f -.->|"combine"| P_inf
+    G_ -->|"inf_p<br/>(g ⊗ x)"| P_inf["p_inf<br/>(inferred<br/>grounded location)"]
+    
+    %% Output
+    P_inf -->|"output"| OUT_P["p<br/>(hippocampal<br/>code)"]
+    G_inf -->|"output"| OUT_G["g<br/>(entorhinal<br/>code)"]
+    X_f -->|"output"| OUT_X["x_f<br/>(filtered<br/>sensory)"]
+    P_x -->|"output"| OUT_PX["p_x<br/>(retrieved<br/>from sensory)"]
+    
+    style X fill:#ffebee
+    style OUT_P fill:#c8e6c9
+    style OUT_G fill:#c8e6c9
+    style OUT_X fill:#c8e6c9
+    style OUT_PX fill:#c8e6c9

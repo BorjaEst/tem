@@ -4,6 +4,7 @@ from .decoder import ObservationDecoder
 from .encoder import SensoryEncoder
 from .mlp import MLP
 from .projection import ProjectionHead
+from .state import State
 from .tiling import SensoryProjection
 from .transition import TransitionModel
 
@@ -14,4 +15,5 @@ __all__ = [
     "TransitionModel",
     "ProjectionHead",
     "SensoryProjection",
+    "State",
 ]

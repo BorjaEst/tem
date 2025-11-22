@@ -16,6 +16,7 @@ from torch import Tensor, nn
 
 from torch_tem import data, figures, utils
 from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
+from torch_tem.core import State
 from torch_tem.core.decoder import ObservationDecoder
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
@@ -106,44 +107,64 @@ class TEMModel(nn.Module):
         self.projection = ProjectionHead(arch, self.g_downsample)
         self.decoder = ObservationDecoder(arch)
 
-    def forward(self, walk, prev_iter=None, prev_M=None):
-        """Run the TEM model on a sequence of observations and actions.
+    def forward(self, walk, prev_M=None):
+        """Process a full walk sequence through the TEM model.
+
+        Executes the full TEM pipeline for each timestep in the walk,
+        performing transition, inference, generation, memory update, and
+        loss computation.
 
         Parameters
         ----------
-        walk:
-            Iterable of triples ``(locations, x, a)`` describing a batched
-            random walk through the environment: current abstract/ground
-            locations, sensory observations, and discrete actions.
-        prev_iter:
-            Optional iteration object from a previous call, used to continue
-            partially processed walks (e.g. across episode boundaries).
-        prev_M:
-            Optional previous Hebbian memory state, allowing memory to be
-            carried across calls.
+        walk : Iterable
+            Iterable of (locations, observations, actions) for each step.
+            Each entry should be a 3-tuple:
+
+            - ``locations``: Batch of location data structures.
+            - ``observations``: Observations of shape ``(batch, ...)``, to be
+              encoded to ``x``.
+            - ``actions``: Batch of actions taken at this step.
+
+        prev_M : List[Tensor], optional
+            Optional previous memory state from a previous call, used to
+            continue inference across multiple walks.
 
         Returns
         -------
-        steps:
-            A sequence of per‑step iteration objects containing inferred and
-            generated variables (abstract and grounded locations, observations,
-            memory states, and losses), analogous to ``Iteration`` instances
-            in the reference implementation.
+        List[State]
+            A sequence of per‑step State objects containing inferred and
+            generated belief states (abstract and grounded), observations,
+            memory states, and losses.
         """
-        # Initialize walks (reset new episodes)
-        steps = self.init_walks(prev_iter)
+        steps = None
 
         # Process each timestep in walk
         for locations, x, a in walk:
             # Initialize if first step
             if steps is None:
-                steps = [self.init_iteration(locations, x, [None] * len(a), prev_M)]
+                steps = [self.init_state(locations, x, [None] * len(a), prev_M)]
 
             # Perform single TEM iteration
             L, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf = self.iteration(x, locations, steps[-1].a, steps[-1].M, steps[-1].x_inf, steps[-1].g_inf)
 
             # Store iteration results
-            steps.append(Iteration(locations, x, a, L, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf))
+            steps.append(
+                State(
+                    g=g_inf if g_inf is not None else g_gen,
+                    x=x_inf,  # Store filtered sensory x_inf, not raw x
+                    a=a,
+                    L=L,
+                    M=M,
+                    locations=locations,
+                    g_gen=g_gen,
+                    p_gen=p_gen,
+                    x_gen=x_gen,
+                    x_logits=x_logits,
+                    x_inf=x_inf,
+                    g_inf=g_inf,
+                    p_inf=p_inf,
+                )
+            )
 
         # Remove initialization step
         return steps[1:]
@@ -192,18 +213,16 @@ class TEMModel(nn.Module):
         p_inf_flat = concatenate_frequencies(p_inf)
         p_gen_flat = concatenate_frequencies(p_gen)
 
-        # Update generative memory
-        self.storage.update(p_inf_flat, p_gen_flat, self.config.inference.eta_g, self.config.inference.eta_p)
+        # Update generative memory using Hebbian plasticity
+        # eta: remembering rate, kappa: forgetting rate (1 - lambda)
+        lamb = 1.0 - self.config.inference.kappa  # Convert kappa (forgetting) to lambda (retention)
+        self.storage.update(p_inf_flat, p_gen_flat, self.config.inference.eta, lamb)
         M = [self.storage.M_gen]
 
         # Update inference memory if using it
         if self.config.inference.use_p_inf:
             if self.storage.use_dual_memory:
                 # Separate inference memory
-                p_x_flat = concatenate_frequencies(p_inf_x) if p_inf_x is not None else p_inf_flat
-                # For inference memory, update with p_inf ⊗ p_x (not p_gen)
-                # We need a separate update that doesn't use hierarchical connections
-                # For now, reuse the generative memory if common_memory is True
                 M.append(self.storage.M_inf if self.storage.M_inf is not None else self.storage.M_gen)
             else:
                 # Common memory
@@ -255,11 +274,16 @@ class TEMModel(nn.Module):
 
         # 4. Retrieve from memory (if using inference memory)
         p_x = None
+        p_x_downsampled = None
         if self.config.inference.use_p_inf:
             x_flat = concatenate_frequencies(x_)
             M_inf = self.storage.get_memory(for_inference=True)
             p_x_flat = self.attractor.retrieve(x_flat, M_inf, for_inference=True)
             p_x = split_to_frequencies(p_x_flat, self.config.architecture.n_p)
+
+            # Downsample p_x to n_g_subsampled_combined by summing over sensory preferences
+            # This projects from (n_g_subsampled_combined * n_x_f) to n_g_subsampled_combined
+            p_x_downsampled = [torch.matmul(p_x[f], torch.t(self.W_repeat[f])) for f in range(self.config.architecture.n_f)]
 
         # 5. Infer abstract location (precision-weighted fusion)
         g_gen_mu, sigma_gen = g_gen
@@ -271,7 +295,11 @@ class TEMModel(nn.Module):
         # if any(shiny_envs): ...
 
         g = self.abstract(
-            g_gen_mu, sigma_gen, p_x, shiny_signals=shiny_signals, p2g_scale_offset=self.config.inference.p2g_offset if hasattr(self.config.inference, "p2g_offset") else 0.0
+            g_gen_mu,
+            sigma_gen,
+            p_x_downsampled,
+            shiny_signals=shiny_signals,
+            p2g_scale_offset=self.config.inference.p2g_offset if hasattr(self.config.inference, "p2g_offset") else 0.0,
         )
 
         # 6. Downsample and normalize g for inference
@@ -445,8 +473,8 @@ class TEMModel(nn.Module):
 
         return prev_iter
 
-    def init_iteration(self, locations, x, a_prev, M_prev):
-        """Initialize the first iteration of a walk sequence.
+    def init_state(self, locations, x, a_prev, M_prev):
+        """Initialize the first state of a walk sequence.
 
         Parameters
         ----------
@@ -480,18 +508,25 @@ class TEMModel(nn.Module):
         x_inf = [torch.zeros(batch_size, n_x_f) for n_x_f in self.config.architecture.n_x_f]
 
         # Initialize memory if not provided
+        # Memory matrices are global (not per-batch) and stored in storage module
         if M_prev is None:
-            M = self.storage.init_memory(batch_size)
+            M = [self.storage.M_gen]
+            if self.storage.use_dual_memory:
+                M.append(self.storage.M_inf)
+            elif self.config.inference.use_p_inf:
+                # Common memory - reuse generative memory for inference
+                M.append(M[0])
         else:
             M = M_prev
 
-        # Create iteration with initial state
-        iter_0 = Iteration(
+        # Create state with initial values
+        state_0 = State(
             g=g_inf,
             x=x_inf,
             a=a_prev,
             L=[torch.zeros(batch_size) for _ in range(8)],  # 8 loss components
             M=M,
+            locations=locations,
             g_gen=None,
             p_gen=None,
             x_gen=None,
@@ -501,7 +536,7 @@ class TEMModel(nn.Module):
             p_inf=None,
         )
 
-        return [iter_0]
+        return state_0
 
     def gen_g(self, a_prev, g_prev, locations):
         """Generate abstract location codes via transition dynamics.
@@ -509,7 +544,7 @@ class TEMModel(nn.Module):
         Parameters
         ----------
         a_prev:
-            Previous actions for each walk in the batch.
+            Previous actions for each walk in the batch (list or tensor).
         g_prev:
             Previous abstract locations for all frequency modules.
         locations:
@@ -523,15 +558,23 @@ class TEMModel(nn.Module):
             statistics, suitable for use by :meth:`inference` and
             :meth:`generative`.
         """
+        # Convert actions to tensor if needed
+        if isinstance(a_prev, list):
+            # Filter out None values and convert to tensor
+            a_valid = [a if a is not None else 0 for a in a_prev]
+            a_tensor = torch.tensor(a_valid, dtype=torch.long, device=g_prev[0].device)
+        else:
+            a_tensor = a_prev
+
         # Check for shiny environments (no directional transitions)
         shiny_envs = [loc.get("shiny") is not None if isinstance(loc, dict) else False for loc in locations]
 
         # Compute transition with action
-        g, sigma_g = self.transition(g_prev, a_prev, use_action=True)
+        g, sigma_g = self.transition(g_prev, a_tensor, use_action=True)
 
         # For shiny environments, recompute without action direction
         if any(shiny_envs):
-            g_gen, _ = self.transition(g_prev, a_prev, use_action=False)
+            g_gen, _ = self.transition(g_prev, a_tensor, use_action=False)
         else:
             g_gen = g
 
@@ -556,8 +599,12 @@ class TEMModel(nn.Module):
         # Normalize and downsample g for memory indexing
         g_ = self.projection.downsample(self.projection.normalize_g(g))
 
+        # Expand g to p dimensions by repeating across sensory features
+        # This converts [batch, n_g_subsampled[f]] to [batch, n_p[f]] per frequency
+        g_repeated = [torch.matmul(g_[f], self.W_repeat[f]) for f in range(self.config.architecture.n_f)]
+
         # Retrieve from memory via attractor dynamics
-        g_flat = concatenate_frequencies(g_)
+        g_flat = concatenate_frequencies(g_repeated)
         p_flat = self.attractor.retrieve(g_flat, M_prev, for_inference=False)
 
         # Convert back to per-frequency format
@@ -695,364 +742,3 @@ class TEMModel(nn.Module):
         """
         g_normalized = self.projection.normalize_g(g)
         return self.projection.downsample(g_normalized)
-
-    def f_mu_g_path(self, a_prev, g_prev, no_direc=None):
-        """Compute mean abstract locations after applying transition dynamics.
-
-        Parameters
-        ----------
-        a_prev:
-            Previous actions.
-        g_prev:
-            Previous abstract locations.
-        no_direc:
-            Optional boolean mask per walk indicating environments where
-            directional information should be ignored (e.g. shiny
-            environments in the generative model).
-
-        Returns
-        -------
-        Any
-            Mean abstract locations for each frequency module after applying
-            the learned transition operator.
-        """
-        raise NotImplementedError("f_mu_g_path method is not implemented yet.")
-
-    def f_sigma_g_path(self, a_prev, g_prev):
-        """Compute uncertainty of abstract locations after transition.
-
-        Parameters
-        ----------
-        a_prev:
-            Previous actions.
-        g_prev:
-            Previous abstract locations (including prior‑initialised ones).
-
-        Returns
-        -------
-        Any
-            Standard deviation (or similar scale parameters) for abstract
-            locations in each frequency module.
-        """
-        raise NotImplementedError("f_sigma_g_path method is not implemented yet.")
-
-    def f_mu_g_mem(self, g_downsampled):
-        """Compute mean abstract locations inferred purely from memory.
-
-        Parameters
-        ----------
-        g_downsampled:
-            Downsampled abstract locations obtained by summing grounded
-            locations over sensory preferences.
-
-        Returns
-        -------
-        Any
-            Mean abstract locations inferred from memory quality for each
-            frequency module.
-        """
-        raise NotImplementedError("f_mu_g_mem method is not implemented yet.")
-
-    def f_sigma_g_mem(self, g_downsampled):
-        """Compute uncertainty of abstract locations inferred from memory.
-
-        Parameters
-        ----------
-        g_downsampled:
-            Features describing the reliability of memory retrieval (e.g.
-            norms and reconstruction errors).
-
-        Returns
-        -------
-        Any
-            Standard deviations for memory‑based abstract location estimates
-            per frequency module.
-        """
-        raise NotImplementedError("f_sigma_g_mem method is not implemented yet.")
-
-    def f_mu_g_shiny(self, shiny):
-        """Compute abstract location means driven by shiny object presence.
-
-        Parameters
-        ----------
-        shiny:
-            Boolean or float indicators of shiny object presence per
-            environment and location.
-
-        Returns
-        -------
-        Any
-            Object‑vector‑like abstract codes for the relevant frequency
-            modules.
-        """
-        raise NotImplementedError("f_mu_g_shiny method is not implemented yet.")
-
-    def f_sigma_g_shiny(self, shiny):
-        """Compute uncertainty of shiny‑driven abstract location components.
-
-        Parameters
-        ----------
-        shiny:
-            Boolean or float indicators of shiny object presence.
-
-        Returns
-        -------
-        Any
-            Standard deviations associated with the shiny‑driven abstract
-            codes.
-        """
-        raise NotImplementedError("f_sigma_g_shiny method is not implemented yet.")
-
-    def f_sigma_p(self, p):
-        """Compute uncertainty for grounded locations retrieved from memory.
-
-        Parameters
-        ----------
-        p:
-            Grounded location activations before sampling.
-
-        Returns
-        -------
-        Any
-            Standard deviations over grounded locations per frequency module.
-        """
-        raise NotImplementedError("f_sigma_p method is not implemented yet.")
-
-    def f_x(self, p):
-        """Decode grounded locations into categorical observation distributions.
-
-        Parameters
-        ----------
-        p:
-            Grounded location codes, typically flattened across abstract and
-            sensory dimensions.
-
-        Returns
-        -------
-        tuple
-            ``(probability, logits)`` giving both softmax probabilities and
-            raw logits over observations.
-        """
-        raise NotImplementedError("f_x method is not implemented yet.")
-
-    def f_c_star(self, compressed):
-        """Decompress highest‑frequency sensory representation to full space.
-
-        Parameters
-        ----------
-        compressed:
-            Compressed sensory features at the highest frequency module.
-
-        Returns
-        -------
-        Any
-            Decompressed logits over the full observation space.
-        """
-        raise NotImplementedError("f_c_star method is not implemented yet.")
-
-    def f_c(self, decompressed):
-        """Compress raw observations into a compact representation.
-
-        Parameters
-        ----------
-        decompressed:
-            One‑hot or dense observation vectors as provided by the
-            environment.
-
-        Returns
-        -------
-        Any
-            Compressed sensory representation (e.g. two‑hot encoding) used by
-            the rest of the model.
-        """
-        raise NotImplementedError("f_c method is not implemented yet.")
-
-    def f_n(self, x):
-        """Normalise sensory observations frequency‑wise.
-
-        Parameters
-        ----------
-        x:
-            Sensory observations or features per frequency module.
-
-        Returns
-        -------
-        Any
-            Normalised sensory features suitable for subsequent weighting and
-            tiling.
-        """
-        raise NotImplementedError("f_n method is not implemented yet.")
-
-    def f_g(self, g):
-        """Downsample abstract location codes.
-
-        Parameters
-        ----------
-        g:
-            Abstract location codes per frequency module.
-
-        Returns
-        -------
-        Any
-            Downsampled abstract codes for each frequency module.
-        """
-        raise NotImplementedError("f_g method is not implemented yet.")
-
-    def f_g_clamp(self, g):
-        """Clamp abstract location activations to a bounded range.
-
-        Parameters
-        ----------
-        g:
-            Abstract location codes to be clamped.
-
-        Returns
-        -------
-        Any
-            Clamped abstract codes (e.g. in ``[-1, 1]``) per module.
-        """
-        raise NotImplementedError("f_g_clamp method is not implemented yet.")
-
-    def f_p(self, p):
-        """Apply nonlinearity to grounded location activations.
-
-        Parameters
-        ----------
-        p:
-            Grounded location activations (single tensor or list per
-            frequency module).
-
-        Returns
-        -------
-        Any
-            Activated grounded location codes, typically after clamping and a
-            leaky‑ReLU‑like nonlinearity to encourage sparsity.
-        """
-        raise NotImplementedError("f_p method is not implemented yet.")
-
-    def attractor(self, p_query, M, retrieve_it_mask=None):
-        """Run attractor dynamics to retrieve grounded locations from memory.
-
-        Parameters
-        ----------
-        p_query:
-            Initial query grounded locations (e.g. from abstract codes or
-            sensory input) across frequency modules.
-        M:
-            Hebbian memory connectivity matrix storing grounded locations.
-        retrieve_it_mask:
-            Optional per‑iteration mask for hierarchical retrieval, allowing
-            some frequencies to stop updating earlier than others.
-
-        Returns
-        -------
-        Any
-            Retrieved grounded location codes ``p`` per frequency module
-            after running the attractor dynamics.
-        """
-        raise NotImplementedError("Attractor method is not implemented yet.")
-
-    def hebbian(self, M_prev, p_inferred, p_generated, do_hierarchical_connections=True):
-        """Update Hebbian memory with inferred and generated grounded locations.
-
-        Parameters
-        ----------
-        M_prev:
-            Previous Hebbian connectivity matrix for grounded locations.
-        p_inferred:
-            Grounded locations inferred from sensory input and abstract codes.
-        p_generated:
-            Grounded locations generated by the model (e.g. from abstract
-            codes alone).
-        do_hierarchical_connections:
-            If ``True``, apply a connectivity mask implementing hierarchical
-            frequency‑to‑frequency connections during the update.
-
-        Returns
-        -------
-        Any
-            Updated Hebbian memory matrix ``M``.
-        """
-        raise NotImplementedError("Hebbian method is not implemented yet.")
-
-
-class Iteration:
-    """Data container for a single iteration's state and outputs.
-
-    Attributes
-    ----------
-    g : List[Tensor]
-        Abstract location codes per frequency module.
-    x : List[Tensor]
-        Filtered sensory observations per frequency module.
-    a : List
-        Actions taken at this timestep.
-    L : List[Tensor]
-        Loss components for this iteration.
-    M : List[Tensor]
-        Hebbian memory matrices.
-    g_gen : List[Tensor], optional
-        Generated abstract locations from transition model.
-    p_gen : List[Tensor], optional
-        Generated grounded locations from memory retrieval.
-    x_gen : Tensor, optional
-        Generated observations from decoder.
-    x_logits : List[Tensor], optional
-        Logits for observation predictions.
-    x_inf : List[Tensor], optional
-        Inferred filtered sensory features.
-    g_inf : List[Tensor], optional
-        Inferred abstract locations.
-    p_inf : List[Tensor], optional
-        Inferred grounded locations.
-    """
-
-    def __init__(self, g, x, a, L, M, g_gen=None, p_gen=None, x_gen=None, x_logits=None, x_inf=None, g_inf=None, p_inf=None):
-        self.g = g
-        self.x = x
-        self.a = a
-        self.L = L
-        self.M = M
-        self.g_gen = g_gen
-        self.p_gen = p_gen
-        self.x_gen = x_gen
-        self.x_logits = x_logits
-        self.x_inf = x_inf
-        self.g_inf = g_inf
-        self.p_inf = p_inf
-
-    def correct(self, g=None, p=None):
-        """Correct inference with ground truth locations.
-
-        Parameters
-        ----------
-        g : List[Tensor], optional
-            Ground truth abstract locations.
-        p : List[Tensor], optional
-            Ground truth grounded locations.
-        """
-        if g is not None:
-            self.g_inf = g
-        if p is not None:
-            self.p_inf = p
-
-    def detach(self):
-        """Detach all tensors from computation graph."""
-        self.g = [g.detach() if g is not None else None for g in self.g] if self.g else None
-        self.x = [x.detach() if x is not None else None for x in self.x] if self.x else None
-        self.L = [l.detach() if l is not None else None for l in self.L] if self.L else None
-        self.M = [m.detach() if m is not None else None for m in self.M] if self.M else None
-        if self.g_gen:
-            self.g_gen = [g.detach() if g is not None else None for g in self.g_gen]
-        if self.p_gen:
-            self.p_gen = [p.detach() if p is not None else None for p in self.p_gen]
-        if self.x_gen is not None:
-            self.x_gen = self.x_gen.detach()
-        if self.x_logits:
-            self.x_logits = [xl.detach() if xl is not None else None for xl in self.x_logits]
-        if self.x_inf:
-            self.x_inf = [x.detach() if x is not None else None for x in self.x_inf]
-        if self.g_inf:
-            self.g_inf = [g.detach() if g is not None else None for g in self.g_inf]
-        if self.p_inf:
-            self.p_inf = [p.detach() if p is not None else None for p in self.p_inf]

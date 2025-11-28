@@ -187,25 +187,25 @@ if __name__ == "__main__":
     x_f_normalized = processor(x_c_demo, x_prev_demo)  # Full processing (with normalization)
 
     # Plot 1: Frequency bank configuration
-    fig1 = figures.plot_frequency_bank(model_config.f_initial_extended)
+    fig1 = figures.plot_frequency_bank(model_config.f_extended)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_frequency_bank.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 01_frequency_bank.png")
 
     # Plot 2: Temporal filtering across all frequencies
-    fig2 = figures.plot_temporal_filtering(x_c_history, x_f_history, model_config.f_initial_extended)
+    fig2 = figures.plot_temporal_filtering(x_c_history, x_f_history, model_config.f_extended)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_temporal_filtering.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 02_temporal_filtering.png")
 
     # Plot 3: Single feature comparison
-    fig3 = figures.plot_frequency_comparison(x_c_history, x_f_history, model_config.f_initial_extended, feature_idx=0)
+    fig3 = figures.plot_frequency_comparison(x_c_history, x_f_history, model_config.f_extended, feature_idx=0)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_frequency_comparison.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 03_frequency_comparison.png")
 
     # Plot 4: Normalization effects (single timestep)
-    fig4 = figures.plot_normalization_effects(x_f_raw, x_f_normalized, model_config.f_initial_extended)
+    fig4 = figures.plot_normalization_effects(x_f_raw, x_f_normalized, model_config.f_extended)
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_normalization_effects.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 04_normalization_effects.png")

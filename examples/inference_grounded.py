@@ -239,13 +239,13 @@ if __name__ == "__main__":
         print(f"  Saved: 01_environment.png, 02_walk_trajectory.png")
 
     # Plot 3: Sensory processing (temporal filtering)
-    fig3 = figures.plot_temporal_filtering(x_c_history, x_f_history, model_config.f_initial_extended)
+    fig3 = figures.plot_temporal_filtering(x_c_history, x_f_history, model_config.f_extended)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_sensory_processing.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 03_sensory_processing.png")
 
     # Plot 4: Grounded location activity (place cells)
-    fig4 = figures.plot_grounded_location_activity(p_history, observations, locations, model_config.f_initial_extended, model_config.n_p)
+    fig4 = figures.plot_grounded_location_activity(p_history, observations, locations, model_config.f_extended, model_config.n_p)
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_place_cell_activity.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 04_place_cell_activity.png")
@@ -255,13 +255,13 @@ if __name__ == "__main__":
     g_mid = g_history[mid_point]  # List[n_f] of [1, n_g[f]]
     g_mid_downsampled = projection.downsample(projection.transform(g_mid))
     g_sample = [g_mid_downsampled[f][0] for f in range(model_config.n_f)]
-    fig5 = figures.plot_outer_product_structure(g_sample, x_f_history[mid_point], p_history[mid_point], model_config.f_initial_extended)
+    fig5 = figures.plot_outer_product_structure(g_sample, x_f_history[mid_point], p_history[mid_point], model_config.f_extended)
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_outer_product_structure.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 05_outer_product_structure.png")
 
     # Plot 6: Place cell dynamics across frequencies
-    fig6 = figures.plot_place_cell_dynamics(p_history, observations, model_config.f_initial_extended, model_config.n_p)
+    fig6 = figures.plot_place_cell_dynamics(p_history, observations, model_config.f_extended, model_config.n_p)
     if config.save_plots:
         fig6.savefig(config.output_dir / "06_place_cell_dynamics.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 06_place_cell_dynamics.png")

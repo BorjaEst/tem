@@ -77,7 +77,7 @@ class ModelConfig(BaseModel):
 
     @computed_field(description="Extended frequency list including OVC modules when they are separate")
     @property
-    def f_initial_extended(self) -> List[float]:
+    def f_extended(self) -> List[float]:
         if self.separate_ovc and self.n_ovc:
             return self.f_initial + self.f_initial[0 : self.n_f_ovc]
         return self.f_initial
@@ -128,15 +128,15 @@ class ModelConfig(BaseModel):
         - ``f_initial`` has the same length as ``n_g_subsampled`` (the grid
           frequency modules), since these jointly define the base modules.
         - When OVCs are separate, the extended frequency list
-          (``f_initial_extended``) matches the total number of modules
+          (``f_extended``) matches the total number of modules
           (``n_f``).
         """
 
         if len(self.f_initial) != len(self.n_g_subsampled):
             raise ValueError("Length of f_initial must match length of n_g_subsampled; " f"got {len(self.f_initial)} frequencies and " f"{len(self.n_g_subsampled)} grid modules.")
 
-        if self.separate_ovc and self.n_ovc and len(self.f_initial_extended) != self.n_f:
-            raise ValueError("When separate_ovc is True and n_ovc is non-empty, the " "extended frequency list (f_initial_extended) must have " "one entry per module (n_f).")
+        if self.separate_ovc and self.n_ovc and len(self.f_extended) != self.n_f:
+            raise ValueError("When separate_ovc is True and n_ovc is non-empty, the " "extended frequency list (f_extended) must have " "one entry per module (n_f).")
 
         return self
 

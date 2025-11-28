@@ -14,8 +14,10 @@ from .sensory import EncoderParams, ProcessorParams, ProjectionParams
 class Parameters(EncoderParams, ProcessorParams, ProjectionParams, GroundedLocParams, AbstractLocParams):
     """Parameters needed by InferenceModel."""
 
-    n_f_g: int
-    n_f_ovc: int
+    n_x: int
+    n_x_c: int
+    n_g_subsampled_combined: int
+    n_x_f: int
 
 
 class InferenceModel(nn.Module):
@@ -27,9 +29,6 @@ class InferenceModel(nn.Module):
         two_hot_table = utils.create_two_hot_table(params.n_x, params.n_x_c)
         W_repeat = utils.create_W_repeat(params.n_g_subsampled_combined, params.n_x_f)
         W_tile = utils.create_W_tile(params.n_g_subsampled_combined, params.n_x_f)
-        g_downsample = utils.create_g_downsample(params.n_g, params.n_g_subsampled_combined)
-        g_connections = utils.create_g_connections(params.n_f, params.n_f_g, params.n_f_ovc, params.f_initial_extended)
-        p_update_mask = utils.create_p_update_mask(params.n_p, params.n_f, params.n_f_g, params.n_f_ovc, params.f_initial_extended)
 
         # Initialize sub-modules (encoder, processor, tiling, grounded, abstract, projection, attractor)
         self.encoder = sensory.SensoryEncoder(params, two_hot_table)  # Sensory encoder module

@@ -14,34 +14,17 @@ from typing import List, Optional, Tuple
 import torch
 from torch import Tensor, nn
 
-from torch_tem import data, figures, memory, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.core import State
 from torch_tem.core.projection import ProjectionHead
 from torch_tem.generation import GenerativeModel
-from torch_tem.generation.observation import ObservationDecoder
-from torch_tem.generation.transition import TransitionModel
 from torch_tem.inference import InferenceModel
-from torch_tem.inference.abstract import AbstractLocInference
-from torch_tem.inference.grounded import GroundedLocInference
-from torch_tem.inference.sensory import (
-    SensoryEncoder,
-    SensoryProcessor,
-    SensoryProjection,
-)
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
-from torch_tem.utils.masks import (
-    create_g_connections,
-    create_p_retrieve_mask,
-    create_p_update_mask,
-)
+from torch_tem.utils.masks import create_p_retrieve_mask, create_p_update_mask
 from torch_tem.utils.matrices import (
     concatenate_frequencies,
     create_g_downsample,
-    create_two_hot_table,
-    create_W_repeat,
-    create_W_tile,
     split_to_frequencies,
 )
 
@@ -79,10 +62,8 @@ class TEMModel(InferenceModel, GenerativeModel, nn.Module):
         trainable sub‑modules (encoders, projections, memory, etc.).
         """
         # Compute configuration-derived matrices
-        W_repeat = create_W_repeat(params.n_g_subsampled_combined, params.n_x_f)
-        W_tile = create_W_tile(params.n_g_subsampled_combined, params.n_x_f)
         g_downsample = create_g_downsample(params.n_g, params.n_g_subsampled_combined)
-        p_update_mask = create_p_update_mask(params.n_p, params.n_f, params.n_f_g, params.n_f_ovc, params.f_initial_extended)
+        p_update_mask = create_p_update_mask(params.n_p, params.n_f, params.n_f_g, params.n_f_ovc, params.f_extended)
         mask_inf = create_p_retrieve_mask(params.n_p, params.i_attractor, params.max_freq_inf)
         mask_gen = create_p_retrieve_mask(params.n_p, params.i_attractor, params.max_freq_gen)
 

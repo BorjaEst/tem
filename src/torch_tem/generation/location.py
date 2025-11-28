@@ -46,20 +46,19 @@ class LocationGenerator(nn.Module):
     2. Stochastic: Samples from learned uncertainty distribution (do_sample=True)
 
     Architecture:
-        - Memory retrieval via attractor dynamics
+        - Memory retrieval via attractor dynamics (memory provided per call)
         - Optional uncertainty estimation via MLP (when sampling enabled)
-        - Supports separate inference/generative memory networks
+        - Stateless design: memory state passed explicitly to generate()
 
     Attributes:
         n_f: Number of frequency modules
         n_p: List of place cell dimensions per frequency module
-        memory: Hebbian memory storage (M_inf and/or M_gen)
         attractor: Iterative retrieval mechanism
         do_sample: Whether to add learned uncertainty noise
         mlp_sigma_p: MLP for uncertainty estimation (only if do_sample=True)
     """
 
-    def __init__(self, params: LocationGeneratorParams, memory: MemoryStorage, attractor: AttractorDynamics, W_repeat: List[Tensor]):
+    def __init__(self, params: LocationGeneratorParams, attractor: AttractorDynamics, W_repeat: List[Tensor]):
         """Initialize location generator.
 
         Sets up the g→p generative pathway with memory-based retrieval and
@@ -70,13 +69,13 @@ class LocationGenerator(nn.Module):
                 - n_f: Number of frequency modules
                 - n_p: Place cell dimensions per frequency
                 - do_sample: Whether to enable stochastic sampling
-            memory: Hebbian memory storage containing learned g-p associations
             attractor: Iterative attractor mechanism for memory retrieval
             W_repeat: Matrices for projecting g to p dimensions, one per frequency module
 
         Note:
             The uncertainty MLP (mlp_sigma_p) is only created when do_sample=True,
             reducing parameters for deterministic inference.
+            Memory state must be provided explicitly to generate() method.
         """
         super().__init__()
         # Store dimensions from config
@@ -84,7 +83,6 @@ class LocationGenerator(nn.Module):
         self.n_p = params.n_p
 
         # Store component references
-        self.memory = memory
         self.attractor = attractor
         self.do_sample = params.do_sample
 
@@ -102,20 +100,22 @@ class LocationGenerator(nn.Module):
                 hidden_dim=[2 * p for p in params.n_p],
             )
 
-    def generate(self, g: List[Tensor], for_inference: bool = False) -> List[Tensor]:
+    def generate(self, g: List[Tensor], memory_state: Tensor, for_inference: bool = False) -> List[Tensor]:
         """Generate grounded location (p) from abstract location (g) via memory retrieval.
 
         Implements the core g→p transformation using Hebbian associative memory:
         1. Concatenate multi-frequency g into flat query vector
-        2. Select appropriate memory matrix (M_inf or M_gen)
-        3. Retrieve p via iterative attractor dynamics
-        4. Optionally add learned uncertainty noise
+        2. Retrieve p via iterative attractor dynamics using provided memory
+        3. Optionally add learned uncertainty noise
 
         Args:
             g: Abstract location (downsampled grid cells) as list of [n_f] tensors,
                each with shape [B, n_g_subsampled[f]]
-            for_inference: If True, use inference memory (M_inf); if False, use
-                          generative memory (M_gen). Ignored if common_memory=True.
+            memory_state: Hebbian memory matrix to use for retrieval.
+                         Must be provided explicitly (no internal memory storage).
+            for_inference: If True, use inference retrieval mask; if False, use
+                          generative retrieval mask. Used by attractor dynamics
+                          to select appropriate iteration parameters.
 
         Returns:
             p: Retrieved grounded location as list of [n_f] tensors,
@@ -135,8 +135,8 @@ class LocationGenerator(nn.Module):
             p_query_list.append(torch.matmul(g[f], W_repeat))
         p_query = torch.cat(p_query_list, dim=1)
 
-        # Select memory matrix based on network mode
-        M = self.memory.get_memory(for_inference=for_inference)
+        # Use provided memory state
+        M = memory_state
 
         # Retrieve place cell activity via attractor dynamics
         # This iteratively refines the retrieval using: p_t+1 = f(M @ p_t + κ*p_t)
@@ -181,7 +181,7 @@ class LocationGenerator(nn.Module):
             start_idx = end_idx
         return p
 
-    def forward(self, g: List[Tensor], for_inference: bool = False) -> List[Tensor]:
+    def forward(self, g: List[Tensor], memory_state: Tensor, for_inference: bool = False) -> List[Tensor]:
         """Forward pass (alias for generate).
 
         PyTorch convention: defines the computation performed at every call.
@@ -189,12 +189,13 @@ class LocationGenerator(nn.Module):
 
         Args:
             g: Abstract location (downsampled grid cells)
-            for_inference: Whether to use inference or generative memory
+            memory_state: Hebbian memory matrix to use for retrieval
+            for_inference: Whether to use inference or generative retrieval mask
 
         Returns:
             p: Retrieved grounded location (place cells)
         """
-        return self.generate(g, for_inference)
+        return self.generate(g, memory_state, for_inference)
 
 
 # ======================================================================================
@@ -228,7 +229,12 @@ if __name__ == "__main__":
     # Initialize components
     memory = MemoryStorage(params)
     attractor = AttractorDynamics(params)
-    generator = LocationGenerator(params, memory, attractor)
+
+    # Note: W_repeat computation would normally be done by utils.matrices.create_W_repeat
+    # For this example, we create simple identity-like matrices
+    W_repeat = [torch.eye(params.n_g_subsampled[f], sum(params.n_p)) for f in range(params.n_f_g)]
+
+    generator = LocationGenerator(params, attractor, W_repeat)
 
     # Train memory with random patterns (simulating spatial experience)
     n_p_total = sum(params.n_p)
@@ -239,10 +245,13 @@ if __name__ == "__main__":
         memory.update(p_patterns, p_patterns, eta=params.eta, lamb=params.lambda_)
 
     # Generate from abstract location query
-    g_test = [torch.randn(2, params.n_p[f]).softmax(dim=1) for f in range(params.n_f)]
+    g_test = [torch.randn(2, params.n_g_subsampled[f]).softmax(dim=1) for f in range(params.n_f_g)]
+
+    # Get memory state and pass it explicitly
+    M_gen = memory.get_memory(for_inference=False)
 
     with torch.no_grad():
-        p_generated = generator.generate(g_test, for_inference=False)
+        p_generated = generator.generate(g_test, M_gen, for_inference=False)
 
     print("Generated grounded locations:")
     print(f"  Input: {len(g_test)} frequency modules")
@@ -252,17 +261,17 @@ if __name__ == "__main__":
 
     # Compare deterministic vs stochastic modes
     with torch.no_grad():
-        p_det_1 = generator.generate(g_test, for_inference=False)
-        p_det_2 = generator.generate(g_test, for_inference=False)
+        p_det_1 = generator.generate(g_test, M_gen, for_inference=False)
+        p_det_2 = generator.generate(g_test, M_gen, for_inference=False)
 
     det_diff = torch.stack([torch.norm(p1 - p2) for p1, p2 in zip(p_det_1, p_det_2)]).mean()
 
     params_stoch = params.model_copy(update={"do_sample": True})
-    gen_stoch = LocationGenerator(params_stoch, memory, attractor)
+    gen_stoch = LocationGenerator(params_stoch, attractor, W_repeat)
 
     with torch.no_grad():
-        p_stoch_1 = gen_stoch.generate(g_test, for_inference=False)
-        p_stoch_2 = gen_stoch.generate(g_test, for_inference=False)
+        p_stoch_1 = gen_stoch.generate(g_test, M_gen, for_inference=False)
+        p_stoch_2 = gen_stoch.generate(g_test, M_gen, for_inference=False)
 
     stoch_diff = torch.stack([torch.norm(p1 - p2) for p1, p2 in zip(p_stoch_1, p_stoch_2)]).mean()
 

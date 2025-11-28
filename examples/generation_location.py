@@ -2,9 +2,9 @@
 """Location generation example demonstrating g→p memory-based retrieval.
 
 This example demonstrates the torch_tem.generation.LocationGenerator capabilities:
-- LocationGenerator initialization with memory and attractor components
+- LocationGenerator initialization with attractor component (stateless)
 - Generative pathway: abstract location (g) → grounded location (p)
-- Memory-based retrieval via Hebbian associations
+- Memory-based retrieval via Hebbian associations (memory passed explicitly)
 - Deterministic vs. stochastic generation modes
 - Uncertainty estimation and sampling
 - Dual memory comparison (inference vs. generative networks)
@@ -101,9 +101,9 @@ if __name__ == "__main__":
     )
 
     # Compute connectivity matrices from model config
-    p_update_mask = utils.utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_initial_extended)
-    mask_inf = utils.utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
-    mask_gen = utils.utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
+    p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_extended)
+    mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
+    mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
     W_repeat = utils.matrices.create_W_repeat(model_config.n_g_subsampled_combined, [config.n_x_c] * model_config.n_f)
 
     print("=" * 80)
@@ -126,7 +126,7 @@ if __name__ == "__main__":
 
     # Create params object for LocationGenerator with required protocol fields
     gen_params = SimpleNamespace(do_sample=config.do_sample, n_f=model_config.n_f, n_p=model_config.n_p)
-    generator = LocationGenerator(gen_params, storage, attractor, W_repeat)
+    generator = LocationGenerator(gen_params, attractor, W_repeat)
 
     print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
     print(f"  ✓ M_gen: {storage.M_gen.shape}")
@@ -194,10 +194,13 @@ if __name__ == "__main__":
     print("Phase 5: Generating grounded locations (p) from abstract locations (g)...")
     retrievals = []
 
+    # Get generative memory state
+    M_gen = storage.get_memory(for_inference=False)
+
     with torch.no_grad():
         for i, g_test in enumerate(test_queries):
-            # Generate grounded location via memory retrieval
-            p_retrieved = generator.generate(g_test, for_inference=False)
+            # Generate grounded location via memory retrieval (pass memory explicitly)
+            p_retrieved = generator.generate(g_test, M_gen, for_inference=False)
             retrievals.append(p_retrieved)
 
             # Compute total activity
@@ -217,8 +220,8 @@ if __name__ == "__main__":
 
     # Test deterministic mode (same query twice)
     with torch.no_grad():
-        p_det_1 = generator.generate(test_queries[0], for_inference=False)
-        p_det_2 = generator.generate(test_queries[0], for_inference=False)
+        p_det_1 = generator.generate(test_queries[0], M_gen, for_inference=False)
+        p_det_2 = generator.generate(test_queries[0], M_gen, for_inference=False)
 
     det_diff = torch.stack([torch.norm(p1 - p2) for p1, p2 in zip(p_det_1, p_det_2)]).mean()
     print(f"  Deterministic mode:")
@@ -227,10 +230,11 @@ if __name__ == "__main__":
 
     if config.do_sample:
         # Test stochastic mode
-        gen_stoch = LocationGenerator(model_config, inference_config, storage, attractor, W_repeat)
+        gen_params_stoch = SimpleNamespace(do_sample=True, n_f=model_config.n_f, n_p=model_config.n_p)
+        gen_stoch = LocationGenerator(gen_params_stoch, attractor, W_repeat)
         with torch.no_grad():
-            p_stoch_1 = gen_stoch.generate(test_queries[0], for_inference=False)
-            p_stoch_2 = gen_stoch.generate(test_queries[0], for_inference=False)
+            p_stoch_1 = gen_stoch.generate(test_queries[0], M_gen, for_inference=False)
+            p_stoch_2 = gen_stoch.generate(test_queries[0], M_gen, for_inference=False)
 
         stoch_diff = torch.stack([torch.norm(p1 - p2) for p1, p2 in zip(p_stoch_1, p_stoch_2)]).mean()
         print(f"  Stochastic mode:")
@@ -246,9 +250,13 @@ if __name__ == "__main__":
     if not model_config.common_memory:
         print("Phase 7: Analyzing dual memory (inference vs. generative)...")
 
+        # Get both memory states
+        M_gen = storage.get_memory(for_inference=False)
+        M_inf = storage.get_memory(for_inference=True)
+
         with torch.no_grad():
-            p_gen = generator.generate(test_queries[0], for_inference=False)
-            p_inf = generator.generate(test_queries[0], for_inference=True)
+            p_gen = generator.generate(test_queries[0], M_gen, for_inference=False)
+            p_inf = generator.generate(test_queries[0], M_inf, for_inference=True)
 
         diff = torch.stack([torch.norm(pg - pi) for pg, pi in zip(p_gen, p_inf)]).mean()
         print(f"  Generative vs. Inference retrieval:")
@@ -324,18 +332,22 @@ if __name__ == "__main__":
     if config.do_sample:
         fig4, axes = plt.subplots(2, 3, figsize=(15, 8))
 
+        # Get memory state for generation
+        M_gen = storage.get_memory(for_inference=False)
+
         with torch.no_grad():
             for sample_idx in range(3):
                 # Deterministic
-                p_det = generator.generate(test_queries[0], for_inference=False)
+                p_det = generator.generate(test_queries[0], M_gen, for_inference=False)
                 p_det_flat = utils.concatenate_frequencies(p_det).squeeze(0)
                 axes[0, sample_idx].bar(range(len(p_det_flat)), p_det_flat.cpu().numpy())
                 axes[0, sample_idx].set_title(f"Deterministic - Sample {sample_idx+1}")
                 axes[0, sample_idx].set_ylim(0, p_det_flat.max().item() * 1.2)
 
                 # Stochastic
-                gen_stoch = LocationGenerator(gen_params, storage, attractor, W_repeat)
-                p_stoch = gen_stoch.generate(test_queries[0], for_inference=False)
+                gen_params_stoch = SimpleNamespace(do_sample=True, n_f=model_config.n_f, n_p=model_config.n_p)
+                gen_stoch = LocationGenerator(gen_params_stoch, attractor, W_repeat)
+                p_stoch = gen_stoch.generate(test_queries[0], M_gen, for_inference=False)
                 p_stoch_flat = utils.concatenate_frequencies(p_stoch).squeeze(0)
                 axes[1, sample_idx].bar(range(len(p_stoch_flat)), p_stoch_flat.cpu().numpy())
                 axes[1, sample_idx].set_title(f"Stochastic - Sample {sample_idx+1}")

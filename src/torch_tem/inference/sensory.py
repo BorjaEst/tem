@@ -35,7 +35,7 @@ are required by this implementation:
 - ``n_f``: int, number of frequencies (length of the filter bank)
 - ``n_x_c``: int, feature dimension of the compressed sensory vector
 - ``n_x_f``: int, optional downstream convenience (unused here)
-- ``f_initial_extended``: Sequence[float], frequency values in (0, 1]
+- ``f_extended``: Sequence[float], frequency values in (0, 1]
 
 Notes
 -----
@@ -55,7 +55,7 @@ from torch import Tensor
 class ProcessorParams(Protocol):
     """Minimal interface for SensoryProcessor.
 
-    Dependencies: n_f, n_x_c, n_x_f, f_initial_extended
+    Dependencies: n_f, n_x_c, n_x_f, f_extended
     Complexity: Low (4 parameters)
     """
 
@@ -64,7 +64,7 @@ class ProcessorParams(Protocol):
     n_x_f: List[int]
 
     @property
-    def f_initial_extended(self) -> List[float]:
+    def f_extended(self) -> List[float]:
         """Extended frequency list including OVC modules when they are separate"""
         ...
 
@@ -84,7 +84,7 @@ class SensoryProcessor(nn.Module):
         self.n_f = params.n_f  # Number of frequencies (filter channels)
         self.n_x_c = params.n_x_c  # Feature dimension of compressed sensory input
         self.n_x_f = params.n_x_f  # Calculated size for downstream components
-        self.f_initial = params.f_initial_extended  # Frequency values in (0, 1]
+        self.f_initial = params.f_extended  # Frequency values in (0, 1]
 
         # Learnable normalization parameters
         # Element-wise affine transform prior to L2 normalization
@@ -292,7 +292,7 @@ if __name__ == "__main__":
         n_f=n_f,
         n_x_c=n_x_c,
         n_x_f=n_f * n_x_c,  # not used by this module, but often handy downstream
-        f_initial_extended=[0.1, 0.5, 0.9],
+        f_extended=[0.1, 0.5, 0.9],
     )
 
     proc = SensoryProcessor(params)

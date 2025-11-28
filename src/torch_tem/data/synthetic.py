@@ -17,7 +17,7 @@ class SyntheticGridParams(Protocol):
     """
 
     n_g: List[int]
-    f_initial_extended: List[float]
+    f_extended: List[float]
 
 
 class SyntheticGridGenerator:
@@ -38,7 +38,7 @@ class SyntheticGridGenerator:
         """Initialize synthetic grid generator.
 
         Args:
-            params: Configuration providing n_g, f_initial_extended
+            params: Configuration providing n_g, f_extended
             walk_length: Number of timesteps to generate
             batch_size: Batch size for generation
             time_scale: Time scaling factor for oscillations
@@ -53,8 +53,8 @@ class SyntheticGridGenerator:
         self.noise_scale = noise_scale
 
         # Validate matching lengths
-        if len(self.params.n_g) != len(self.params.f_initial_extended):
-            raise ValueError(f"n_g length ({len(self.params.n_g)}) must match " f"f_initial_extended length ({len(self.params.f_initial_extended)})")
+        if len(self.params.n_g) != len(self.params.f_extended):
+            raise ValueError(f"n_g length ({len(self.params.n_g)}) must match " f"f_extended length ({len(self.params.f_extended)})")
 
     def generate(self) -> List[List[Tensor]]:
         """Generate synthetic grid cell activity patterns.
@@ -72,7 +72,7 @@ class SyntheticGridGenerator:
         g_per_freq = []
         for f in range(n_f):
             # Create time axis scaled by frequency
-            t = torch.linspace(0, self.time_scale * self.params.f_initial_extended[f], self.walk_length)
+            t = torch.linspace(0, self.time_scale * self.params.f_extended[f], self.walk_length)
             t = t.unsqueeze(1).unsqueeze(2)  # [T, 1, 1]
 
             # Random phase offsets per cell
@@ -113,7 +113,7 @@ if __name__ == "__main__":
     # Create a minimal config implementing SyntheticGridParams protocol
     class ExampleConfig(BaseModel):
         n_g: List[int] = [12, 10, 8]
-        f_initial_extended: List[float] = [0.1, 0.3, 0.9]
+        f_extended: List[float] = [0.1, 0.3, 0.9]
 
     print("=" * 80)
     print("Synthetic Grid Cell Generator Example")
@@ -126,7 +126,7 @@ if __name__ == "__main__":
 
     print(f"\nConfiguration:")
     print(f"  Steps: {walk_length}")
-    print(f"  Frequencies: {config.f_initial_extended}")
+    print(f"  Frequencies: {config.f_extended}")
     print(f"  Grid dimensions: {config.n_g}")
     print(f"  Batch size: {batch_size}")
 
@@ -141,4 +141,4 @@ if __name__ == "__main__":
         g_f_shape = g_history[0][f].shape
         # Collect stats across all timesteps for this frequency
         g_f_values = torch.stack([g_history[t][f] for t in range(len(g_history))])
-        print(f"  Frequency {f} (f={config.f_initial_extended[f]:.2f}): shape=[B, n_g]={g_f_shape}, " f"mean={g_f_values.mean():.4f}, std={g_f_values.std():.4f}")
+        print(f"  Frequency {f} (f={config.f_extended[f]:.2f}): shape=[B, n_g]={g_f_shape}, " f"mean={g_f_values.mean():.4f}, std={g_f_values.std():.4f}")

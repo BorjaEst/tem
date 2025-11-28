@@ -11,7 +11,7 @@ from torch import Tensor
 class ProjectionParams(Protocol):
     """Minimal interface for ProjectionHead.
 
-    Dependencies: n_f, n_g, g_downsample, f_initial_extended
+    Dependencies: n_f, n_g, g_downsample, f_extended
     Complexity: Low (4 parameters)
     """
 
@@ -19,7 +19,7 @@ class ProjectionParams(Protocol):
     n_g: List[int]  # Entorhinal abstract location neurons per frequency
 
     @property
-    def f_initial_extended(self) -> List[float]:
+    def f_extended(self) -> List[float]:
         """Extended frequency list including OVC modules when they are separate"""
         ...
 
@@ -45,9 +45,7 @@ class ProjectionHead(nn.Module):
         self.g_downsample = g_downsample
 
         # Learnable Laplacian scales (learned as inverse sigmoid)
-        self.alpha = nn.ParameterList(
-            [nn.Parameter(torch.tensor(np.log(params.f_initial_extended[f] / (1 - params.f_initial_extended[f])), dtype=torch.float)) for f in range(self.n_f)]
-        )
+        self.alpha = nn.ParameterList([nn.Parameter(torch.tensor(np.log(params.f_extended[f] / (1 - params.f_extended[f])), dtype=torch.float)) for f in range(self.n_f)])
 
     def transform(self, g: List[Tensor]) -> List[Tensor]:
         """Apply Laplacian transform.

@@ -146,7 +146,7 @@ if __name__ == "__main__":
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)
     g_downsampled = utils.create_g_downsample(model_config.n_g, model_config.n_g_subsampled_combined)
-    p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_initial_extended)
+    p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_extended)
     mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
     mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
     W_repeat = utils.create_W_repeat(model_config.n_g_subsampled_combined, model_config.n_x_f)

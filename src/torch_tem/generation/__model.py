@@ -1,20 +1,28 @@
 from typing import Any, Dict, List, Optional, Protocol
 
+import torch
 from torch import Tensor, nn
 
-from ..core.projection import ProjectionHead
-from ..memory.attractor import AttractorDynamics
-from ..utils import masks
-from . import observation, transition
+from .. import utils
+from ..core import ProjectionHead
+from ..memory import AttractorDynamics
+from . import location, observation, transition
+from .location import LocationGeneratorParams
+from .observation import DecoderParams
+from .transition import TransitionParams
 
 
-class Parameters(transition.TransitionParams, observation.DecoderParams):
+class Parameters(TransitionParams, DecoderParams, LocationGeneratorParams):
     """Model parameters needed by Model."""
 
     n_f: int
     n_f_g: int
     n_f_ovc: int
-    f_initial: List[float]
+
+    @property
+    def f_extended(self) -> List[bool]:
+        """List indicating which frequency modules are extended."""
+        ...
 
 
 class GenerativeModel(nn.Module):
@@ -23,11 +31,13 @@ class GenerativeModel(nn.Module):
     def __init__(self, params: Parameters, projection: ProjectionHead, attractor: AttractorDynamics):
         super().__init__()
         # Compute configuration-derived matrices
-        g_connections = utils.create_g_connections(params.n_f, params.n_f_g, params.n_f_ovc, params.f_initial_extended)
+        g_connections = utils.create_g_connections(params.n_f, params.n_f_g, params.n_f_ovc, params.f_extended)
+        W_repeat = utils.matrices.create_W_repeat(params.n_g_subsampled_combined, [params.n_x_c] * params.n_f)
 
         # Initialize sub-modules (transition, projection, decoder, attractor)
         self.transition = transition.TransitionModel(params, g_connections)  # Transition dynamics module
         self.decoder = observation.ObservationDecoder(params)  # Observation decoder module
+        self.location = location.LocationGenerator(params, attractor, W_repeat)  # Location generator module (stateless)
         self.projection = projection  # Projection module for g to p
         self.attractor = attractor  # Attractor dynamics for memory retrieval
 
@@ -60,7 +70,7 @@ class GenerativeModel(nn.Module):
             retrieved from memory.
         """
         # Route 1: Direct from p_inf → x_p
-        x_p, x_p_logits = self.decoder(p)
+        x_p, x_p_logits = self.decoder(p_inf)
 
         # Route 2: g_inf → memory → p → x_g
         p_g_inf = self.gen_p(g_inf, M_prev[0])
@@ -137,16 +147,10 @@ class GenerativeModel(nn.Module):
         # Normalize and downsample g for memory indexing
         g_ = self.projection.downsample(self.projection.normalize_g(g))
 
-        # Expand g to p dimensions by repeating across sensory features
-        # This converts [batch, n_g_subsampled[f]] to [batch, n_p[f]] per frequency
-        g_repeated = [torch.matmul(g_[f], self.W_repeat[f]) for f in range(self.config.architecture.n_f)]
+        # Delegate to LocationGenerator with explicit memory state (required)
+        p = self.location.generate(g_, M_prev, for_inference=False)
 
-        # Retrieve from memory via attractor dynamics
-        g_flat = concatenate_frequencies(g_repeated)
-        p_flat = self.attractor.retrieve(g_flat, M_prev, for_inference=False)
-
-        # Convert back to per-frequency format
-        p = split_to_frequencies(p_flat, self.config.architecture.n_p)
+        return p
 
     def gen_x(self, p):
         """Generate observations from grounded locations.

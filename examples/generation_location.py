@@ -31,7 +31,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, utils
-from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
+from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.generation.location import LocationGenerator
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
@@ -90,12 +90,20 @@ if __name__ == "__main__":
     config = ExampleConfig()
 
     # Create config objects with proper field mapping
-    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa, do_sample=config.do_sample)
-    model_config = ModelConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, common_memory=config.common_memory)
+    model_config = ModelConfig(
+        n_x_c=config.n_x_c,
+        n_g_subsampled=config.n_g_subsampled,
+        f_initial=config.f_initial,
+        common_memory=config.common_memory,
+        do_sample=config.do_sample,
+        eta=config.eta,
+        kappa=config.kappa,
+    )
 
     # Compute connectivity matrices from model config
-    p_update_mask = utils.masks.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_initial_extended)
-    mask_inf, mask_gen = utils.masks.create_p_retrieve_masks(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf, model_config.max_freq_gen)
+    p_update_mask = utils.utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_initial_extended)
+    mask_inf = utils.utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
+    mask_gen = utils.utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
     W_repeat = utils.matrices.create_W_repeat(model_config.n_g_subsampled_combined, [config.n_x_c] * model_config.n_f)
 
     print("=" * 80)
@@ -113,8 +121,8 @@ if __name__ == "__main__":
     # PHASE 1: Initialize Memory Components
     # =========================================================================
     print("Phase 1: Initializing memory components...")
-    storage = MemoryStorage(model_config, inference_config, p_update_mask)
-    attractor = AttractorDynamics(model_config, inference_config, mask_inf, mask_gen)
+    storage = MemoryStorage(model_config, p_update_mask)
+    attractor = AttractorDynamics(model_config, mask_inf, mask_gen)
 
     # Create params object for LocationGenerator with required protocol fields
     gen_params = SimpleNamespace(do_sample=config.do_sample, n_f=model_config.n_f, n_p=model_config.n_p)

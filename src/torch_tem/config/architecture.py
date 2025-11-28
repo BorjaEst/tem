@@ -21,6 +21,7 @@ class ModelConfig(BaseModel):
     # BASE DIMENSIONS
     # ===================================================================================
 
+    batch_size: int = Field(default=4, ge=1, description="Batch size for training and inference")
     n_x: int = Field(default=45, ge=1, description="Number of sensory observation neurons x")
     n_x_c: int = Field(default=10, ge=1, description="Number of compressed sensory neurons x_c")
     n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 10, 8, 6, 6], description="Subsampled grid cells per frequency module")
@@ -138,3 +139,17 @@ class ModelConfig(BaseModel):
             raise ValueError("When separate_ovc is True and n_ovc is non-empty, the " "extended frequency list (f_initial_extended) must have " "one entry per module (n_f).")
 
         return self
+
+    # ===================================================================================
+    # INFERENCE BEHAVIOUR
+    # ===================================================================================
+
+    do_sample: bool = Field(default=False, description="If False, use distribution means instead of sampling (no observation noise)")
+    use_p_inf: bool = Field(default=True, description="Use inferred ground location p_inf when inferring new abstract location")
+
+    # ===================================================================================
+    # MEMORY DYNAMICS (can be tuned at inference time)
+    # ===================================================================================
+
+    eta: float = Field(default=0.5, ge=0, le=1, description="Hebbian rate of remembering (η in memory update)")
+    kappa: float = Field(default=0.8, ge=0, le=1, description="Hebbian retrieval decay term κ")

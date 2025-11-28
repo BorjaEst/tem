@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Abstract location inference example demonstrating precision-weighted fusion.
 
-This example demonstrates the torch_tem.inference.AbstractLocationInference capabilities:
+This example demonstrates the torch_tem.inference.AbstractLocInference capabilities:
 - Precision-weighted fusion of multiple information sources
 - Transition-based prediction (g_gen) with uncertainty
 - Memory-based inference (p_x → g_mem) via learned projections
@@ -67,12 +67,11 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, utils
-from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
+from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
-from torch_tem.core.tiling import SensoryProjection
-from torch_tem.inference.abstract import AbstractLocationInference
-from torch_tem.inference.sensory import SensoryProcessor
+from torch_tem.inference.abstract import AbstractLocInference
+from torch_tem.inference.sensory import SensoryProcessor, SensoryProjection
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -140,14 +139,16 @@ if __name__ == "__main__":
 
     # Create config objects with proper field mapping
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
-    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa, use_p_inf=config.use_p_inf)
-    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ModelConfig(
+        n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, eta=config.eta, kappa=config.kappa, use_p_inf=config.use_p_inf
+    )
 
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)
     g_downsampled = utils.create_g_downsample(model_config.n_g, model_config.n_g_subsampled_combined)
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_initial_extended)
-    mask_inf, mask_gen = utils.create_p_retrieve_masks(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf, model_config.max_freq_gen)
+    mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
+    mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
     W_repeat = utils.create_W_repeat(model_config.n_g_subsampled_combined, model_config.n_x_f)
     W_tile = utils.create_W_tile(model_config.n_g_subsampled_combined, model_config.n_x_f)
 
@@ -204,8 +205,8 @@ if __name__ == "__main__":
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 
     # Abstract location inference
-    abstract = AbstractLocationInference(model_config, inference_config)
-    print(f"  ✓ AbstractLocationInference: precision-weighted fusion")
+    abstract = AbstractLocInference(model_config, inference_config)
+    print(f"  ✓ AbstractLocInference: precision-weighted fusion")
 
     # Projection head for downsampling
     projection = ProjectionHead(model_config, g_downsampled)
@@ -363,7 +364,7 @@ if __name__ == "__main__":
     print(f"Stage 4: Hippocampal patterns from sensory (p_x) - {model_config.n_p}")
     print(f"  ↓ Projection to abstract (p_x @ W_repeat^T)")
     print(f"Stage 5: Memory-based abstract (g_mem) - {model_config.n_g_subsampled_combined}")
-    print(f"  ↓ AbstractLocationInference (precision-weighted fusion)")
+    print(f"  ↓ AbstractLocInference (precision-weighted fusion)")
     print(f"Output: Abstract location (g_inf) - {model_config.n_g}")
     print("=" * 80)
     print()

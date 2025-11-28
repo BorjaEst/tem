@@ -29,7 +29,7 @@ Shapes
 Parameters
 ----------
 `SensoryProcessor` is configured via an object matching
-``torch_tem.config.facets.SensoryProcessorParams``. Only the following fields
+``torch_tem.config.facets.ProcessorParams``. Only the following fields
 are required by this implementation:
 
 - ``n_f``: int, number of frequencies (length of the filter bank)
@@ -52,7 +52,7 @@ import torch.nn as nn
 from torch import Tensor
 
 
-class SensoryProcessorParams(Protocol):
+class ProcessorParams(Protocol):
     """Minimal interface for SensoryProcessor.
 
     Dependencies: n_f, n_x_c, n_x_f, f_initial_extended
@@ -78,7 +78,7 @@ class SensoryProcessor(nn.Module):
     Then applies L2 normalization with learnable weights and biases.
     """
 
-    def __init__(self, params: SensoryProcessorParams):
+    def __init__(self, params: ProcessorParams):
         super().__init__()
 
         self.n_f = params.n_f  # Number of frequencies (filter channels)
@@ -148,6 +148,136 @@ class SensoryProcessor(nn.Module):
         # 2) Per-channel L2 normalization with learnable affine transform
         x_normalized = self.normalize(x_f)
         return x_normalized
+
+
+class EncoderParams(Protocol):
+    """Minimal interface for SensoryEncoder.
+
+    Dependencies: n_x, n_x_c, two_hot_table
+    Complexity: Low (3 parameters)
+    """
+
+    n_x: int
+    n_x_c: int
+
+
+class SensoryEncoder(nn.Module):
+    """Encodes one-hot observations to two-hot compressed representation via lookup table.
+
+    Parameter-free compression using pre-computed two-hot codes. Each code has exactly
+    two active bits, enabling efficient outer products and Hebbian learning downstream.
+
+    Attributes:
+        n_x: Number of unique observations
+        n_x_c: Compressed dimension (two-hot code length)
+        two_hot_table: List[Tensor] of [n_x_c] codes with 2 active elements each
+
+    Args:
+        params: EncoderParams with n_x, n_x_c, two_hot_table
+        two_hot_table: List[Tensor] of [n_x_c] codes with 2 active elements each
+
+    Example:
+        >>> params = SimpleNamespace(n_x=10, n_x_c=5,
+        ...     two_hot_table=create_two_hot_table(10, 5))
+        >>> encoder = SensoryEncoder(params)
+        >>> x = torch.zeros(2, 10); x[0, 0] = 1.0; x[1, 5] = 1.0
+        >>> x_c = encoder(x)  # Shape: [2, 5], each row has 2 active bits
+    """
+
+    def __init__(self, params: EncoderParams, two_hot_table: List[Tensor]):
+        """Initialize encoder with two-hot lookup table."""
+        super().__init__()
+        self.n_x = params.n_x
+        self.n_x_c = params.n_x_c
+        self.two_hot_table = two_hot_table
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Encode one-hot observation [B, n_x] to two-hot [B, n_x_c].
+
+        Args:
+            x: One-hot tensor, each row has single 1.0 at observation index
+
+        Returns:
+            x_c: Two-hot codes, each row has exactly two 1.0 values
+        """
+        indices = torch.argmax(x, dim=1)  # Extract active observation index [B]
+        two_hot_tensor = torch.stack(self.two_hot_table).to(x.device)  # [n_x, n_x_c]
+        x_c = two_hot_tensor[indices]  # Batch lookup [B, n_x_c]
+        return x_c
+
+
+class ProjectionParams(Protocol):
+    """Minimal interface for SensoryProjection.
+
+    Dependencies: n_f, n_x_f
+    Complexity: Low (2 parameters)
+    """
+
+    n_f: int
+    n_x_f: List[int]
+
+
+class SensoryProjection(nn.Module):
+    """Projects sensory input to p-space via learnable tiling transformation.
+
+    In TEM, sensory observations (x) must be transformed to match the dimensionality
+    of the grounded location space (p) for Hebbian memory operations. This module
+    applies a frequency-specific tiling matrix (W_tile) with learnable gating weights
+    to prepare sensory input for outer product computation with abstract locations.
+
+    Architecture:
+        - Per-frequency tiling matrices (W_tile): Fixed transformation matrices
+        - Per-frequency gate weights (w_p): Learnable scalars controlling contribution
+        - Sigmoid activation: Ensures 0-1 gating range
+
+    Forward Pass:
+        x_[f] = sigmoid(w_p[f]) * (x_normalized[f] @ W_tile[f])
+
+    Args:
+        params: Configuration providing n_f, n_x_f, and W_tile matrices
+        W_tile: Fixed tiling matrices [n_x_f[f] x n_p[f] for f in n_f]
+
+    Attributes:
+        n_f: Number of frequency modules
+        n_x_f: Sensory dimensions per frequency [n_x_f[f] for f in n_f]
+        W_tile: Fixed tiling matrices [n_x_f[f] x n_p[f] for f in n_f]
+        w_p: Learnable gate weights [n_f learnable scalars]
+
+    Shape:
+        Input: List of [B, n_x_f[f]] tensors (one per frequency)
+        Output: List of [B, n_p[f]] tensors (one per frequency)
+    """
+
+    def __init__(self, params: ProjectionParams, W_tile: List[Tensor]):
+        """Initialize sensory projection with tiling matrices and gate weights."""
+        super().__init__()
+        self.n_f = params.n_f
+        self.n_x_f = params.n_x_f
+        self.W_tile = W_tile
+
+        # Initialize learnable gate weights (one per frequency module)
+        self.w_p = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_f)])
+
+    def forward(self, x_normalized: List[Tensor]) -> List[Tensor]:
+        """Transform normalized sensory input to p-space representation.
+
+        Args:
+            x_normalized: Temporally filtered sensory input per frequency
+                         List of [B, n_x_f[f]] tensors
+
+        Returns:
+            List of [B, n_p[f]] tensors ready for memory indexing
+        """
+        x_ = []
+        for f in range(self.n_f):
+            # Gate sensory input with learnable weight (sigmoid ensures [0,1])
+            gate = torch.sigmoid(self.w_p[f])
+            # Apply tiling transformation to match p-space dimensions
+            W_tile_f = self.W_tile[f].to(x_normalized[f].device)
+            x_f = gate * torch.matmul(x_normalized[f], W_tile_f)
+            x_.append(x_f)
+
+        return x_
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_i
     return p_update_mask
 
 
-def create_p_retrieve_masks(n_p: List[int], i_attractor: int, max_freq_inf: List[int], max_freq_gen: List[int]) -> tuple[List[Tensor], List[Tensor]]:
+def create_p_retrieve_mask(n_p: List[int], i_attractor: int, max_freq: List[int]) -> List[Tensor]:
     """Create hierarchical masks for memory retrieval with early-stopping.
 
     Hierarchical memory retrieval is implemented by early-stopping low-frequency
@@ -55,27 +55,23 @@ def create_p_retrieve_masks(n_p: List[int], i_attractor: int, max_freq_inf: List
     Args:
         n_p: Grounded location dimensions per frequency
         i_attractor: Number of attractor iterations
-        max_freq_inf: Max iterations per frequency (inference)
-        max_freq_gen: Max iterations per frequency (generation)
+        max_freq: Max iterations per frequency
 
     Returns:
-        Tuple of (inference_masks, generation_masks), each a list of [i_attractor]
-        masks of shape [sum(n_p)]
+        List of [i_attractor] masks of shape [sum(n_p)]
     """
     n_p_cumsum = np.cumsum(np.concatenate(([0], n_p)))
 
     # Initialize masks
-    p_retrieve_mask_inf = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
-    p_retrieve_mask_gen = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
+    p_retrieve_mask = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
 
     # Build masks for each retrieval iteration
-    for mask, max_iters in zip([p_retrieve_mask_inf, p_retrieve_mask_gen], [max_freq_inf, max_freq_gen]):
-        for f, max_i in enumerate(max_iters):
-            # Update masks up to maximum iteration for this frequency
-            for i in range(max_i):
-                mask[i][n_p_cumsum[f] : n_p_cumsum[f + 1]] = 1.0
+    for f, max_i in enumerate(max_freq):
+        # Update masks up to maximum iteration for this frequency
+        for i in range(max_i):
+            p_retrieve_mask[i][n_p_cumsum[f] : n_p_cumsum[f + 1]] = 1.0
 
-    return p_retrieve_mask_inf, p_retrieve_mask_gen
+    return p_retrieve_mask
 
 
 def create_g_connections(n_f: int, n_f_g: int, n_f_ovc: int, f_initial: List[float]) -> List[List[bool]]:

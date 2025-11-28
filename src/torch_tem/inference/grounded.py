@@ -22,8 +22,8 @@ import torch.nn as nn
 from torch import Tensor
 
 
-class GroundedInferenceParams(Protocol):
-    """Minimal interface for GroundedLocationInference.
+class GroundedLocParams(Protocol):
+    """Minimal interface for GroundedLocInference.
 
     Dependencies: n_f, n_p, n_x_c, W_repeat, W_tile
     Complexity: Low (5 parameters)
@@ -34,7 +34,7 @@ class GroundedInferenceParams(Protocol):
     n_p: List[int]
 
 
-class GroundedLocationInference(nn.Module):
+class GroundedLocInference(nn.Module):
     """Infers grounded location p via outer product of abstract location g and sensory x.
 
     Creates hippocampal place-like representations by binding grid cell patterns (g)
@@ -49,20 +49,20 @@ class GroundedLocationInference(nn.Module):
         W_tile_{f}: Matrices for expanding x to outer product dimension
 
     Args:
-        params: GroundedInferenceParams with n_f, n_p,
+        params: GroundedLocParams with n_f, n_p,
                 W_repeat, W_tile
 
     Example:
         >>> params = SimpleNamespace(n_f=2, n_p=[30, 24],
         ...     W_repeat=[torch.randn(10, 30), torch.randn(8, 24)],
         ...     W_tile=[torch.randn(3, 30), torch.randn(3, 24)])
-        >>> grounded = GroundedLocationInference(params)
+        >>> grounded = GroundedLocInference(params)
         >>> g = [torch.randn(4, 10), torch.randn(4, 8)]  # batch=4
         >>> x = [torch.randn(4, 3), torch.randn(4, 3)]
         >>> p = grounded(g, x)  # Returns list of [4, 30] and [4, 24]
     """
 
-    def __init__(self, params: GroundedInferenceParams, W_repeat: List[Tensor], W_tile: List[Tensor]):
+    def __init__(self, params: GroundedLocParams, W_repeat: List[Tensor], W_tile: List[Tensor]):
         """Initialize with Kronecker product matrices for efficient outer product computation."""
         super().__init__()
         self.n_f = params.n_f
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     from torch_tem.utils import create_W_repeat, create_W_tile
 
     print("=" * 80)
-    print("GroundedLocationInference Example - TEM Place Cell Formation")
+    print("GroundedLocInference Example - TEM Place Cell Formation")
     print("=" * 80)
 
     # Configuration: 2 frequency modules with different scales
@@ -150,7 +150,7 @@ if __name__ == "__main__":
     # Create inference module
     params = types.SimpleNamespace(n_f=n_f, n_p=n_p, W_repeat=W_repeat, W_tile=W_tile)
 
-    grounded = GroundedLocationInference(params)
+    grounded = GroundedLocInference(params)
     print(f"\nModule initialized with {n_f} frequency modules")
     print(f"Learnable weights w_p: {[f'{w.item():.2f}' for w in grounded.w_p]}")
 
@@ -204,7 +204,7 @@ if __name__ == "__main__":
     print("  1. TransitionModel: a → g (predict abstract location from action)")
     print("  2. ProjectionHead: g → g_downsampled (downsample for memory indexing)")
     print("  3. SensoryProcessor: x_c → x_filtered (temporal filtering)")
-    print("  4. GroundedLocationInference: g ⊗ x → p (bind location & sensory)")
+    print("  4. GroundedLocInference: g ⊗ x → p (bind location & sensory)")
     print("  5. MemoryStorage: Store p via Hebbian M = λM + η·outer(p,p)")
     print("  6. AttractorDynamics: Retrieve p_gen = M^T @ p (memory recall)")
     print("=" * 80)

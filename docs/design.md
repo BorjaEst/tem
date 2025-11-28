@@ -15,8 +15,8 @@ TEMModel
 ├── SensoryEncoder: One-hot → two-hot compression
 ├── SensoryProcessor: Temporal filtering and normalization
 ├── TransitionModel: Action-conditioned abstract location dynamics
-├── GroundedLocationInference: Conjunctive coding (g ⊗ x → p)
-├── AbstractLocationInference: Precision-weighted fusion
+├── GroundedLocInference: Conjunctive coding (g ⊗ x → p)
+├── AbstractLocInference: Precision-weighted fusion
 ├── MemoryStorage: Hebbian associative memory
 ├── AttractorDynamics: Iterative pattern completion
 ├── ProjectionHead: Abstract location transformations
@@ -76,7 +76,7 @@ TEM operates on **multi-scale frequency modules** (typically 5: 4 grid cell modu
 - Hierarchical operations (low→high frequency dependencies)
 - Frequency-specific transformations (scaling, downsampling)
 - Loss computation per module
-- Component inputs/outputs (GroundedLocationInference, ProjectionHead)
+- Component inputs/outputs (GroundedLocInference, ProjectionHead)
 
 **Example**:
 
@@ -546,17 +546,17 @@ The implementation replaces the original model.py's monolithic approach with spe
 
 Removed 16 legacy method stubs (f_mu_g_path, f_sigma_g_path, f_mu_g_mem, f_sigma_g_mem, f_mu_g_shiny, f_sigma_g_shiny, f_sigma_p, f_x, f_c_star, f_c, f_n, f_g, f_g_clamp, f_p, attractor, hebbian) from the original model.py API. These were replaced by modular component methods:
 
-| Legacy Method(s)              | Replacement Component     | Rationale                                |
-| ----------------------------- | ------------------------- | ---------------------------------------- |
-| f_mu_g_path, f_sigma_g_path   | TransitionModel           | Encapsulates action-conditioned dynamics |
-| f_mu_g_mem, f_sigma_g_mem     | AbstractLocationInference | Handles precision-weighted fusion        |
-| f_mu_g_shiny, f_sigma_g_shiny | AbstractLocationInference | Integrates object-vector signals         |
-| f_c, f_c_star                 | SensoryEncoder            | Two-hot encoding/decoding                |
-| f_n                           | SensoryProcessor          | Normalization and temporal filtering     |
-| f_g, f_g_clamp                | ProjectionHead            | Downsampling and normalization           |
-| f_p                           | GroundedLocationInference | Sparse activation in outer product       |
-| attractor                     | AttractorDynamics         | Iterative pattern completion             |
-| hebbian                       | MemoryStorage             | Hebbian learning with hierarchical masks |
+| Legacy Method(s)              | Replacement Component | Rationale                                |
+| ----------------------------- | --------------------- | ---------------------------------------- |
+| f_mu_g_path, f_sigma_g_path   | TransitionModel       | Encapsulates action-conditioned dynamics |
+| f_mu_g_mem, f_sigma_g_mem     | AbstractLocInference  | Handles precision-weighted fusion        |
+| f_mu_g_shiny, f_sigma_g_shiny | AbstractLocInference  | Integrates object-vector signals         |
+| f_c, f_c_star                 | SensoryEncoder        | Two-hot encoding/decoding                |
+| f_n                           | SensoryProcessor      | Normalization and temporal filtering     |
+| f_g, f_g_clamp                | ProjectionHead        | Downsampling and normalization           |
+| f_p                           | GroundedLocInference  | Sparse activation in outer product       |
+| attractor                     | AttractorDynamics     | Iterative pattern completion             |
+| hebbian                       | MemoryStorage         | Hebbian learning with hierarchical masks |
 
 **3. Data Format Discipline**
 

@@ -13,8 +13,8 @@ classDiagram
         +SensoryEncoder encoder
         +SensoryProcessor processor
         +TransitionModel transition
-        +GroundedLocationInference grounded
-        +AbstractLocationInference abstract
+        +GroundedLocInference grounded
+        +AbstractLocInference abstract
         +MemoryStorage storage
         +AttractorDynamics attractor
         +ProjectionHead projection
@@ -46,7 +46,7 @@ classDiagram
         +forward(a, g, no_direc) g_gen
     }
     
-    class GroundedLocationInference {
+    class GroundedLocInference {
         +Tensor W_repeat
         +Tensor W_tile
         +Parameter w_x
@@ -55,7 +55,7 @@ classDiagram
         +forward(g, x_f) p_inf
     }
     
-    class AbstractLocationInference {
+    class AbstractLocInference {
         +MLP mlp_mem
         +MLP mlp_shiny
         +forward(g_gen, σ_gen, p_x, shiny) g_inf
@@ -92,19 +92,19 @@ classDiagram
     TEMModel --> SensoryEncoder : uses
     TEMModel --> SensoryProcessor : uses
     TEMModel --> TransitionModel : uses
-    TEMModel --> GroundedLocationInference : uses
-    TEMModel --> AbstractLocationInference : uses
+    TEMModel --> GroundedLocInference : uses
+    TEMModel --> AbstractLocInference : uses
     TEMModel --> MemoryStorage : uses
     TEMModel --> AttractorDynamics : uses
     TEMModel --> ProjectionHead : uses
     TEMModel --> ObservationDecoder : uses
     
     SensoryEncoder ..> SensoryProcessor : x_c
-    SensoryProcessor ..> GroundedLocationInference : x_f
-    TransitionModel ..> AbstractLocationInference : g_gen σ_gen
-    AttractorDynamics ..> AbstractLocationInference : p_x
-    AbstractLocationInference ..> GroundedLocationInference : g_inf
-    GroundedLocationInference ..> MemoryStorage : p_inf
+    SensoryProcessor ..> GroundedLocInference : x_f
+    TransitionModel ..> AbstractLocInference : g_gen σ_gen
+    AttractorDynamics ..> AbstractLocInference : p_x
+    AbstractLocInference ..> GroundedLocInference : g_inf
+    GroundedLocInference ..> MemoryStorage : p_inf
     AttractorDynamics ..> ObservationDecoder : p
     MemoryStorage ..> AttractorDynamics : M
     ProjectionHead ..> AttractorDynamics : g_

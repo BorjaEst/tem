@@ -32,7 +32,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 from torch_tem import data, figures, utils
-from torch_tem.config import InferenceConfig, ModelConfig
+from torch_tem.config import ModelConfig
 from torch_tem.memory.storage import MemoryStorage
 
 
@@ -91,8 +91,7 @@ if __name__ == "__main__":
     config = ExampleConfig()
 
     # Create config objects with proper field mapping
-    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
-    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, eta=config.eta, kappa=config.kappa)
 
     # Compute connectivity matrices from model config
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_initial_extended)
@@ -114,7 +113,7 @@ if __name__ == "__main__":
     print("Phase 1: Initializing memory storage...")
     # MemoryStorage manages Hebbian memory matrices (M_gen, M_inf)
     # It implements: M = λ*M + η*outer(p_inf, p_gen) * mask
-    storage = MemoryStorage(model_config, inference_config, p_update_mask)
+    storage = MemoryStorage(model_config, p_update_mask)
 
     n_p_total = sum(model_config.n_p)
     print(f"  ✓ MemoryStorage: {n_p_total}×{n_p_total} Hebbian matrix")

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .mlp import MLP
+from torch_tem.core.mlp import MLP
 
 
 class TransitionParams(Protocol):

@@ -14,22 +14,26 @@ from typing import List, Optional, Tuple
 import torch
 from torch import Tensor, nn
 
-from torch_tem import data, figures, utils
-from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
+from torch_tem import data, figures, memory, utils
+from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.core import State
-from torch_tem.core.decoder import ObservationDecoder
-from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
-from torch_tem.core.tiling import SensoryProjection
-from torch_tem.core.transition import TransitionModel
-from torch_tem.inference.abstract import AbstractLocationInference
-from torch_tem.inference.grounded import GroundedLocationInference
-from torch_tem.inference.sensory import SensoryProcessor
+from torch_tem.generation import GenerativeModel
+from torch_tem.generation.observation import ObservationDecoder
+from torch_tem.generation.transition import TransitionModel
+from torch_tem.inference import InferenceModel
+from torch_tem.inference.abstract import AbstractLocInference
+from torch_tem.inference.grounded import GroundedLocInference
+from torch_tem.inference.sensory import (
+    SensoryEncoder,
+    SensoryProcessor,
+    SensoryProjection,
+)
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 from torch_tem.utils.masks import (
     create_g_connections,
-    create_p_retrieve_masks,
+    create_p_retrieve_mask,
     create_p_update_mask,
 )
 from torch_tem.utils.matrices import (
@@ -42,7 +46,7 @@ from torch_tem.utils.matrices import (
 )
 
 
-class TEMModel(nn.Module):
+class TEMModel(InferenceModel, GenerativeModel, nn.Module):
     """Top‑level Tolman–Eichenbaum Machine model.
 
     This class is the main entry point for running TEM in PyTorch. It combines
@@ -63,7 +67,7 @@ class TEMModel(nn.Module):
         Parameters
         ----------
         params:
-            High‑level model configuration specifying architectural choices
+            High‑level model configuration specifying paramsitectural choices
             (numbers of cells, frequency modules, connectivity patterns),
             environment and inference options, and training hyper‑parameters.
 
@@ -74,38 +78,20 @@ class TEMModel(nn.Module):
         ``ModelConfig`` dataclass while constructing and registering all
         trainable sub‑modules (encoders, projections, memory, etc.).
         """
-        super().__init__()
-        self.config = params
-
-        # Extract common config references
-        arch = params.architecture
-        inf = params.inference
-
         # Compute configuration-derived matrices
-        self.two_hot_table = create_two_hot_table(arch.n_x, arch.n_x_c)
-        self.W_repeat = create_W_repeat(arch.n_g_subsampled_combined, arch.n_x_f)
-        self.W_tile = create_W_tile(arch.n_g_subsampled_combined, arch.n_x_f)
-        self.g_downsample = create_g_downsample(arch.n_g, arch.n_g_subsampled_combined)
-        self.g_connections = create_g_connections(arch.n_f, arch.n_f_g, arch.n_f_ovc, arch.f_initial_extended)
-        self.p_update_mask = create_p_update_mask(arch.n_p, arch.n_f, arch.n_f_g, arch.n_f_ovc, arch.f_initial_extended)
+        W_repeat = create_W_repeat(params.n_g_subsampled_combined, params.n_x_f)
+        W_tile = create_W_tile(params.n_g_subsampled_combined, params.n_x_f)
+        g_downsample = create_g_downsample(params.n_g, params.n_g_subsampled_combined)
+        p_update_mask = create_p_update_mask(params.n_p, params.n_f, params.n_f_g, params.n_f_ovc, params.f_initial_extended)
+        mask_inf = create_p_retrieve_mask(params.n_p, params.i_attractor, params.max_freq_inf)
+        mask_gen = create_p_retrieve_mask(params.n_p, params.i_attractor, params.max_freq_gen)
 
-        # Compute retrieval masks for attractor dynamics
-        # max_freq_inf and max_freq_gen control hierarchical early-stopping
-        max_freq_inf = [min(f + 1, arch.i_attractor) for f in range(arch.n_f)]
-        max_freq_gen = [min(f + 1, arch.i_attractor) for f in range(arch.n_f)]
-        self.p_retrieve_mask_inf, self.p_retrieve_mask_gen = create_p_retrieve_masks(arch.n_p, arch.i_attractor, max_freq_inf, max_freq_gen)
-
-        # Instantiate all components
-        self.encoder = SensoryEncoder(arch, self.two_hot_table)
-        self.processor = SensoryProcessor(arch)
-        self.transition = TransitionModel(arch, self.g_connections)
-        self.tiling = SensoryProjection(arch, self.W_tile)
-        self.grounded = GroundedLocationInference(arch, self.W_repeat, self.W_tile)
-        self.abstract = AbstractLocationInference(arch, inf)
-        self.storage = MemoryStorage(arch, inf, self.p_update_mask)
-        self.attractor = AttractorDynamics(arch, inf, self.p_retrieve_mask_inf, self.p_retrieve_mask_gen)
-        self.projection = ProjectionHead(arch, self.g_downsample)
-        self.decoder = ObservationDecoder(arch)
+        # Store configuration and generate sub-module parameters
+        self.projection = ProjectionHead(params, g_downsample)
+        self.attractor = AttractorDynamics(params, mask_inf, mask_gen)
+        self.storage = MemoryStorage(params, p_update_mask)
+        GenerativeModel.__init__(self, params, self.projection, self.attractor)
+        InferenceModel.__init__(self, params, self.projection, self.attractor)
 
     def forward(self, walk, prev_M=None):
         """Process a full walk sequence through the TEM model.
@@ -215,12 +201,12 @@ class TEMModel(nn.Module):
 
         # Update generative memory using Hebbian plasticity
         # eta: remembering rate, kappa: forgetting rate (1 - lambda)
-        lamb = 1.0 - self.config.inference.kappa  # Convert kappa (forgetting) to lambda (retention)
-        self.storage.update(p_inf_flat, p_gen_flat, self.config.inference.eta, lamb)
+        lamb = 1.0 - self.config.kappa  # Convert kappa (forgetting) to lambda (retention)
+        self.storage.update(p_inf_flat, p_gen_flat, self.config.eta, lamb)
         M = [self.storage.M_gen]
 
         # Update inference memory if using it
-        if self.config.inference.use_p_inf:
+        if self.config.use_p_inf:
             if self.storage.use_dual_memory:
                 # Separate inference memory
                 M.append(self.storage.M_inf if self.storage.M_inf is not None else self.storage.M_gen)
@@ -275,15 +261,15 @@ class TEMModel(nn.Module):
         # 4. Retrieve from memory (if using inference memory)
         p_x = None
         p_x_downsampled = None
-        if self.config.inference.use_p_inf:
+        if self.config.use_p_inf:
             x_flat = concatenate_frequencies(x_)
             M_inf = self.storage.get_memory(for_inference=True)
             p_x_flat = self.attractor.retrieve(x_flat, M_inf, for_inference=True)
-            p_x = split_to_frequencies(p_x_flat, self.config.architecture.n_p)
+            p_x = split_to_frequencies(p_x_flat, self.config.paramsitecture.n_p)
 
             # Downsample p_x to n_g_subsampled_combined by summing over sensory preferences
             # This projects from (n_g_subsampled_combined * n_x_f) to n_g_subsampled_combined
-            p_x_downsampled = [torch.matmul(p_x[f], torch.t(self.W_repeat[f])) for f in range(self.config.architecture.n_f)]
+            p_x_downsampled = [torch.matmul(p_x[f], torch.t(self.W_repeat[f])) for f in range(self.config.paramsitecture.n_f)]
 
         # 5. Infer abstract location (precision-weighted fusion)
         g_gen_mu, sigma_gen = g_gen
@@ -299,7 +285,7 @@ class TEMModel(nn.Module):
             sigma_gen,
             p_x_downsampled,
             shiny_signals=shiny_signals,
-            p2g_scale_offset=self.config.inference.p2g_offset if hasattr(self.config.inference, "p2g_offset") else 0.0,
+            p2g_scale_offset=getattr(self.config, "p2g_offset", 0.0),
         )
 
         # 6. Downsample and normalize g for inference
@@ -465,11 +451,11 @@ class TEMModel(nn.Module):
                         if hasattr(self.abstract, "g_init"):
                             g_inf[a_i, :] = self.abstract.g_init[f]
                         else:
-                            g_inf[a_i, :] = torch.zeros(self.config.architecture.n_g[f])
+                            g_inf[a_i, :] = torch.zeros(self.config.paramsitecture.n_g[f])
 
                     # Reset filtered sensory to zeros
                     for f, x_inf in enumerate(prev_iter[0].x_inf):
-                        x_inf[a_i, :] = torch.zeros(self.config.architecture.n_x_f[f])
+                        x_inf[a_i, :] = torch.zeros(self.config.paramsitecture.n_x_f[f])
 
         return prev_iter
 
@@ -493,7 +479,7 @@ class TEMModel(nn.Module):
             Initial iteration objects with priors and zero states.
         """
         batch_size = len(locations)
-        n_freqs = len(self.config.architecture.n_g)
+        n_freqs = len(self.config.paramsitecture.n_g)
 
         # Initialize abstract locations with priors or zeros
         g_inf = []
@@ -501,11 +487,11 @@ class TEMModel(nn.Module):
             if hasattr(self.abstract, "g_init"):
                 g_init_f = self.abstract.g_init[f].unsqueeze(0).expand(batch_size, -1)
             else:
-                g_init_f = torch.zeros(batch_size, self.config.architecture.n_g[f])
+                g_init_f = torch.zeros(batch_size, self.config.paramsitecture.n_g[f])
             g_inf.append(g_init_f)
 
         # Initialize filtered sensory as zeros
-        x_inf = [torch.zeros(batch_size, n_x_f) for n_x_f in self.config.architecture.n_x_f]
+        x_inf = [torch.zeros(batch_size, n_x_f) for n_x_f in self.config.paramsitecture.n_x_f]
 
         # Initialize memory if not provided
         # Memory matrices are global (not per-batch) and stored in storage module
@@ -601,14 +587,14 @@ class TEMModel(nn.Module):
 
         # Expand g to p dimensions by repeating across sensory features
         # This converts [batch, n_g_subsampled[f]] to [batch, n_p[f]] per frequency
-        g_repeated = [torch.matmul(g_[f], self.W_repeat[f]) for f in range(self.config.architecture.n_f)]
+        g_repeated = [torch.matmul(g_[f], self.W_repeat[f]) for f in range(self.config.paramsitecture.n_f)]
 
         # Retrieve from memory via attractor dynamics
         g_flat = concatenate_frequencies(g_repeated)
         p_flat = self.attractor.retrieve(g_flat, M_prev, for_inference=False)
 
         # Convert back to per-frequency format
-        p = split_to_frequencies(p_flat, self.config.architecture.n_p)
+        p = split_to_frequencies(p_flat, self.config.paramsitecture.n_p)
 
         return p
 
@@ -656,7 +642,7 @@ class TEMModel(nn.Module):
             Inferred abstract locations (per frequency module), optionally
             including object‑vector contributions for shiny environments.
         """
-        # Delegate to AbstractLocationInference
+        # Delegate to AbstractLocInference
         g_gen_mu, sigma_gen = g_gen
 
         # Handle shiny signals if present
@@ -685,7 +671,7 @@ class TEMModel(nn.Module):
             Inferred grounded locations per frequency module, typically after
             applying a sparsity‑inducing nonlinearity.
         """
-        # Delegate to GroundedLocationInference (outer product g ⊗ x)
+        # Delegate to GroundedLocInference (outer product g ⊗ x)
         p = self.grounded(g_, x_)
         return p
 

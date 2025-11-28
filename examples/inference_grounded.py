@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Grounded location inference example demonstrating outer product computation.
 
-This example demonstrates the torch_tem.inference.GroundedLocationInference capabilities:
+This example demonstrates the torch_tem.inference.GroundedLocInference capabilities:
 - Outer product computation: p = g ⊗ x (hippocampal place cells from grid cells + sensory)
 - Integration with sensory encoder and processor (full inference pipeline)
 - Abstract location generation via synthetic grid cell patterns
@@ -22,7 +22,7 @@ Pipeline Stages:
 
 3. Grounded Location Inference: Final place cells from abstract location
    - ProjectionHead: Transform and downsample g
-   - GroundedLocationInference: p = g ⊗ x_f (outer product)
+   - GroundedLocInference: p = g ⊗ x_f (outer product)
 
 Usage Examples:
 ---------------
@@ -63,10 +63,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 from torch_tem import data, figures, utils
-from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
+from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
-from torch_tem.inference.grounded import GroundedLocationInference
+from torch_tem.inference.grounded import GroundedLocInference
 from torch_tem.inference.sensory import SensoryProcessor
 
 
@@ -124,8 +124,7 @@ if __name__ == "__main__":
 
     # Create config objects with proper field mapping
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
-    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
-    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, eta=config.eta, kappa=config.kappa)
 
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)
@@ -175,9 +174,9 @@ if __name__ == "__main__":
 
     # Grounded location inference
     projection = ProjectionHead(model_config, g_downsampled)
-    grounded = GroundedLocationInference(model_config, W_repeat, W_tile)
+    grounded = GroundedLocInference(model_config, W_repeat, W_tile)
     print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
-    print(f"  ✓ GroundedLocationInference: g ⊗ x → p (outer product)")
+    print(f"  ✓ GroundedLocInference: g ⊗ x → p (outer product)")
     print()
 
     # =========================================================================
@@ -280,7 +279,7 @@ if __name__ == "__main__":
     print(f"Stage 3: Abstract location (g) - {model_config.n_g}")
     print(f"  ↓ ProjectionHead (transform + downsample)")
     print(f"Stage 4: Downsampled abstract (g_sub) - {model_config.n_g_subsampled_combined}")
-    print(f"  ↓ GroundedLocationInference (g ⊗ x_f)")
+    print(f"  ↓ GroundedLocInference (g ⊗ x_f)")
     print(f"Output: Final grounded location (p) - {model_config.n_p}")
     print("=" * 80)
     print()

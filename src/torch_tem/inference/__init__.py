@@ -1,11 +1,13 @@
 """Inference system for torch_tem package."""
 
-from .abstract import AbstractLocationInference
-from .grounded import GroundedLocationInference
-from .sensory import SensoryProcessor
+from .abstract import AbstractLocInference
+from .grounded import GroundedLocInference
+from .sensory import SensoryEncoder, SensoryProcessor, SensoryProjection
 
 __all__ = [
+    "SensoryEncoder",
     "SensoryProcessor",
-    "GroundedLocationInference",
-    "AbstractLocationInference",
+    "SensoryProjection",
+    "GroundedLocInference",
+    "AbstractLocInference",
 ]

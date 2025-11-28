@@ -41,23 +41,18 @@ from torch import Tensor
 from torch_tem.core.mlp import MLP
 
 
-class ModelParams(Protocol):
-    """Architecture parameters needed by AbstractLocationInference."""
+class AbstractLocParams(Protocol):
+    """Architecture parameters needed by AbstractLocInference."""
 
     n_f: int
     n_g: List[int]
     n_g_subsampled_combined: List[int]
     g_init_std: float
     g_mem_std: float
-
-
-class InferenceParams(Protocol):
-    """Inference parameters needed by AbstractLocationInference."""
-
     use_p_inf: bool
 
 
-class AbstractLocationInference(nn.Module):
+class AbstractLocInference(nn.Module):
     """Infers abstract location g from multiple sources.
 
     Sources:
@@ -68,29 +63,28 @@ class AbstractLocationInference(nn.Module):
     Combines via precision-weighted mean.
     """
 
-    def __init__(self, model_params: ModelParams, inf_params: InferenceParams):
+    def __init__(self, params: AbstractLocParams):
         """Initialize abstract location inference.
 
         Args:
-            model_params: Architecture configuration (n_f, n_g, n_g_subsampled_combined, g_init_std, g_mem_std)
-            inf_params: Inference configuration (use_p_inf)
+            params: Architecture configuration (n_f, n_g, n_g_subsampled_combined, g_init_std, g_mem_std, use_p_inf)
         """
         super().__init__()
-        self.n_f = model_params.n_f
-        self.n_g = model_params.n_g
-        self.n_g_subsampled = list(model_params.n_g_subsampled_combined)
-        self.use_p_inf = inf_params.use_p_inf
+        self.n_f = params.n_f
+        self.n_g = params.n_g
+        self.n_g_subsampled = list(params.n_g_subsampled_combined)
+        self.use_p_inf = params.use_p_inf
 
         # MLPs for memory-based g inference
         self.mlp_mu_g_mem = MLP(in_dim=self.n_g_subsampled, out_dim=self.n_g, hidden_dim=[2 * g for g in self.n_g])
         # Initialize with small random weights
-        self.mlp_mu_g_mem.set_weights(-1, [torch.randn_like(w) * model_params.g_mem_std for w in self.mlp_mu_g_mem.get_weights(-1)])
+        self.mlp_mu_g_mem.set_weights(-1, [torch.randn_like(w) * params.g_mem_std for w in self.mlp_mu_g_mem.get_weights(-1)])
 
         self.mlp_sigma_g_mem = MLP(in_dim=[2] * self.n_f, out_dim=self.n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in self.n_g])
 
         # Learnable initial g for new environments
-        self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * model_params.g_init_std) for g in self.n_g])
-        self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * model_params.g_init_std) for g in self.n_g])
+        self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
+        self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
 
     def forward(
         self, g_gen: List[Tensor], sigma_g_gen: List[Tensor], p_x: Optional[List[Tensor]], shiny_signals: Optional[Tuple[List[Tensor], List[Tensor]]], p2g_scale_offset: float
@@ -202,7 +196,7 @@ if __name__ == "__main__":
     Demonstrates precision-weighted fusion of transition and memory paths.
 
     This example builds a lightweight parameter stub implementing the
-    fields accessed by ``AbstractLocationInference`` and runs a forward
+    fields accessed by ``AbstractLocInference`` and runs a forward
     pass with synthetic inputs.
     """
     import types
@@ -217,7 +211,7 @@ if __name__ == "__main__":
         g_init_std=0.1,  # init scale for learnable g_init
     )
 
-    model = AbstractLocationInference(params)
+    model = AbstractLocInference(params)
 
     # Synthetic inputs
     B = 3
@@ -241,7 +235,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         g_inf = model(g_gen, sigma_g_gen, p_x, shiny, p2g_scale_offset)
 
-    print("AbstractLocationInference Example")
+    print("AbstractLocInference Example")
     print("=" * 72)
     print(f"Frequencies: {n_f}")
     for f in range(n_f):

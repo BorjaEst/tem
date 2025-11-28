@@ -22,8 +22,8 @@ graph TB
     %% Inference Components
     subgraph Inference["Inference Components (torch_tem.inference)"]
         Sensory["SensoryProcessor<br/>temporal filtering<br/>& normalization"]
-        Grounded["GroundedLocationInference<br/>g ⊗ x → p<br/>(outer product)"]
-        Abstract["AbstractLocationInference<br/>precision-weighted fusion<br/>(path + memory + shiny)"]
+        Grounded["GroundedLocInference<br/>g ⊗ x → p<br/>(outer product)"]
+        Abstract["AbstractLocInference<br/>precision-weighted fusion<br/>(path + memory + shiny)"]
     end
     
     %% Memory Components

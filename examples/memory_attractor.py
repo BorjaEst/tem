@@ -32,7 +32,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch import Tensor
 
 from torch_tem import data, figures, utils
-from torch_tem.config import InferenceConfig, ModelConfig
+from torch_tem.config import ModelConfig
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -86,12 +86,12 @@ if __name__ == "__main__":
     config = ExampleConfig()
 
     # Create config objects with proper field mapping
-    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
-    model_config = ModelConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ModelConfig(n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, eta=config.eta, kappa=config.kappa)
 
     # Compute connectivity matrices from model config
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_initial_extended)
-    mask_inf, mask_gen = utils.create_p_retrieve_masks(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf, model_config.max_freq_gen)
+    mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
+    mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
 
     print("=" * 80)
     print("Attractor Dynamics Memory Retrieval")

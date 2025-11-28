@@ -34,8 +34,8 @@ All tasks from the original plan have been completed:
 **Rationale**: These methods from the original model.py API were replaced by modular component methods:
 
 - Transition functions (f_mu_g_path, f_sigma_g_path) → `TransitionModel`
-- Memory functions (f_mu_g_mem, f_sigma_g_mem) → `AbstractLocationInference`
-- Shiny functions (f_mu_g_shiny, f_sigma_g_shiny) → Integrated into `AbstractLocationInference`
+- Memory functions (f_mu_g_mem, f_sigma_g_mem) → `AbstractLocInference`
+- Shiny functions (f_mu_g_shiny, f_sigma_g_shiny) → Integrated into `AbstractLocInference`
 - Encoding/normalization (f_c, f_c_star, f_n, f_g, f_g_clamp, f_p) → `SensoryEncoder`, `SensoryProcessor`, `ProjectionHead`
 - Memory operations (attractor, hebbian) → `AttractorDynamics`, `MemoryStorage`
 
@@ -85,8 +85,8 @@ This document provides a detailed, dependency-ordered implementation plan for co
    self.encoder = SensoryEncoder(config.architecture, two_hot_table)
    self.processor = SensoryProcessor(config.architecture)
    self.transition = TransitionModel(config.architecture, g_connections)
-   self.grounded = GroundedLocationInference(config.architecture, W_repeat, W_tile)
-   self.abstract = AbstractLocationInference(config.architecture, config.inference)
+   self.grounded = GroundedLocInference(config.architecture, W_repeat, W_tile)
+   self.abstract = AbstractLocInference(config.architecture, config.inference)
    self.storage = MemoryStorage(config.architecture, config.inference, p_update_mask)
    self.attractor = AttractorDynamics(config.architecture, config.inference,
                                        p_retrieve_masks_inf, p_retrieve_masks_gen)
@@ -513,13 +513,13 @@ def gen_x(self, p):
 
 **File**: `src/torch_tem/model.py:302-339`
 
-**Dependencies**: `AbstractLocationInference`
+**Dependencies**: `AbstractLocInference`
 
 **Implementation**:
 
 ```python
 def inf_g(self, p_x, g_gen, x, locations):
-    # Delegate to AbstractLocationInference
+    # Delegate to AbstractLocInference
     g_gen_mu, sigma_gen = g_gen
 
     # Handle shiny signals if present
@@ -541,13 +541,13 @@ def inf_g(self, p_x, g_gen, x, locations):
 
 **File**: `src/torch_tem/model.py:341-357`
 
-**Dependencies**: `GroundedLocationInference`
+**Dependencies**: `GroundedLocInference`
 
 **Implementation**:
 
 ```python
 def inf_p(self, x_, g_):
-    # Delegate to GroundedLocationInference
+    # Delegate to GroundedLocInference
     p = self.grounded(g_, x_)
     return p
 ```

@@ -106,7 +106,7 @@ def split_to_frequencies(p_flat: Tensor, n_p: List[int]) -> List[Tensor]:
     - Concatenated format [B, sum(n_p)]: Used by memory operations (AttractorDynamics,
       MemoryStorage) for efficient matrix multiplication with Hebbian matrices
     - Per-frequency format List[n_f] of [B, n_p[f]]: Used by hierarchical operations
-      (GroundedLocationInference, AbstractLocationInference) that process each
+      (GroundedLocInference, AbstractLocInference) that process each
       frequency module independently
 
     This conversion is frequently needed after memory retrieval operations that
@@ -125,7 +125,7 @@ def split_to_frequencies(p_flat: Tensor, n_p: List[int]) -> List[Tensor]:
     Example:
         >>> # After memory retrieval
         >>> p_concat = attractor.retrieve(query, M_inf, for_inference=True)  # [B, 96]
-        >>> # Convert to per-frequency format for AbstractLocationInference
+        >>> # Convert to per-frequency format for AbstractLocInference
         >>> n_p = [40, 32, 24]  # 3 frequency modules
         >>> p_list = split_to_frequencies(p_concat, n_p)  # List of [B,40], [B,32], [B,24]
         >>> # Now ready for hierarchical processing
@@ -147,7 +147,7 @@ def concatenate_frequencies(p_list: List[Tensor]) -> Tensor:
     location representations in TEM:
 
     - Per-frequency format List[n_f] of [B, n_p[f]]: Used by hierarchical operations
-      (GroundedLocationInference, AbstractLocationInference) that process each
+      (GroundedLocInference, AbstractLocInference) that process each
       frequency module independently
     - Concatenated format [B, sum(n_p)]: Used by memory operations (AttractorDynamics,
       MemoryStorage) for efficient matrix multiplication with Hebbian matrices

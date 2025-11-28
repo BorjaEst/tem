@@ -18,11 +18,11 @@ Pipeline Stages (Theory-Faithful):
 3. Abstract Location Inference: Combine memory and generative paths
    - Memory path: p_x → g_mem via learned projection
    - Generative path: previous g + action → g_gen via transition
-   - AbstractLocationInference: Precision-weighted fusion g_inf
+   - AbstractLocInference: Precision-weighted fusion g_inf
 
 4. Grounded Location Inference: Final place cells from abstract location
    - ProjectionHead: Transform and downsample g_inf
-   - GroundedLocationInference: p = g_inf ⊗ x_f (outer product)
+   - GroundedLocInference: p = g_inf ⊗ x_f (outer product)
 
 5. Memory Update: Hebbian learning for next timestep
    - MemoryStorage: M ← λM + η·(p ⊗ p)
@@ -76,13 +76,12 @@ from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, utils
-from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
+from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
-from torch_tem.core.tiling import SensoryProjection
-from torch_tem.inference.abstract import AbstractLocationInference
-from torch_tem.inference.grounded import GroundedLocationInference
-from torch_tem.inference.sensory import SensoryProcessor
+from torch_tem.inference.abstract import AbstractLocInference
+from torch_tem.inference.grounded import GroundedLocInference
+from torch_tem.inference.sensory import SensoryProcessor, SensoryProjection
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -94,8 +93,8 @@ class ExampleConfig(BaseSettings):
     """Configuration for complete TEM inference pipeline example.
 
     This config implements all inference-related protocols:
-    - EncoderParams, SensoryProcessorParams
-    - GroundedInferenceParams, ProjectionParams
+    - EncoderParams, ProcessorParams
+    - GroundedLocParams, ProjectionParams
     - AbstractInferenceParams
     - MemoryStorageParams, AttractorParams
     """
@@ -141,14 +140,16 @@ if __name__ == "__main__":
 
     # Create config objects with proper field mapping
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
-    inference_config = InferenceConfig(eta=config.eta, kappa=config.kappa)
-    model_config = ModelConfig(n_x=environment_config.n_locations, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial)
+    model_config = ModelConfig(
+        n_x=environment_config.n_locations, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, eta=config.eta, kappa=config.kappa
+    )
 
     # Compute connectivity matrices from model config
     two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)
     g_downsample = utils.create_g_downsample(model_config.n_g, model_config.n_g_subsampled_combined)
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_initial_extended)
-    mask_inf, mask_gen = utils.create_p_retrieve_masks(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf, model_config.max_freq_gen)
+    mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
+    mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
     W_repeat = utils.create_W_repeat(model_config.n_g_subsampled_combined, model_config.n_x_f)
     W_tile = utils.create_W_tile(model_config.n_g_subsampled_combined, model_config.n_x_f)
 
@@ -198,9 +199,9 @@ if __name__ == "__main__":
 
     # Grounded location inference
     projection = ProjectionHead(model_config, g_downsample)
-    grounded = GroundedLocationInference(model_config, W_repeat, W_tile)
+    grounded = GroundedLocInference(model_config, W_repeat, W_tile)
     print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
-    print(f"  ✓ GroundedLocationInference: g ⊗ x → p (includes W_tile internally)")
+    print(f"  ✓ GroundedLocInference: g ⊗ x → p (includes W_tile internally)")
 
     # Memory system
     storage = MemoryStorage(model_config, inference_config, p_update_mask)
@@ -209,8 +210,8 @@ if __name__ == "__main__":
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 
     # Abstract location inference
-    abstract = AbstractLocationInference(model_config, inference_config)
-    print(f"  ✓ AbstractLocationInference: precision-weighted fusion")
+    abstract = AbstractLocInference(model_config, inference_config)
+    print(f"  ✓ AbstractLocInference: precision-weighted fusion")
     print()
 
     # =========================================================================
@@ -267,7 +268,7 @@ if __name__ == "__main__":
         # This "sums over sensory preferences" to collapse place cells to grid cells
         p_x_downsampled = projection.inverse_project(p_x, W_repeat)  # List[n_f] of [1, n_g_sub[f]]
 
-        # Then AbstractLocationInference will:
+        # Then AbstractLocInference will:
         # 1. Apply learned MLP: g_mem = f_mu_g_mem(p_x_downsampled)
         # 2. Compute uncertainty based on memory quality
         # 3. Fuse with g_gen via precision-weighted mean
@@ -276,7 +277,7 @@ if __name__ == "__main__":
         sigma_gen = [torch.ones(1, n_g) * 0.5 for n_g in model_config.n_g]
 
         # Fuse generative and memory paths to infer abstract location
-        # AbstractLocationInference internally applies MLP to p_x_downsampled
+        # AbstractLocInference internally applies MLP to p_x_downsampled
         g_inf = abstract(g_t, sigma_gen, p_x_downsampled, shiny_signals=None, p2g_scale_offset=0.5)
 
         # Step 7: Transform and downsample inferred g for final grounded inference
@@ -365,11 +366,11 @@ if __name__ == "__main__":
     print(f"Stage 4: Hippocampal patterns from sensory (p_x) - {model_config.n_p}")
     print(f"  ↓ Inverse projection (p_x @ W_repeat^T)")
     print(f"Stage 5: Downsampled from memory (p_x_down) - {model_config.n_g_subsampled_combined}")
-    print(f"  ↓ AbstractLocationInference (MLP + precision-weighted fusion)")
+    print(f"  ↓ AbstractLocInference (MLP + precision-weighted fusion)")
     print(f"Stage 6: Abstract location (g_inf) - {model_config.n_g}")
     print(f"  ↓ ProjectionHead (Laplacian transform + downsample)")
     print(f"Stage 7: Downsampled abstract (g_sub) - {model_config.n_g_subsampled_combined}")
-    print(f"  ↓ GroundedLocationInference (g ⊗ x_f)")
+    print(f"  ↓ GroundedLocInference (g ⊗ x_f)")
     print(f"Stage 8: Final grounded location (p) - {model_config.n_p}")
     print(f"  ↓ MemoryStorage (Hebbian update)")
     print(f"Output: Memory-stored patterns (M) for next timestep")

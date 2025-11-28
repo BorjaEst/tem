@@ -24,11 +24,6 @@ class ModelParams(Protocol):
 
     n_p: List[int]
     common_memory: bool
-
-
-class InferenceParams(Protocol):
-    """Inference parameters needed by MemoryStorage."""
-
     use_p_inf: bool
 
 
@@ -66,23 +61,31 @@ class MemoryStorage:
         M_inf: Inference memory matrix (optional) [sum(n_p), sum(n_p)]
     """
 
-    def __init__(self, model_params: ModelParams, inf_params: InferenceParams, p_update_mask: Tensor):
+    def __init__(self, model_params: ModelParams, p_update_mask: Tensor, batch_size: int = 1):
         """Initialize memory storage with zero-initialized matrices.
 
         Args:
-            model_params: Architecture configuration (n_p, common_memory)
-            inf_params: Inference configuration (use_p_inf)
+            model_params: Architecture configuration (n_p, common_memory, use_p_inf)
             p_update_mask: Hierarchical mask for Hebbian updates
+            batch_size: Number of parallel environments (default=1 for single env)
         """
         self.n_p = model_params.n_p
-        self.use_dual_memory = inf_params.use_p_inf and not model_params.common_memory
+        self.use_dual_memory = model_params.use_p_inf and not model_params.common_memory
         self.p_update_mask = p_update_mask
+        self.batch_size = batch_size
 
         # Initialize memory matrices as zero matrices
         # These will be populated during training via Hebbian updates
+        # Shape: [batch_size, sum(n_p), sum(n_p)] for batched training
+        # or [sum(n_p), sum(n_p)] for single environment (batch_size=1, backward compat)
         n_p_total = sum(self.n_p)
-        self.M_gen = torch.zeros(n_p_total, n_p_total)
-        self.M_inf = torch.zeros(n_p_total, n_p_total) if self.use_dual_memory else None
+        if batch_size > 1:
+            self.M_gen = torch.zeros(batch_size, n_p_total, n_p_total)
+            self.M_inf = torch.zeros(batch_size, n_p_total, n_p_total) if self.use_dual_memory else None
+        else:
+            # Backward compatibility: single environment without batch dimension
+            self.M_gen = torch.zeros(n_p_total, n_p_total)
+            self.M_inf = torch.zeros(n_p_total, n_p_total) if self.use_dual_memory else None
 
     def update(self, p_inferred: Tensor, p_generated: Tensor, eta: float, lamb: float) -> None:
         """Update memory matrices using Hebbian plasticity rule.
@@ -112,39 +115,53 @@ class MemoryStorage:
                   Higher values = slower forgetting, longer memory retention
 
         Note:
-            The batch outer product is averaged across the batch dimension to obtain
-            a single update that reflects the typical association patterns across
-            multiple experiences in the current training batch.
+            Supports both batched [B, sum(n_p)] and unbatched [sum(n_p)] inputs.
+            For batched inputs with batch_size=1, uses per-batch updates (legacy compat).
+            For unbatched inputs, averages across batch before updating (new behavior).
 
             Mathematical formulation:
-                M_gen_new = λ * M_gen_old + η * mean_batch(outer(p_inf, p_gen)) * mask
-                M_inf_new = λ * M_inf_old + η * mean_batch(outer(p_inf, p_inf)) * mask
+                M_gen_new = λ * M_gen_old + η * outer(p_inf, p_gen) * mask
+                M_inf_new = λ * M_inf_old + η * outer(p_inf, p_inf) * mask
 
             Following original TEM implementation:
             - M_gen learns associations between inferred and generated locations
             - M_inf learns associations within inferred locations (sensory-driven)
         """
-        # Compute outer product for generative memory: p_inf ⊗ p_gen
-        # Shape: [B, sum(n_p), 1] @ [B, 1, sum(n_p)] → [B, sum(n_p), sum(n_p)]
-        # Then average across batch to get typical association pattern
-        batch_outer_gen = torch.mean(torch.bmm(p_inferred.unsqueeze(2), p_generated.unsqueeze(1)), dim=0)
+        # Handle batch dimension
+        if p_inferred.dim() == 1:
+            p_inferred = p_inferred.unsqueeze(0)
+        if p_generated.dim() == 1:
+            p_generated = p_generated.unsqueeze(0)
 
         # Move hierarchical mask to same device as data (handles CPU/GPU transfers)
-        mask = self.p_update_mask.to(batch_outer_gen.device)
+        mask = self.p_update_mask.to(p_inferred.device)
 
-        # Hebbian update for generative memory with decay (forgetting) and learning (remembering)
-        # λ term: Exponentially decays old memories over time
-        # η term: Strengthens new associations based on current experience
-        # mask: Restricts updates to valid hierarchical connections
-        self.M_gen = lamb * self.M_gen.to(batch_outer_gen.device) + eta * (batch_outer_gen * mask)
+        if self.batch_size > 1:
+            # Batched memory update (legacy compatibility mode)
+            # Each environment has its own memory matrix: [B, sum(n_p), sum(n_p)]
+            # Compute outer product: [B, sum(n_p), 1] @ [B, 1, sum(n_p)] → [B, sum(n_p), sum(n_p)]
+            batch_outer_gen = torch.bmm(p_inferred.unsqueeze(2), p_generated.unsqueeze(1))
 
-        # Update inference memory (if using dual-memory architecture)
-        # Inference memory learns different associations: p_inf ⊗ p_inf
-        # This enables sensory-driven pattern completion (x → p → p retrieval)
-        if self.use_dual_memory:
-            # Compute outer product for inference memory: p_inf ⊗ p_inf
-            batch_outer_inf = torch.mean(torch.bmm(p_inferred.unsqueeze(2), p_inferred.unsqueeze(1)), dim=0)
-            self.M_inf = lamb * self.M_inf.to(batch_outer_inf.device) + eta * (batch_outer_inf * mask)
+            # Hebbian update with decay and learning, applied per batch element
+            self.M_gen = lamb * self.M_gen.to(batch_outer_gen.device) + eta * (batch_outer_gen * mask)
+
+            # Update inference memory (if using dual-memory architecture)
+            if self.use_dual_memory:
+                batch_outer_inf = torch.bmm(p_inferred.unsqueeze(2), p_inferred.unsqueeze(1))
+                self.M_inf = lamb * self.M_inf.to(batch_outer_inf.device) + eta * (batch_outer_inf * mask)
+        else:
+            # Single global memory update (new modular approach)
+            # Average across batch to get typical association pattern
+            # Compute outer product then average: mean([B, sum(n_p), sum(n_p)]) → [sum(n_p), sum(n_p)]
+            batch_outer_gen = torch.mean(torch.bmm(p_inferred.unsqueeze(2), p_generated.unsqueeze(1)), dim=0)
+
+            # Hebbian update for generative memory with decay and learning
+            self.M_gen = lamb * self.M_gen.to(batch_outer_gen.device) + eta * (batch_outer_gen * mask)
+
+            # Update inference memory (if using dual-memory architecture)
+            if self.use_dual_memory:
+                batch_outer_inf = torch.mean(torch.bmm(p_inferred.unsqueeze(2), p_inferred.unsqueeze(1)), dim=0)
+                self.M_inf = lamb * self.M_inf.to(batch_outer_inf.device) + eta * (batch_outer_inf * mask)
 
     def get_memory(self, for_inference: bool = False) -> Tensor:
         """Get appropriate memory matrix for retrieval.

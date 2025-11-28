@@ -21,11 +21,6 @@ class ModelParams(Protocol):
     """Architecture parameters needed by AttractorDynamics."""
 
     i_attractor: int
-
-
-class InferenceParams(Protocol):
-    """Inference parameters needed by AttractorDynamics."""
-
     kappa: float
 
 
@@ -61,19 +56,17 @@ class AttractorDynamics:
     def __init__(
         self,
         model_params: ModelParams,
-        inf_params: InferenceParams,
         p_retrieve_mask_inf: List[Tensor],
         p_retrieve_mask_gen: List[Tensor],
     ):
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:
-            model_params: Architecture configuration (i_attractor)
-            inf_params: Inference configuration (kappa)
+            model_params: Architecture configuration (i_attractor, kappa)
             p_retrieve_mask_inf: Hierarchical masks for inference retrieval
             p_retrieve_mask_gen: Hierarchical masks for generative retrieval
         """
-        self.kappa = inf_params.kappa
+        self.kappa = model_params.kappa
         self.i_attractor = model_params.i_attractor
         self.p_retrieve_mask_inf = p_retrieve_mask_inf
         self.p_retrieve_mask_gen = p_retrieve_mask_gen
@@ -120,7 +113,7 @@ class AttractorDynamics:
             >>> # Convert to per-frequency format for hierarchical inference
             >>> from torch_tem.utils import split_to_frequencies
             >>> p_list = split_to_frequencies(p_retrieved, model_config.n_p)
-            >>> # Now ready for AbstractLocationInference
+            >>> # Now ready for AbstractLocInference
             >>> g_inf = abstract(g_gen, sigma_gen, p_list, ...)
         """
         # Select appropriate hierarchical masks based on retrieval mode
@@ -130,7 +123,13 @@ class AttractorDynamics:
         for it in range(self.i_attractor):
             # Memory readout: Query the Hebbian matrix (associative recall)
             # Matrix multiply retrieves patterns associated with current state
-            p_update = torch.matmul(p, M.to(p.device))
+            # Handle both batched [B, n_p, n_p] and unbatched [n_p, n_p] memory
+            if M.ndim == 3:
+                # Batched memory: [B, n_p, n_p] requires unsqueeze/squeeze
+                p_update = torch.matmul(p.unsqueeze(1), M.to(p.device)).squeeze(1)
+            else:
+                # Unbatched memory: [n_p, n_p] uses standard matmul
+                p_update = torch.matmul(p, M.to(p.device))
 
             # Apply hierarchical mask for coarse-to-fine refinement
             # Early iterations update only low-frequency (coarse) components

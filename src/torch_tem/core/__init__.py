@@ -2,10 +2,8 @@
 
 from .mlp import MLP
 from .projection import ProjectionHead
-from .state import State
 
 __all__ = [
     "MLP",
     "ProjectionHead",
-    "State",
 ]

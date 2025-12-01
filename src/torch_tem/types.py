@@ -22,7 +22,7 @@ Memory Structures:
 
 Data Flow:
     - StepInput: Inputs for a single timestep iteration
-    - StepOutput: Outputs from a single timestep iteration
+    - TEMState: Outputs from a single timestep iteration
     - Trajectory: Sequence of inputs forming a walk or episode
     - Losses: All loss components from a single timestep
 
@@ -61,6 +61,7 @@ Shape conventions:
     - Hebbian weights: (n_cells_pre, n_cells_post)
     - Projection matrix: (input_dim, output_dim)
 """
+
 
 # =============================================================================
 # Multi-Scale Representations
@@ -137,61 +138,54 @@ Alias for HebbianMemory to clarify temporal context when passing
 memory state between iterations.
 """
 
-# =============================================================================
-# Loss Components
-# =============================================================================
-
-
-@dataclass(frozen=True)
-class Losses:
-    """All loss components from a single TEM iteration.
-
-    Attributes:
-        L_p_g: Consistency loss between inferred and generated grounded locations
-        L_p_x: Consistency loss between sensory-inferred and total-inferred grounded locations
-        L_x_gen: Reconstruction loss for observation from generated abstract location
-        L_x_g: Reconstruction loss for observation from inferred abstract location
-        L_x_p: Reconstruction loss for observation from inferred grounded location
-        L_g: Consistency loss between inferred and generated abstract locations
-        L_reg_g: L2 regularization on abstract location codes
-        L_reg_p: L1 regularization on grounded location codes
-
-    Theory:
-        The loss function balances multiple objectives:
-        1. Consistency between generative and inference pathways
-        2. Accurate sensory reconstruction
-        3. Sparsity constraints on representations
-    """
-
-    L_p_g: Tensor  # ||p_inf - p_gen||²
-    L_p_x: Tensor  # ||p_inf - p_x||²
-    L_x_gen: Tensor  # CE(x, x_gen)
-    L_x_g: Tensor  # CE(x, x_g)
-    L_x_p: Tensor  # CE(x, x_p)
-    L_g: Tensor  # ||g_inf - g_gen||²
-    L_reg_g: Tensor  # ||g||²
-    L_reg_p: Tensor  # ||p||₁
-
-    def total(self, weights: Optional[List[float]] = None) -> Tensor:
-        """Compute weighted sum of all loss components.
-
-        Parameters:
-            weights: Optional list of 8 weights for each loss component.
-                    If None, uses equal weighting.
-
-        Returns:
-            Total scalar loss tensor.
-        """
-        if weights is None:
-            weights = [1.0] * 8
-
-        losses = self.as_list()
-        return sum(w * L for w, L in zip(weights, losses))
-
 
 # =============================================================================
 # Data Flow
 # =============================================================================
+
+
+@dataclass(frozen=True)
+class SensoryPrediction:
+    """Composed sensory observation prediction with values and logits.
+
+    Attributes:
+        values: Predicted sensory observation (probabilities or activations)
+        logits: Pre-softmax logits corresponding to the prediction
+
+    Theory:
+        The generative pathway produces sensory predictions from latent
+        representations. Both the final values and their logits are retained
+        for loss calculation (e.g., cross-entropy from logits).
+    """
+
+    values: MultiScaleCode
+    logits: MultiScaleCode
+
+
+@dataclass(frozen=True)
+class LatentPrediction:
+    """Composed latent location prediction with abstract and grounded codes.
+
+    Attributes:
+        abstract: Abstract location code (g) representing position in a
+                 factorized multi-scale representation
+        grounded: Grounded location code (p) representing discrete place cell
+                 activations tied to environmental features
+
+    Theory:
+        The inference pathway produces both abstract (grid-like) and grounded
+        (place-like) representations. These are used together for memory
+        interaction and sensory generation.
+    """
+
+    abstract: AbstractLocation
+    grounded: GroundedLocation
+
+
+# Import complex types from their respective modules
+from torch_tem.generation.__model import GenerativeState  # noqa: F401
+from torch_tem.inference.__model import InferenceState  # noqa: F401
+from torch_tem.memory import MemoryState  # noqa: F401
 
 
 @dataclass
@@ -212,34 +206,6 @@ class StepInput:
     observation: MultiScaleCode
     action: Optional[int]
     location_info: Dict[str, Any]
-
-
-@dataclass
-class StepOutput:
-    """Output data from a single TEM iteration.
-
-    Attributes:
-        belief: Current belief state (abstract location g)
-        prediction: Predicted sensory observation
-        losses: All loss components for this timestep
-        memory: Updated memory state
-        generated: Optional generated pathway outputs
-        inferred: Optional inference pathway outputs
-
-    Theory:
-        The model produces beliefs about current location, predictions
-        about sensory input, and updated memory associations. Both
-        generative and inference pathways contribute to the final state.
-    """
-
-    belief: AbstractLocation
-    prediction: MultiScaleCode
-    losses: Losses
-    memory: MemoryState
-
-    # Optional detailed outputs
-    generated: Optional[Dict[str, Any]] = None
-    inferred: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -316,63 +282,6 @@ Note: In practice, memory is typically shared across a batch rather than
 per-sample, so this represents the global memory state.
 """
 
-# =============================================================================
-# Type Guards and Utilities
-# =============================================================================
-
-
-def is_valid_multi_scale_code(code: Any, n_freq: int, batch_size: Optional[int] = None) -> bool:
-    """Validate that a value is a well-formed MultiScaleCode.
-
-    Parameters:
-        code: Value to validate
-        n_freq: Expected number of frequency modules
-        batch_size: Optional expected batch size
-
-    Returns:
-        True if code is a valid MultiScaleCode with correct structure
-    """
-    if not isinstance(code, list):
-        return False
-
-    if len(code) != n_freq:
-        return False
-
-    for vector in code:
-        if not isinstance(vector, torch.Tensor):
-            return False
-        if vector.ndim not in (1, 2):
-            return False
-        if batch_size is not None and vector.ndim == 2 and vector.shape[0] != batch_size:
-            return False
-
-    return True
-
-
-def is_valid_hebbian_memory(memory: Any, n_freq: int) -> bool:
-    """Validate that a value is a well-formed HebbianMemory.
-
-    Parameters:
-        memory: Value to validate
-        n_freq: Expected number of frequency modules
-
-    Returns:
-        True if memory is a valid HebbianMemory (1 or 2 matrices)
-    """
-    if not isinstance(memory, list):
-        return False
-
-    if len(memory) not in (1, 2):
-        return False
-
-    for matrix in memory:
-        if not isinstance(matrix, torch.Tensor):
-            return False
-        if matrix.ndim != 2:
-            return False
-
-    return True
-
 
 __all__ = [
     # Primitives
@@ -385,11 +294,14 @@ __all__ = [
     # Memory
     "HebbianMemory",
     "MemoryState",
-    # Losses
-    "Losses",
+    # Model outputs
+    "SensoryPrediction",
+    "LatentPrediction",
+    "GenerativeState",
+    "InferenceState",
     # Data flow
     "StepInput",
-    "StepOutput",
+    "TEMState",
     "Trajectory",
     # Transition
     "TransitionParams",
@@ -397,7 +309,4 @@ __all__ = [
     # Batch processing
     "BatchedCode",
     "BatchedMemory",
-    # Utilities
-    "is_valid_multi_scale_code",
-    "is_valid_hebbian_memory",
 ]

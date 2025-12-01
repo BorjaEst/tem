@@ -1,11 +1,29 @@
 """Matrix generation utilities for torch_tem package."""
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 from scipy.special import comb
 from torch import Tensor
+
+
+def squared_error_freq(value: Union[Tensor, List[Tensor]], target: Union[Tensor, List[Tensor]]) -> Union[Tensor, List[Tensor]]:
+    """Compute squared error across frequencies.
+
+    Helper function for computing ||value - target||² * 0.5 across frequency modules.
+    Handles both single tensors and lists of tensors (for multi-frequency representations).
+
+    Args:
+        value: Predicted value(s)
+        target: Target value(s)
+
+    Returns:
+        Squared error(s), scaled by 0.5
+    """
+    if isinstance(value, list) and isinstance(target, list):
+        return [torch.sum((v - t) ** 2, dim=1) * 0.5 for v, t in zip(value, target)]
+    return torch.sum((value - target) ** 2, dim=1) * 0.5
 
 
 def create_W_repeat(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Tensor]:

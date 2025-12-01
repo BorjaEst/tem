@@ -18,6 +18,8 @@ from typing import List, Protocol
 import torch
 from torch import Tensor
 
+from ..types import Matrix, Vector
+
 
 class ModelParams(Protocol):
     """Architecture parameters needed by MemoryStorage."""
@@ -87,7 +89,7 @@ class MemoryStorage:
             self.M_gen = torch.zeros(n_p_total, n_p_total)
             self.M_inf = torch.zeros(n_p_total, n_p_total) if self.use_dual_memory else None
 
-    def update(self, p_inferred: Tensor, p_generated: Tensor, eta: float, lamb: float) -> None:
+    def update(self, p_inferred: Vector, p_generated: Vector, eta: float, lamb: float) -> None:
         """Update memory matrices using Hebbian plasticity rule.
 
         Implements the core learning mechanism of TEM's associative memory system.
@@ -163,7 +165,7 @@ class MemoryStorage:
                 batch_outer_inf = torch.mean(torch.bmm(p_inferred.unsqueeze(2), p_inferred.unsqueeze(1)), dim=0)
                 self.M_inf = lamb * self.M_inf.to(batch_outer_inf.device) + eta * (batch_outer_inf * mask)
 
-    def get_memory(self, for_inference: bool = False) -> Tensor:
+    def get_memory(self, for_inference: bool = False) -> Matrix:
         """Get appropriate memory matrix for retrieval.
 
         Returns the inference memory when available and requested (dual-memory mode),
@@ -180,7 +182,7 @@ class MemoryStorage:
             return self.M_inf
         return self.M_gen
 
-    def get_all_memories(self) -> List[Tensor]:
+    def get_all_memories(self) -> List[Matrix]:
         """Get both memory matrices for state storage/checkpointing.
 
         Used to save the complete memory state during training for later restoration
@@ -193,7 +195,7 @@ class MemoryStorage:
             return [self.M_gen, self.M_inf]
         return [self.M_gen]
 
-    def set_memories(self, memories: List[Tensor]) -> None:
+    def set_memories(self, memories: List[Matrix]) -> None:
         """Set memory matrices from saved state.
 
         Restores memory state from checkpoints or pre-trained models. Critical for

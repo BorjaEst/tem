@@ -16,6 +16,8 @@ from typing import List, Protocol
 import torch
 from torch import Tensor
 
+from ..types import Matrix, Vector
+
 
 class ModelParams(Protocol):
     """Architecture parameters needed by AttractorDynamics."""
@@ -71,7 +73,7 @@ class AttractorDynamics:
         self.p_retrieve_mask_inf = p_retrieve_mask_inf
         self.p_retrieve_mask_gen = p_retrieve_mask_gen
 
-    def retrieve(self, p_query: Tensor, M: Tensor, for_inference: bool = False) -> Tensor:
+    def retrieve(self, p_query: Vector, M: Matrix, for_inference: bool = False) -> Vector:
         """Retrieve grounded location from memory via iterative attractor dynamics.
 
         Implements content-addressable memory recall by iteratively refining the query

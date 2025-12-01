@@ -10,6 +10,7 @@ from .matrices import (
     create_W_tile,
     detect_grid_structure,
     split_to_frequencies,
+    squared_error_freq,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "compute_graph_layout",
     "split_to_frequencies",
     "concatenate_frequencies",
+    "squared_error_freq",
 ]

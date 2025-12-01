@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Optional, Protocol
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import torch
 from torch import Tensor, nn
@@ -6,6 +7,15 @@ from torch import Tensor, nn
 from .. import utils
 from ..core import ProjectionHead
 from ..memory import AttractorDynamics
+from ..types import (
+    AbstractLocation,
+    GroundedLocation,
+    LatentPrediction,
+    Matrix,
+    MultiScaleCode,
+    SensoryPrediction,
+    TransitionOutput,
+)
 from . import location, observation, transition
 from .location import LocationGeneratorParams
 from .observation import DecoderParams
@@ -24,6 +34,49 @@ class Parameters(TransitionParams, DecoderParams, LocationGeneratorParams):
         """List indicating which frequency modules are extended."""
         ...
 
+    @property
+    def n_g_subsampled_combined(self) -> List[int]:
+        """Grid + OVC subsampled cell counts per module."""
+        ...
+
+
+@dataclass
+class GenerativeState:
+    """Auxiliary outputs and intermediate states from the generative pathway.
+
+    Attributes:
+        memory_gen: Generative memory (M_gen) for abstract-to-place mapping
+        g_gen: Generated abstract location from transition (path integration)
+        x_p: Sensory prediction from p_inf (Route 1: p_inf → x_p)
+        x_g: Sensory prediction from g_inf via memory (Route 2: g_inf → p → x_g)
+        x_gen: Primary sensory prediction from g_gen via memory (Route 3: g_gen → p → x_gen)
+        p_g: Intermediate grounded location from g_inf via memory
+        p_gen: Intermediate grounded location from g_gen via memory
+
+    Theory:
+        The generative model produces multiple sensory predictions through
+        different pathways. These are used to compute consistency losses
+        between inference and generation, ensuring coherent representations.
+        Field names match the mathematical notation in TEM theory for clarity.
+
+        The g_gen represents the predicted abstract location from path integration,
+        which is compared against g_inf for consistency. It is stored for
+        observability and loss computation, but the next iteration uses g_inf
+        (belief) as the recurrent state.
+
+        Memory is split: GenerativeState stores M_gen (g→p pathway),
+        InferenceState stores M_inf (x→p pathway). This maintains proper
+        isolation between inference and generative pathways.
+    """
+
+    memory_gen: Optional[Matrix]  # Updated by Hebbian plasticity after generative step
+    g_gen: AbstractLocation
+    x_p: SensoryPrediction
+    x_g: SensoryPrediction
+    x_gen: SensoryPrediction
+    p_g: GroundedLocation
+    p_gen: GroundedLocation
+
 
 class GenerativeModel(nn.Module):
     """Generative TEM model"""
@@ -41,7 +94,7 @@ class GenerativeModel(nn.Module):
         self.projection = projection  # Projection module for g to p
         self.attractor = attractor  # Attractor dynamics for memory retrieval
 
-    def generative(self, M_prev, p_inf, g_inf, g_gen):
+    def generative(self, latent: LatentPrediction, g_gen: AbstractLocation, state: GenerativeState) -> GenerativeState:
         """Run the generative path to reconstruct observations and locations.
 
         Using the inferred abstract and grounded locations, and the previous
@@ -50,43 +103,53 @@ class GenerativeModel(nn.Module):
 
         Parameters
         ----------
-        M_prev:
-            Previous Hebbian memory state for the generative path.
-        p_inf:
-            Inferred grounded locations (hippocampal code) per frequency
-            module.
-        g_inf:
-            Inferred abstract locations (entorhinal‑like code) per module.
+        latent:
+            Inferred latent locations containing abstract (g_inf) and
+            grounded (p_inf) representations from the inference pathway.
         g_gen:
-            Abstract location statistics from the transition model used for
+            Abstract location from the transition model used for
             generative prediction.
+        state:
+            Previous generative state containing memory_gen and other
+            auxiliary outputs from the previous timestep.
 
         Returns
         -------
-        tuple
-            ``(x_gen, x_logits, p_gen)`` where ``x_gen`` are generated
-            observations from different generative routes, ``x_logits`` are
-            their pre‑softmax logits, and ``p_gen`` are grounded locations
-            retrieved from memory.
+        GenerativeState:
+            New generative state with updated sensory predictions and
+            intermediate grounded locations. Note: memory_gen is copied
+            from state and will be updated later by Hebbian plasticity.
+
+        Theory:
+            The generative model produces multiple predictions:
+            - Route 1: p_inf → x_p (direct from inferred grounded location)
+            - Route 2: g_inf → p → x_g (from inferred abstract location)
+            - Route 3: g_gen → p → x_gt (from generated abstract location)
+            These enable consistency losses between inference and generation.
         """
+
         # Route 1: Direct from p_inf → x_p
-        x_p, x_p_logits = self.decoder(p_inf)
+        x_p, x_p_logits = self.decoder(latent.grounded)
 
         # Route 2: g_inf → memory → p → x_g
-        p_g_inf = self.gen_p(g_inf, M_prev[0])
+        p_g_inf = self.gen_p(latent.abstract, state.memory_gen)
         x_g, x_g_logits = self.gen_x(p_g_inf)
 
-        # Route 3: g_gen → memory → p → x_gt
-        p_g_gen = self.gen_p(g_gen, M_prev[0])
+        # Route 3: g_gen → memory → p → x_gt (primary generative pathway)
+        p_g_gen = self.gen_p(g_gen, state.memory_gen)
         x_gt, x_gt_logits = self.gen_x(p_g_gen)
 
-        # Package outputs
-        x_gen = (x_p, x_g, x_gt)
-        x_logits = (x_p_logits, x_g_logits, x_gt_logits)
+        # Package auxiliary state with theory-aligned names
+        return GenerativeState(
+            g_gen=g_gen,
+            x_p=SensoryPrediction(values=x_p, logits=x_p_logits),
+            x_g=SensoryPrediction(values=x_g, logits=x_g_logits),
+            x_gen=SensoryPrediction(values=x_gt, logits=x_gt_logits),
+            p_g=p_g_inf,
+            p_gen=p_g_gen,
+        )
 
-        return x_gen, x_logits, p_g_inf
-
-    def gen_g(self, a_prev, g_prev, locations):
+    def gen_g(self, a_prev: List[Optional[int]], g_prev: AbstractLocation, locations: List[Dict[str, Any]]) -> TransitionOutput:
         """Generate abstract location codes via transition dynamics.
 
         Parameters
@@ -101,7 +164,7 @@ class GenerativeModel(nn.Module):
 
         Returns
         -------
-        Any
+        TransitionOutput
             Generated abstract locations and associated uncertainty
             statistics, suitable for use by :meth:`inference` and
             :meth:`generative`.
@@ -126,9 +189,9 @@ class GenerativeModel(nn.Module):
         else:
             g_gen = g
 
-        return g_gen, (g, sigma_g)
+        return
 
-    def gen_p(self, g, M_prev):
+    def gen_p(self, g: AbstractLocation, M_prev: Matrix) -> GroundedLocation:
         """Retrieve grounded locations from memory using abstract codes.
 
         Parameters
@@ -136,11 +199,11 @@ class GenerativeModel(nn.Module):
         g:
             Abstract location codes for each frequency module.
         M_prev:
-            Hebbian memory connectivity used for attractor‑based retrieval.
+            Hebbian memory connectivity used for attractor-based retrieval.
 
         Returns
         -------
-        Any
+        GroundedLocation
             Grounded locations ``p`` obtained by pattern completion in the
             attractor network.
         """
@@ -152,7 +215,7 @@ class GenerativeModel(nn.Module):
 
         return p
 
-    def gen_x(self, p):
+    def gen_x(self, p: GroundedLocation) -> SensoryPrediction:
         """Generate observations from grounded locations.
 
         Parameters
@@ -165,8 +228,8 @@ class GenerativeModel(nn.Module):
         -------
         tuple
             ``(x, logits)`` where ``x`` is a categorical distribution or
-            one‑hot approximation over observations, and ``logits`` are the
-            corresponding pre‑softmax scores.
+            one-hot approximation over observations, and ``logits`` are the
+            corresponding pre-softmax scores.
         """
         # Decode observation from grounded location (decoder uses highest frequency)
         x_probs, x_logits = self.decoder(p)

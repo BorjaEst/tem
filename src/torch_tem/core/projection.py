@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from ..types import AbstractLocation, MultiScaleCode
+
 
 class ProjectionParams(Protocol):
     """Minimal interface for ProjectionHead.
@@ -47,7 +49,7 @@ class ProjectionHead(nn.Module):
         # Learnable Laplacian scales (learned as inverse sigmoid)
         self.alpha = nn.ParameterList([nn.Parameter(torch.tensor(np.log(params.f_extended[f] / (1 - params.f_extended[f])), dtype=torch.float)) for f in range(self.n_f)])
 
-    def transform(self, g: List[Tensor]) -> List[Tensor]:
+    def transform(self, g: AbstractLocation) -> AbstractLocation:
         """Apply Laplacian transform.
 
         Args:
@@ -58,7 +60,7 @@ class ProjectionHead(nn.Module):
         """
         return [torch.tanh(torch.sigmoid(self.alpha[f]) * g[f]) for f in range(self.n_f)]
 
-    def normalize_g(self, g: List[Tensor]) -> List[Tensor]:
+    def normalize_g(self, g: AbstractLocation) -> AbstractLocation:
         """Clamp g to [-1, 1].
 
         Args:
@@ -69,7 +71,7 @@ class ProjectionHead(nn.Module):
         """
         return [torch.clamp(g[f], -1, 1) for f in range(self.n_f)]
 
-    def normalize_p(self, p: List[Tensor]) -> List[Tensor]:
+    def normalize_p(self, p: MultiScaleCode) -> MultiScaleCode:
         """Sigmoid normalization for grounded location.
 
         Args:
@@ -80,7 +82,7 @@ class ProjectionHead(nn.Module):
         """
         return [torch.sigmoid(p[f]) for f in range(self.n_f)]
 
-    def downsample(self, g: List[Tensor]) -> List[Tensor]:
+    def downsample(self, g: AbstractLocation) -> MultiScaleCode:
         """Downsample for memory indexing.
 
         Args:
@@ -91,7 +93,7 @@ class ProjectionHead(nn.Module):
         """
         return [torch.matmul(g[f], self.g_downsample[f].to(g[f].device)) for f in range(self.n_f)]
 
-    def inverse_project(self, p: List[Tensor], W_repeat: List[Tensor]) -> List[Tensor]:
+    def inverse_project(self, p: MultiScaleCode, W_repeat: List[Tensor]) -> MultiScaleCode:
         """Project from grounded location (p) back to abstract location space (g).
 
         This implements the reverse transformation p → g used in the memory inference path,
@@ -113,7 +115,7 @@ class ProjectionHead(nn.Module):
         """
         return [torch.matmul(p[f], W_repeat[f].t().to(p[f].device)) for f in range(self.n_f)]
 
-    def forward(self, g: List[Tensor]) -> List[Tensor]:
+    def forward(self, g: AbstractLocation) -> MultiScaleCode:
         """Full forward pass: transform and downsample.
 
         Args:

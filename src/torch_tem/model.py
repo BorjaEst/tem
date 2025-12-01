@@ -9,6 +9,8 @@ Implementation follows the reference model.py while using modular torch_tem
 components for maintainability and testability.
 """
 
+from abc import ABC
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -150,6 +152,12 @@ class TEMModel(InferenceModel, GenerativeModel, nn.Module):
         ``ModelConfig`` dataclass while constructing and registering all
         trainable sub-modules (encoders, projections, memory, etc.).
         """
+        # Initialize nn.Module first to avoid diamond inheritance issues
+        nn.Module.__init__(self)
+
+        # Store configuration for access throughout the model
+        self.config = params
+
         # Compute configuration-derived matrices
         g_downsample = utils.create_g_downsample(params.n_g, params.n_g_subsampled_combined)
         p_update_mask = utils.create_p_update_mask(params.n_p, params.n_f, params.n_f_g, params.n_f_ovc, params.f_extended)
@@ -162,57 +170,6 @@ class TEMModel(InferenceModel, GenerativeModel, nn.Module):
         self.storage = MemoryStorage(params, p_update_mask)
         GenerativeModel.__init__(self, params, self.projection, self.attractor)
         InferenceModel.__init__(self, params, self.projection, self.attractor)
-
-    def forward(self, walk, prev_M=None):
-        """Process a full walk sequence through the TEM model.
-
-        Executes the full TEM pipeline for each timestep in the walk,
-        performing transition, inference, generation, memory update, and
-        loss computation.
-
-        Parameters
-        ----------
-        walk : Iterable
-            Iterable of (locations, observations, actions) for each step.
-            Each entry should be a 3-tuple:
-
-            - ``locations``: Batch of location data structures.
-            - ``observations``: Observations of shape ``(batch, ...)``, to be
-              encoded to ``x``.
-            - ``actions``: Batch of actions taken at this step.
-
-        prev_M : List[Tensor], optional
-            Optional previous memory state from a previous call, used to
-            continue inference across multiple walks.
-
-        Returns
-        -------
-        List[TEMState]
-            A sequence of per-step TEMState objects containing inferred and
-            generated belief states (abstract and grounded), observations,
-            memory states, and losses.
-        """
-        steps = None
-
-        # Process each timestep in walk
-        for locations, x, a in walk:
-            # Initialize if first step
-            if steps is None:
-                steps = [self.init_state(locations, x, [None] * len(a), prev_M)]
-
-            # Perform single TEM iteration - pass action separately
-            step_output = self.iteration(
-                x=x,
-                locations=locations,
-                action=a,
-                state=steps[-1],
-            )
-
-            # Store iteration results
-            steps.append(step_output)
-
-        # Remove initialization step
-        return steps[1:]
 
     def iteration(self, x: Tensor, locations: List[Dict], action: int, state: TEMState) -> Tuple[Losses, TEMState]:
         """Perform a single TEM iteration for one time step.
@@ -344,157 +301,166 @@ class TEMModel(InferenceModel, GenerativeModel, nn.Module):
             L_reg_p=torch.sum(torch.stack([torch.sum(torch.abs(p), dim=1) for p in p_inf], dim=0), dim=0),
         )
 
-    def init_trainable(self):
-        """Create and register all trainable parameters and sub-modules.
 
-        This method should allocate PyTorch parameters and small networks used
-        across the model, such as frequency-specific scale factors, MLPs for
-        transition dynamics and uncertainties, and sensory compression /
-        decompression layers. It plays the same role as ``init_trainable`` in
-        the original implementation.
-        """
-        # All trainable components are already initialized in __init__
-        # This method is kept for compatibility with the original API
-        pass
+class Simulation(Iterator[TEMState]):
+    """Iterator for running TEM simulation over a walk sequence.
 
-    def init_walks(self, prev_iter):
-        """Reset per-walk state when new walks start in a batch.
+    This class wraps the TEMModel to provide a stateful iteration over a walk,
+    maintaining the TEM state between steps and yielding TEMState objects.
 
-        Parameters
-        ----------
-        prev_iter:
-            Optional previous iteration object or list of iterations. Entries
-            corresponding to newly started walks (e.g. where the previous
-            action is ``None``) should have their memory and state reset.
+    The class properly implements the Iterator protocol by inheriting from
+    collections.abc.Iterator, making it a proper iterator that can be used
+    in for loops and with next().
 
-        Returns
-        -------
-        Any
-            Updated previous iteration structure with per-walk state
-            re-initialised where required, ready to be used by
-            :meth:`iteration`.
-        """
-        if prev_iter is not None:
-            state = prev_iter[0]
-            # Handle both single action and batched actions
-            actions = [state.action] if not isinstance(state.action, list) else state.action
+    Note:
+        As per Iterator protocol, this class is single-use. Once exhausted,
+        create a new Simulation instance to iterate over the walk again.
 
-            for a_i, a in enumerate(actions):
-                if a is None:
-                    # Reset memory for this walk
-                    for M in state.memory:
-                        M[a_i, :, :] = 0
+    Example:
+        >>> simulation = Simulation(model, walk)
+        >>> for state in simulation:
+        ...     # Process each TEM state
+        ...     losses = compute_losses(state)
+        ...     losses.backward()
+    """
 
-                    # Reset abstract location to prior (from config or learned g_init)
-                    for f, g_inf in enumerate(state.belief):
-                        # Use learned g_init from abstract inference module if available
-                        if hasattr(self.abstract, "g_init"):
-                            g_inf[a_i, :] = self.abstract.g_init[f]
-                        else:
-                            g_inf[a_i, :] = torch.zeros(self.config.paramsitecture.n_g[f])
-
-                    # Reset filtered sensory to zeros
-                    for f, x_inf in enumerate(state.x_prev):
-                        x_inf[a_i, :] = torch.zeros(self.config.paramsitecture.n_x_f[f])
-
-        return prev_iter
-
-    def init_state(
-        self,
-        locations: List[Dict],
-        x: MultiScaleCode,
-        a_prev: List[Optional[int]],
-        M_prev: Optional[MemoryState],
-    ) -> TEMState:
-        """Initialize the first state of a walk sequence.
+    def __init__(self, model: TEMModel, walk, prev_M: Optional[MemoryState] = None):
+        """Initialize simulation with model and walk sequence.
 
         Parameters
         ----------
-        locations:
-            Environment descriptors for each walk in the batch.
-        x:
-            Initial sensory observations.
-        a_prev:
-            Previous actions (typically all None for first iteration).
-        M_prev:
-            Previous memory state.
+        model : TEMModel
+            The TEM model to use for inference and generation.
+        walk : Iterable
+            Walk sequence of (locations, observations, actions) tuples.
+            Must contain at least one step.
+        prev_M : Optional[MemoryState]
+            Optional previous memory state to continue from a previous
+            simulation. Useful for continuing training across walk boundaries.
+
+        Raises
+        ------
+        ValueError
+            If walk sequence is empty.
+        """
+        self.__model = model
+        self.__walk = walk
+        self.__walk_iter = iter(walk)
+
+        # Get first step to initialize state
+        try:
+            first_locations, first_x, first_a = next(self.__walk_iter)
+        except StopIteration:
+            raise ValueError("Walk sequence must contain at least one step")
+
+        # Determine batch size and initialize with None actions
+        batch_size = len(first_a) if isinstance(first_a, (list, tuple)) else first_x.shape[0]
+        a_init = [None] * batch_size
+
+        # Initialize TEM state with first step data
+        self.__state = self._init_state(first_locations, first_x, a_init, prev_M)
+
+        # Store first step to process in first __next__ call
+        self.__first_step = (first_locations, first_x, first_a)
+        self.__first_step_pending = True
+
+    def __next__(self) -> TEMState:
+        """Execute one TEM iteration and return resulting state.
+
+        This method implements the Iterator protocol's __next__ method,
+        enabling the Simulation to be used in for loops and with next().
 
         Returns
         -------
         TEMState
-            Initial state with priors and zero states.
+            Complete TEM state after processing current step, containing:
+            - belief: Current abstract location (g_inf)
+            - prediction: Sensory prediction (x_gen)
+            - memory: Updated Hebbian memory matrices
+            - All auxiliary outputs from inference and generative pathways
+
+        Raises
+        ------
+        StopIteration
+            When walk sequence is exhausted, as per Iterator protocol.
         """
-        batch_size = len(locations)
-        n_freqs = len(self.config.paramsitecture.n_g)
+        # Process first step if pending
+        if self.__first_step_pending:
+            locations, x, a = self.__first_step
+            self.__first_step_pending = False
+        else:
+            # Get next step from walk
+            locations, x, a = next(self.__walk_iter)
 
-        # Initialize abstract locations with priors or zeros
-        g_inf = []
-        for f in range(n_freqs):
-            if hasattr(self.abstract, "g_init"):
-                g_init_f = self.abstract.g_init[f].unsqueeze(0).expand(batch_size, -1)
-            else:
-                g_init_f = torch.zeros(batch_size, self.config.paramsitecture.n_g[f])
-            g_inf.append(g_init_f)
+        # Run one TEM iteration
+        _, self.__state = self.__model.iteration(x, locations, a, self.__state)
 
-        # Initialize filtered sensory as zeros
-        x_inf = [torch.zeros(batch_size, n_x_f) for n_x_f in self.config.paramsitecture.n_x_f]
+        return self.__state
+
+    def _init_state(self, locations: List[Dict], x: Tensor, a_prev: List[Optional[int]], M_prev: Optional[MemoryState]) -> TEMState:
+        """Initialize TEM state for the beginning of a walk.
+
+        Parameters
+        ----------
+        locations : List[Dict]
+            Environment location descriptors for initial step.
+        x : Tensor
+            Initial observations.
+        a_prev : List[Optional[int]]
+            Previous actions (None for walk start).
+        M_prev : Optional[MemoryState]
+            Optional previous memory state.
+
+        Returns
+        -------
+        TEMState
+            Initial TEM state with initialized memories, beliefs, and observations.
+        """
+        # Determine batch size from observations
+        batch_size = x.shape[0]
 
         # Initialize memory if not provided
-        # Memory matrices are global (not per-batch) and stored in storage module
         if M_prev is None:
-            M_gen = self.storage.M_gen
-            M_inf = self.storage.M_inf if self.storage.use_dual_memory else M_gen
+            # Create generative memory: zero connectivity matrix
+            M_gen = torch.zeros((batch_size, sum(self.__model.config.n_p), sum(self.__model.config.n_p)), dtype=torch.float, device=x.device)
+
+            # Create inference memory if using dual memory
+            if self.__model.config.use_p_inf and not self.__model.config.common_memory:
+                M_inf = torch.zeros((batch_size, sum(self.__model.config.n_p), sum(self.__model.config.n_p)), dtype=torch.float, device=x.device)
+            else:
+                # Share memory or no inference memory
+                M_inf = M_gen if self.__model.config.common_memory else None
         else:
-            M_gen = M_prev[0]
-            M_inf = M_prev[1] if len(M_prev) > 1 else M_gen
+            # Use provided memory
+            M_gen = M_prev[0] if len(M_prev) > 0 else None
+            M_inf = M_prev[1] if len(M_prev) > 1 else None
 
-        # Create initial losses (all zeros)
-        initial_losses = Losses(
-            L_p_g=torch.zeros(batch_size),
-            L_p_x=torch.zeros(batch_size),
-            L_x_gen=torch.zeros(batch_size),
-            L_x_g=torch.zeros(batch_size),
-            L_x_p=torch.zeros(batch_size),
-            L_g=torch.zeros(batch_size),
-            L_reg_g=torch.zeros(batch_size),
-            L_reg_p=torch.zeros(batch_size),
-        )
+        # Initialize abstract location (g_inf) with learned or default prior
+        if hasattr(self.__model.abstract, "g_init"):
+            g_inf = [torch.stack([self.__model.abstract.g_init[f] for _ in range(batch_size)]) for f in range(self.__model.config.n_f)]
+        else:
+            # Use zeros as default if no learned prior
+            g_inf = [torch.zeros((batch_size, self.__model.config.n_g[f]), dtype=torch.float, device=x.device) for f in range(self.__model.config.n_f)]
 
-        # Create initial inference state
-        initial_latent_pred = LatentPrediction(
-            abstract=g_inf,
-            grounded=[torch.zeros(batch_size, n_p) for n_p in self.config.paramsitecture.n_p],
-        )
+        # Initialize filtered observations (x_f) with zeros
+        x_f = [torch.zeros((batch_size, self.__model.config.n_x_f[f]), dtype=torch.float, device=x.device) for f in range(self.__model.config.n_f)]
 
-        initial_inf_state = InferenceState(
-            memory_inf=M_inf,
-            latent_prediction=initial_latent_pred,
-            filtered_observation=x_inf,
-            retrieved_grounded=None,
-        )
+        # Initialize grounded location (p_inf) with zeros
+        p_inf = [torch.zeros((batch_size, self.__model.config.n_p[f]), dtype=torch.float, device=x.device) for f in range(self.__model.config.n_f)]
 
-        # Create initial generative state (placeholder values)
-        initial_sensory_pred = SensoryPrediction(
-            values=x_inf,
-            logits=x_inf,
-        )
+        # Create inference state
+        inf_state = InferenceState(memory_inf=M_inf, latent_prediction=LatentPrediction(abstract=g_inf, grounded=p_inf), filtered_observation=x_f, retrieved_grounded=None)
 
-        initial_gen_state = GenerativeState(
+        # Create generative state (initialize with same structures)
+        gen_state = GenerativeState(
             memory_gen=M_gen,
-            g_gen=g_inf,  # Use initial g_inf as placeholder
-            sensory_prediction=initial_sensory_pred,
-            x_p=initial_sensory_pred,
-            x_g=initial_sensory_pred,
-            x_gen=initial_sensory_pred,
-            p_g=initial_latent_pred.grounded,
-            p_gen=initial_latent_pred.grounded,
+            g_gen=g_inf,  # Initial g_gen same as g_inf
+            x_p=SensoryPrediction(values=x_f, logits=x_f),  # Placeholder
+            x_g=SensoryPrediction(values=x_f, logits=x_f),  # Placeholder
+            x_gen=SensoryPrediction(values=x_f, logits=x_f),  # Placeholder
+            p_g=p_inf,  # Placeholder
+            p_gen=p_inf,  # Placeholder
         )
 
-        # Create state with initial values - data stored once in nested states
-        state_0 = TEMState(
-            losses=initial_losses,
-            inference_state=initial_inf_state,
-            generative_state=initial_gen_state,
-        )
-
-        return state_0
+        # Create and return initial TEM state
+        return TEMState(inference_state=inf_state, generative_state=gen_state)

@@ -82,7 +82,9 @@ class GenerativeModel(nn.Module):
     """Generative TEM model"""
 
     def __init__(self, params: Parameters, projection: ProjectionHead, attractor: AttractorDynamics):
-        super().__init__()
+        nn.Module.__init__(self)
+        # Store configuration
+        self.config = params
         # Compute configuration-derived matrices
         g_connections = utils.create_g_connections(params.n_f, params.n_f_g, params.n_f_ovc, params.f_extended)
         W_repeat = utils.matrices.create_W_repeat(params.n_g_subsampled_combined, [params.n_x_c] * params.n_f)
@@ -141,6 +143,7 @@ class GenerativeModel(nn.Module):
 
         # Package auxiliary state with theory-aligned names
         return GenerativeState(
+            memory_gen=state.memory_gen,  # Copy from previous state, will be updated by Hebbian plasticity
             g_gen=g_gen,
             x_p=SensoryPrediction(values=x_p, logits=x_p_logits),
             x_g=SensoryPrediction(values=x_g, logits=x_g_logits),
@@ -189,7 +192,7 @@ class GenerativeModel(nn.Module):
         else:
             g_gen = g
 
-        return
+        return g_gen, (g, sigma_g)
 
     def gen_p(self, g: AbstractLocation, M_prev: Matrix) -> GroundedLocation:
         """Retrieve grounded locations from memory using abstract codes.

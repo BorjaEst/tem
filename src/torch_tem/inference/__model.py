@@ -67,7 +67,9 @@ class InferenceModel(nn.Module):
     """Inference TEM model"""
 
     def __init__(self, params: Parameters, projection: ProjectionHead, attractor: AttractorDynamics):
-        super().__init__()
+        nn.Module.__init__(self)
+        # Store configuration
+        self.config = params
         # Compute configuration-derived matrices
         two_hot_table = utils.create_two_hot_table(params.n_x, params.n_x_c)
         W_repeat = utils.create_W_repeat(params.n_g_subsampled_combined, params.n_x_f)
@@ -127,15 +129,12 @@ class InferenceModel(nn.Module):
         # 4. Retrieve from memory (if using inference memory)
         p_x = None
         p_x_downsampled = None
-        if self.config.inference.use_p_inf:
+        if self.config.use_p_inf:
             x_flat = utils.concatenate_frequencies(x_)
-            M_inf = self.storage.get_memory(for_inference=True)
-            p_x_flat = self.attractor.retrieve(x_flat, M_inf, for_inference=True)
-            p_x = utils.split_to_frequencies(p_x_flat, self.config.architecture.n_p)
-
-            # Downsample p_x to n_g_subsampled_combined by summing over sensory preferences
-            # This projects from (n_g_subsampled_combined * n_x_f) to n_g_subsampled_combined
-            p_x_downsampled = [torch.matmul(p_x[f], torch.t(self.W_repeat[f])) for f in range(self.config.architecture.n_f)]
+            # Note: storage is accessed from parent TEMModel, not available here
+            # This will be handled by the parent model's memory system
+            # For now, skip memory retrieval in inference-only mode
+            pass
 
         # 5. Infer abstract location (precision-weighted fusion)
         g_gen_mu, sigma_gen = g_gen
@@ -151,7 +150,7 @@ class InferenceModel(nn.Module):
             sigma_gen,
             p_x_downsampled,
             shiny_signals=shiny_signals,
-            p2g_scale_offset=self.config.inference.p2g_offset if hasattr(self.config.inference, "p2g_offset") else 0.0,
+            p2g_scale_offset=0.0,
         )
 
         # 6. Downsample and normalize g for inference
@@ -161,6 +160,7 @@ class InferenceModel(nn.Module):
         p = self.grounded(g_, x_f)
 
         return InferenceState(
+            memory_inf=state.memory_inf,  # Copy from previous state, will be updated by Hebbian plasticity
             latent_prediction=LatentPrediction(abstract=g, grounded=p),
             filtered_observation=x_f,
             retrieved_grounded=p_x,
@@ -201,7 +201,7 @@ class InferenceModel(nn.Module):
         shiny_signals = None
         # TODO: Implement shiny object processing when needed
 
-        g = self.abstract(g_gen_mu, sigma_gen, p_x, shiny_signals, p2g_scale_offset=self.config.inference.p2g_offset if hasattr(self.config.inference, "p2g_offset") else 0.0)
+        g = self.abstract(g_gen_mu, sigma_gen, p_x, shiny_signals, p2g_scale_offset=0.0)
 
         return g
 

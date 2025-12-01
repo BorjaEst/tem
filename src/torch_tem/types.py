@@ -39,7 +39,6 @@ The type system follows the TEM architecture:
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import torch
 from torch import Tensor
 
 # =============================================================================
@@ -281,32 +280,3 @@ BatchedMemory = Matrix
 Note: In practice, memory is typically shared across a batch rather than
 per-sample, so this represents the global memory state.
 """
-
-
-__all__ = [
-    # Primitives
-    "Vector",
-    "Matrix",
-    # Multi-scale representations
-    "MultiScaleCode",
-    "AbstractLocation",
-    "GroundedLocation",
-    # Memory
-    "HebbianMemory",
-    "MemoryState",
-    # Model outputs
-    "SensoryPrediction",
-    "LatentPrediction",
-    "GenerativeState",
-    "InferenceState",
-    # Data flow
-    "StepInput",
-    "TEMState",
-    "Trajectory",
-    # Transition
-    "TransitionParams",
-    "TransitionOutput",
-    # Batch processing
-    "BatchedCode",
-    "BatchedMemory",
-]

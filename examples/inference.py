@@ -72,16 +72,15 @@ from typing import List, Literal
 
 import matplotlib.pyplot as plt
 import torch
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
 from torch_tem.inference.abstract import AbstractLocInference
 from torch_tem.inference.grounded import GroundedLocInference
-from torch_tem.inference.sensory import SensoryProcessor, SensoryProjection
+from torch_tem.inference.sensory import SensoryEncoder, SensoryProcessor, SensoryProjection
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -204,13 +203,13 @@ if __name__ == "__main__":
     print(f"  ✓ GroundedLocInference: g ⊗ x → p (includes W_tile internally)")
 
     # Memory system
-    storage = MemoryStorage(model_config, inference_config, p_update_mask)
-    attractor = AttractorDynamics(model_config, inference_config, mask_inf, mask_gen)
+    storage = MemoryStorage(model_config, p_update_mask)
+    attractor = AttractorDynamics(model_config, mask_inf, mask_gen)
     print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 
     # Abstract location inference
-    abstract = AbstractLocInference(model_config, inference_config)
+    abstract = AbstractLocInference(model_config)
     print(f"  ✓ AbstractLocInference: precision-weighted fusion")
     print()
 

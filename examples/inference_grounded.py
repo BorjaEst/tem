@@ -56,18 +56,15 @@ from pathlib import Path
 from typing import List, Literal
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from torch import Tensor
 
 from torch_tem import data, figures, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.core.encoder import SensoryEncoder
 from torch_tem.core.projection import ProjectionHead
 from torch_tem.inference.grounded import GroundedLocInference
-from torch_tem.inference.sensory import SensoryProcessor
+from torch_tem.inference.sensory import SensoryEncoder, SensoryProcessor
 
 
 # ==============================================================================

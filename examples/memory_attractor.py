@@ -114,7 +114,7 @@ if __name__ == "__main__":
     print("    - M_gen learns outer(p_inf, p_gen) for predictive associations")
 
     # Initialize memory storage with proper config objects
-    storage = MemoryStorage(model_config, inference_config, p_update_mask)
+    storage = MemoryStorage(model_config, p_update_mask)
     n_p_total = sum(model_config.n_p)
     print(f"  ✓ MemoryStorage: {n_p_total}×{n_p_total} Hebbian matrix")
 
@@ -133,7 +133,7 @@ if __name__ == "__main__":
         print(f"    Difference={m_diff:.4f} ({m_diff/m_gen_strength:.1%} relative)")
 
     # Initialize attractor dynamics with proper config objects
-    attractor = AttractorDynamics(model_config, inference_config, mask_inf, mask_gen)
+    attractor = AttractorDynamics(model_config, mask_inf, mask_gen)
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
     print()
 
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     # Visualize progressive unmasking schedule (coarse→fine)
     fig1 = figures.plot_hierarchical_masks(
         attractor.p_retrieve_mask_inf,  # Binary masks for each iteration
-        n_p_per_freq=config.n_p,  # Frequency boundaries
+        n_p_per_freq=model_config.n_p,  # Frequency boundaries
     )
     if config.save_plots:
         save_path = config.output_dir / "01_hierarchical_masks.png"

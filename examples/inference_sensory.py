@@ -48,8 +48,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.core.encoder import SensoryEncoder
-from torch_tem.inference.sensory import SensoryProcessor
+from torch_tem.inference.sensory import SensoryEncoder, SensoryProcessor
 
 
 # ==============================================================================

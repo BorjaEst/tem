@@ -13,7 +13,6 @@ from ..types import (
     LatentPrediction,
     Matrix,
     MultiScaleCode,
-    TEMState,
     TransitionParams,
 )
 from . import abstract, grounded, precission, sensory
@@ -83,6 +82,41 @@ class InferenceModel(nn.Module):
         self.abstract = abstract.AbstractLocInference(params)  # Abstract location inference module
         self.projection = projection  # Projection module for g to p
         self.attractor = attractor  # Attractor dynamics for memory retrieval
+
+    def init_state(self, batch_size: int, device: torch.device) -> InferenceState:
+        """Initialize inference state with zeros and default values.
+
+        Parameters
+        ----------
+        batch_size:
+            Number of samples in the batch.
+        device:
+            Device to place the tensors on.
+
+        Returns
+        -------
+        InferenceState
+            Initialized inference state with zeroed latent predictions
+            and filtered observations.
+
+        Theory:
+            The inference state is initialized to provide a starting point
+            for temporal filtering and memory retrieval. Latent predictions
+            are set to zero, indicating no prior knowledge, while filtered
+            observations are also zeroed to avoid biasing the initial state.
+        """
+        return InferenceState(
+            memory_inf=None,  # No initial inference memory
+            latent_prediction=LatentPrediction(
+                # Initialize abstract location g_inf with zeros
+                abstract=[torch.zeros((batch_size, self.config.n_g[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
+                # Initialize grounded location p_inf with zeros
+                grounded=[torch.zeros((batch_size, self.config.n_p[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
+            ),
+            # Initialize filtered observation x_f with zeros
+            filtered_observation=[torch.zeros((batch_size, self.config.n_x_f), dtype=torch.float, device=device) for _ in range(self.config.n_f)],
+            retrieved_grounded=None,  # No initial retrieved grounded location
+        )
 
     def inference(self, x: Tensor, locations: List[Dict[str, Any]], state: InferenceState, g_gen: TransitionParams) -> InferenceState:
         """Run the inference path to obtain abstract and grounded locations.

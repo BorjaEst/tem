@@ -96,6 +96,46 @@ class GenerativeModel(nn.Module):
         self.projection = projection  # Projection module for g to p
         self.attractor = attractor  # Attractor dynamics for memory retrieval
 
+    def init_state(self, batch_size: int, device: torch.device) -> GenerativeState:
+        """Initialize generative state with zeros and default values.
+
+        Parameters
+        ----------
+        batch_size:
+            Number of samples in the batch.
+        device:
+            Device to place the tensors on.
+
+        Returns
+        -------
+        GenerativeState
+            Initialized generative state with zeroed tensors.
+        """
+
+        return GenerativeState(
+            memory_gen=None,  # Initialize memory_gen to None (will be set externally if used)
+            # Initialize g_gen to zeros
+            g_gen=[torch.zeros((batch_size, self.config.n_g[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
+            # Initialize sensory predictions to zeros
+            x_p=SensoryPrediction(
+                values=torch.zeros((batch_size, self.config.n_x_c), dtype=torch.float, device=device),
+                logits=torch.zeros((batch_size, self.config.n_x_c), dtype=torch.float, device=device),
+            ),
+            # Initialize sensory predictions to zeros
+            x_g=SensoryPrediction(
+                values=torch.zeros((batch_size, self.config.n_x_c), dtype=torch.float, device=device),
+                logits=torch.zeros((batch_size, self.config.n_x_c), dtype=torch.float, device=device),
+            ),
+            # Initialize sensory predictions to zeros
+            x_gen=SensoryPrediction(
+                values=torch.zeros((batch_size, self.config.n_x_c), dtype=torch.float, device=device),
+                logits=torch.zeros((batch_size, self.config.n_x_c), dtype=torch.float, device=device),
+            ),
+            # Initialize grounded locations to zeros
+            p_g=[torch.zeros((batch_size, self.config.n_p[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
+            p_gen=[torch.zeros((batch_size, self.config.n_p[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
+        )
+
     def generative(self, latent: LatentPrediction, g_gen: AbstractLocation, state: GenerativeState) -> GenerativeState:
         """Run the generative path to reconstruct observations and locations.
 

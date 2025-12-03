@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from torch_tem.core.mlp import MLP
-from torch_tem.types import AbstractLocation
+from torch_tem.types import AbstractLocation, Transition
 
 
 class TransitionParams(Protocol):
@@ -69,7 +69,7 @@ class TransitionModel(nn.Module):
         # Uncertainty estimation MLPs
         self.MLP_sigma_g_path = MLP(in_dim=[self.n_actions] * self.n_f, out_dim=self.n_g, activation=[torch.tanh, torch.exp], hidden_dim=[params.d_hidden_dim] * self.n_f)
 
-    def transition_with_action(self, g_prev: AbstractLocation, a: Tensor) -> Tuple[AbstractLocation, AbstractLocation]:
+    def transition_with_action(self, g_prev: AbstractLocation, a: Tensor) -> Transition:
         """Compute transition using action: g_t+1 = g_t + D(a) * g_connections.
 
         Args:
@@ -77,8 +77,7 @@ class TransitionModel(nn.Module):
             a: Action tensor [B, n_actions] or [B] (indices)
 
         Returns:
-            mu_g: Mean of next abstract location
-            sigma_g: Uncertainty of transition
+            Transition: (mu_g, sigma_g) tuple
         """
         # Convert action indices to one-hot if needed
         if a.dim() == 1 or a.shape[1] == 1:
@@ -107,15 +106,14 @@ class TransitionModel(nn.Module):
 
         return mu_g, sigma_g
 
-    def transition_no_action(self, g_prev: AbstractLocation) -> Tuple[AbstractLocation, AbstractLocation]:
+    def transition_no_action(self, g_prev: AbstractLocation) -> Transition:
         """Compute transition without action (for shiny environments).
 
         Args:
             g_prev: Previous abstract location [n_f] of [B, n_g[f]]
 
         Returns:
-            mu_g: Mean of next abstract location
-            sigma_g: Uncertainty (fixed low values)
+            Transition: (mu_g, sigma_g) tuple
         """
         mu_g = []
 
@@ -147,7 +145,7 @@ class TransitionModel(nn.Module):
             return [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
         return mu_g
 
-    def forward(self, g_prev: AbstractLocation, a: Tensor, use_action: bool = True) -> Tuple[AbstractLocation, AbstractLocation]:
+    def forward(self, g_prev: AbstractLocation, a: Tensor, use_action: bool = True) -> Transition:
         """Main forward pass.
 
         Args:
@@ -156,8 +154,7 @@ class TransitionModel(nn.Module):
             use_action: Whether to use action or no-action transition
 
         Returns:
-            g_gen: Generated next abstract location
-            sigma_g: Uncertainty of transition
+            Transition: (g_gen, sigma_g) tuple
         """
         if use_action:
             mu_g, sigma_g = self.transition_with_action(g_prev, a)

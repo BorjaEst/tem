@@ -155,7 +155,7 @@ class InferenceModel(nn.Module):
 
         # 4. Retrieve from memory (if using inference memory)
         p_x = None
-        p_x_downsampled = None
+        g_downsampled = None
         if self.config.use_p_inf:
             x_flat = utils.concatenate_frequencies(x_)
             # Note: storage is accessed from parent TEMModel, not available here
@@ -164,8 +164,6 @@ class InferenceModel(nn.Module):
             pass
 
         # 5. Infer abstract location (precision-weighted fusion)
-        g_gen_mu, sigma_gen = g_gen
-
         # Handle shiny signals if present
         shiny_signals = None
         # TODO: Implement shiny object processing when needed
@@ -173,9 +171,8 @@ class InferenceModel(nn.Module):
         # if any(shiny_envs): ...
 
         g = self.abstract(
-            g_gen_mu,
-            sigma_gen,
-            p_x_downsampled,
+            g_gen,
+            g_downsampled,
             shiny_signals=shiny_signals,
             p2g_scale_offset=0.0,
         )

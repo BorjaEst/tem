@@ -7,7 +7,7 @@ episodic memory:
 
 Sources combined per frequency module f:
 1) Transition prediction: ``g_gen[f]`` with uncertainty ``sigma_g_gen[f]``
-2) Memory-based inference (optional): ``p_x[f] -> g`` via a learned MLP
+2) Memory-based inference (optional): ``g_downsampled[f] -> g`` via a learned MLP
 3) Salient object ("shiny") cues (optional): ``(mu_g_shiny[f], sigma_g_shiny[f])``
 
 Fusion rule (precision-weighted mean):
@@ -25,7 +25,7 @@ Key ideas:
 
 Shapes (per frequency f):
 - ``g_gen[f]``: [B, n_g[f]], ``sigma_g_gen[f]``: [B, n_g[f]]
-- ``p_x[f]`` (if used): [B, n_g_subsampled[f]] → mapped to ``mu_g_mem[f]``
+- ``g_downsampled[f]`` (if used): [B, n_g_subsampled[f]] → mapped to ``mu_g_mem[f]``
 - Returns ``g_inf[f]``: [B, n_g[f]]
 
 This implementation follows the style/patterns of other TEM modules and
@@ -39,7 +39,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from torch_tem.core.mlp import MLP
-from torch_tem.types import AbstractLocation
+from torch_tem.types import AbstractLocation, Transition
 
 
 class AbstractLocParams(Protocol):
@@ -58,7 +58,7 @@ class AbstractLocInference(nn.Module):
 
     Sources:
     1. g_gen - Transition prediction
-    2. p_x -> g - Memory-based inference (if use_p_inf)
+    2. g_downsampled -> g - Memory-based inference (if use_p_inf)
     3. g_shiny - Shiny object signals (if present)
 
     Combines via precision-weighted mean.
@@ -87,37 +87,32 @@ class AbstractLocInference(nn.Module):
         self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
         self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
 
-    def forward(
-        self,
-        g_gen: AbstractLocation,
-        sigma_g_gen: AbstractLocation,
-        p_x: Optional[AbstractLocation],
-        shiny_signals: Optional[Tuple[AbstractLocation, AbstractLocation]],
-        p2g_scale_offset: float,
-    ) -> AbstractLocation:
+    def forward(self, transition: Transition, g_downsampled: Optional[AbstractLocation], shiny_signals: Optional[Transition], p2g_scale_offset: float) -> AbstractLocation:
         """Infer g via precision-weighted mean of sources.
 
         Args:
-            g_gen: Transition prediction
-            sigma_g_gen: Transition uncertainty
-            p_x: Memory retrieval from sensory (if use_p_inf)
+            transition: Transition prediction (g_gen, sigma_g_gen)
+            g_downsampled: Memory retrieval from sensory (if use_p_inf)
             shiny_signals: (mu_g_shiny, sigma_g_shiny) if present
             p2g_scale_offset: Schedule for p->g influence
 
         Returns:
             g_inf: Inferred abstract location
         """
+        # Unpack transition
+        g_gen, sigma_g_gen = transition
+
         # Source 1: Transition
         sources_mu = [g_gen]
         sources_sigma = [sigma_g_gen]
 
         # Source 2: Memory (if use_p_inf)
-        if self.use_p_inf and p_x is not None:
+        if self.use_p_inf and g_downsampled is not None:
             # Compute mean from memory
-            mu_g_mem = self.mlp_mu_g_mem(p_x)
+            mu_g_mem = self.mlp_mu_g_mem(g_downsampled)
 
             # Compute uncertainty based on memory quality
-            memory_quality = self._compute_memory_quality(p_x, mu_g_mem)
+            memory_quality = self._compute_memory_quality(g_downsampled, mu_g_mem)
             sigma_g_mem = self.mlp_sigma_g_mem(memory_quality)
 
             sources_mu.append(mu_g_mem)
@@ -132,7 +127,7 @@ class AbstractLocInference(nn.Module):
         # Precision-weighted mean
         return self._precision_weighted_mean(sources_mu, sources_sigma)
 
-    def _compute_memory_quality(self, p_x: AbstractLocation, mu_g_mem: AbstractLocation) -> List[Tensor]:
+    def _compute_memory_quality(self, g_downsampled: AbstractLocation, mu_g_mem: AbstractLocation) -> List[Tensor]:
         """Compute memory quality indicators for uncertainty estimation.
 
         Returns a 2D signal per frequency indicating:
@@ -140,7 +135,7 @@ class AbstractLocInference(nn.Module):
         - Reconstruction error (not yet implemented, placeholder with zeros)
 
         Args:
-            p_x: Projected grounded location per frequency
+            g_downsampled: Projected grounded location per frequency
             mu_g_mem: Inferred abstract location mean per frequency
 
         Returns:
@@ -155,8 +150,8 @@ class AbstractLocInference(nn.Module):
             # Signal 2: Reconstruction error (placeholder - would need decoder)
             # In original: err = squared_error(x, x_hat) where x_hat = gen_x(p_x[0])
             # For now, use zeros as we don't have x available here
-            batch_size = p_x[f].shape[0]
-            recon_error = torch.zeros(batch_size, 1, device=p_x[f].device)
+            batch_size = g_downsampled[f].shape[0]
+            recon_error = torch.zeros(batch_size, 1, device=g_downsampled[f].device)
 
             quality_signals.append(torch.cat([g_norm, recon_error], dim=1))
 
@@ -169,17 +164,28 @@ class AbstractLocInference(nn.Module):
         g_inf = sum(precision_i * mu_i) / sum(precision_i)
 
         Args:
-            means: List of mean lists (one per source)
-            sigmas: List of sigma lists (one per source)
+            means: List of AbstractLocations, one per source
+            sigmas: List of AbstractLocations, one per source
 
         Returns:
             g_inf: Precision-weighted mean
         """
         g_inf = []
         for f in range(self.n_f):
-            precisions = [1.0 / (sigma[f] ** 2 + 1e-8) for sigma in sigmas]
-            weighted_sum = sum(p * mu[f] for p, mu in zip(precisions, means))
+            # Gather all source means and sigmas for this frequency
+            means_f = [mean[f] for mean in means]
+            sigmas_f = [sigma[f] for sigma in sigmas]
+
+            # Calculate precisions
+            precisions = [1.0 / (s**2 + 1e-8) for s in sigmas_f]
+
+            # Weighted sum - initialize with first term
+            weighted_sum = precisions[0] * means_f[0]
+            for p, m in zip(precisions[1:], means_f[1:]):
+                weighted_sum = weighted_sum + p * m
+
             precision_sum = sum(precisions)
+
             g_inf.append(weighted_sum / precision_sum)
         return g_inf
 
@@ -230,7 +236,7 @@ if __name__ == "__main__":
     sigma_g_gen = [torch.exp(torch.randn(B, n_g[f])) for f in range(n_f)]
 
     # Memory-based input (projected from p-space to reduced g-space)
-    p_x = [torch.randn(B, n_g_sub[f]) for f in range(n_f)]
+    g_downsampled = [torch.randn(B, n_g_sub[f]) for f in range(n_f)]
 
     # No shiny cues in this minimal example
     shiny = None
@@ -239,11 +245,14 @@ if __name__ == "__main__":
     p2g_scale_offset = 0.1
 
     with torch.no_grad():
-        g_inf = model(g_gen, sigma_g_gen, p_x, shiny, p2g_scale_offset)
+        transition = (g_gen, sigma_g_gen)
+        g_inf = model(transition, g_downsampled, shiny, p2g_scale_offset)
 
     print("AbstractLocInference Example")
     print("=" * 72)
     print(f"Frequencies: {n_f}")
     for f in range(n_f):
-        print(f"  f={f}: g_gen {tuple(g_gen[f].shape)} | " f"sigma {tuple(sigma_g_gen[f].shape)} | " f"p_x {tuple(p_x[f].shape)} -> g_inf {tuple(g_inf[f].shape)}")
+        print(
+            f"  f={f}: g_gen {tuple(g_gen[f].shape)} | " f"sigma {tuple(sigma_g_gen[f].shape)} | " f"g_downsampled {tuple(g_downsampled[f].shape)} -> g_inf {tuple(g_inf[f].shape)}"
+        )
     print("✓ Forward pass completed.")

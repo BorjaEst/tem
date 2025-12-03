@@ -99,6 +99,14 @@ Theory:
     organized into modules with different spatial frequencies.
 """
 
+Transition = Tuple[AbstractLocation, AbstractLocation]
+"""Transition prediction containing (mean/sample, uncertainty).
+
+Structure:
+    - First element: Predicted abstract location (g_gen)
+    - Second element: Uncertainty of prediction (sigma_g)
+"""
+
 GroundedLocation = MultiScaleCode
 """Grounded place cell representation (p) from memory retrieval.
 

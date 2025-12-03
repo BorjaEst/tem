@@ -13,31 +13,17 @@ All plotting functions follow consistent conventions:
 - Provide both quick-plot and customizable interfaces
 """
 
-from torch_tem.figures.abstract import (
-    plot_g_inf_evolution,
-    plot_schedule_effect,
-    plot_source_contributions,
-    plot_uncertainty_evolution,
-)
-from torch_tem.figures.data import (
-    plot_batch_tensors,
-    plot_environment_layout,
-    plot_policy_comparison,
-    plot_walk_statistics,
-    plot_walks,
-)
-from torch_tem.figures.grounded import (
-    plot_grounded_location_activity,
-    plot_outer_product_structure,
-    plot_place_cell_dynamics,
-)
-from torch_tem.figures.memory import (
-    plot_attractor_convergence,
-    plot_hierarchical_masks,
-    plot_learning_curve,
-    plot_memory_difference,
-    plot_memory_matrices,
-    plot_retrieval_quality,
+from torch_tem.figures.abstract import plot_g_inf_evolution, plot_schedule_effect, plot_source_contributions, plot_uncertainty_evolution
+from torch_tem.figures.data import plot_batch_tensors, plot_environment_layout, plot_policy_comparison, plot_walk_statistics, plot_walks
+from torch_tem.figures.grounded import plot_grounded_location_activity, plot_outer_product_structure, plot_place_cell_dynamics
+from torch_tem.figures.memory import plot_attractor_convergence, plot_hierarchical_masks, plot_learning_curve, plot_memory_difference, plot_memory_matrices, plot_retrieval_quality
+from torch_tem.figures.patterns import (
+    plot_grid_cell_patterns,
+    plot_oscillatory_patterns,
+    plot_pattern_comparison,
+    plot_pattern_correlations,
+    plot_place_cell_patterns,
+    plot_temporal_patterns,
 )
 from torch_tem.figures.sensory import (
     plot_frequency_bank,
@@ -55,6 +41,13 @@ __all__ = [
     "plot_walks",
     "plot_walk_statistics",
     "plot_batch_tensors",
+    # Pattern generation
+    "plot_place_cell_patterns",
+    "plot_grid_cell_patterns",
+    "plot_temporal_patterns",
+    "plot_oscillatory_patterns",
+    "plot_pattern_correlations",
+    "plot_pattern_comparison",
     # Grounded location inference
     "plot_grounded_location_activity",
     "plot_outer_product_structure",

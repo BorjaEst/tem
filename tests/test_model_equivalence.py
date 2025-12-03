@@ -18,14 +18,14 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
+from torch import Tensor
 
 import parameters
 import world
 from adapters.legacy_adapter import get_memory_parameters, legacy_to_typed
 from model import Iteration
 from model import Model as LegacyModel
-from torch_tem.model import TEMModel
-from torch_tem.types import TEMState
+from torch_tem.model import TEMModel, TEMState
 
 
 def set_seed(seed: int = 42):
@@ -90,7 +90,7 @@ def compare_state_fields(legacy_iter: Iteration, refactored_state: State, rtol: 
             return {"max_diff": float("inf"), "mean_diff": float("inf"), "match": False}
 
         # Check if list contains tensors
-        if not all(isinstance(item, torch.Tensor) for item in legacy_val + refactored_val):
+        if not all(isinstance(item, Tensor) for item in legacy_val + refactored_val):
             # Non-tensor list, skip comparison
             return {"max_diff": 0.0, "mean_diff": 0.0, "match": True, "skipped": True}
 
@@ -110,7 +110,7 @@ def compare_state_fields(legacy_iter: Iteration, refactored_state: State, rtol: 
         return {"max_diff": max_diff, "mean_diff": mean_diff, "match": match}
 
     # Single tensor
-    if isinstance(legacy_val, torch.Tensor) and isinstance(refactored_val, torch.Tensor):
+    if isinstance(legacy_val, Tensor) and isinstance(refactored_val, Tensor):
         if legacy_val.shape != refactored_val.shape:
             return {"max_diff": float("inf"), "mean_diff": float("inf"), "match": False}
 

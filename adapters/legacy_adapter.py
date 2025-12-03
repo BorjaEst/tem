@@ -12,6 +12,7 @@ Critical conversions:
 from typing import Any, Dict
 
 import torch
+from torch import Tensor
 
 from torch_tem.config import EnvironmentConfig, ModelConfig, TrainingConfig
 
@@ -260,7 +261,7 @@ def get_memory_parameters(params: Dict[str, Any], iteration: int = 0) -> Dict[st
     return {"eta": eta, "lamb": lamb}
 
 
-def get_loss_weights(params: Dict[str, Any], iteration: int = 0) -> torch.Tensor:
+def get_loss_weights(params: Dict[str, Any], iteration: int = 0) -> Tensor:
     """Get loss weights with curriculum scheduling.
 
     Replicates the loss weight computation from parameter_iteration() in

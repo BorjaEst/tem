@@ -19,6 +19,7 @@ from typing import List, Tuple
 
 import numpy as np
 import torch
+from torch import Tensor
 
 import parameters
 from adapters.legacy_adapter import legacy_to_typed
@@ -72,7 +73,7 @@ def _copy_weights(legacy: LegacyModel, refactored: TEMModel, params: dict):
     pass
 
 
-def assert_tensors_close(actual: torch.Tensor, expected: torch.Tensor, rtol: float = 1e-5, atol: float = 1e-8, name: str = "tensor"):
+def assert_tensors_close(actual: Tensor, expected: Tensor, rtol: float = 1e-5, atol: float = 1e-8, name: str = "tensor"):
     """Assert two tensors are close with detailed error messages."""
     if actual.shape != expected.shape:
         raise AssertionError(f"{name} shape mismatch: {actual.shape} != {expected.shape}")
@@ -92,7 +93,7 @@ def assert_tensors_close(actual: torch.Tensor, expected: torch.Tensor, rtol: flo
         )
 
 
-def assert_list_tensors_close(actual: List[torch.Tensor], expected: List[torch.Tensor], rtol: float = 1e-5, atol: float = 1e-8, name: str = "list"):
+def assert_list_tensors_close(actual: List[Tensor], expected: List[Tensor], rtol: float = 1e-5, atol: float = 1e-8, name: str = "list"):
     """Assert two lists of tensors are close."""
     if len(actual) != len(expected):
         raise AssertionError(f"{name} length mismatch: {len(actual)} != {len(expected)}")

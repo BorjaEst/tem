@@ -7,14 +7,7 @@ from torch import Tensor, nn
 from .. import utils
 from ..core.projection import ProjectionHead
 from ..memory.attractor import AttractorDynamics
-from ..types import (
-    AbstractLocation,
-    GroundedLocation,
-    LatentPrediction,
-    Matrix,
-    MultiScaleCode,
-    TransitionParams,
-)
+from ..types import AbstractLocation, GroundedLocation, LocationInference, Matrix, MultiScaleCode, TransitionParams
 from . import abstract, grounded, precission, sensory
 from .abstract import AbstractLocParams
 from .grounded import GroundedLocParams
@@ -57,7 +50,7 @@ class InferenceState:
     """
 
     memory_inf: Optional[Matrix]  # To be updated by Hebbian plasticity after inference step
-    latent_prediction: LatentPrediction
+    latent_prediction: LocationInference
     filtered_observation: MultiScaleCode
     retrieved_grounded: Optional[GroundedLocation]
 
@@ -107,7 +100,7 @@ class InferenceModel(nn.Module):
         """
         return InferenceState(
             memory_inf=None,  # No initial inference memory
-            latent_prediction=LatentPrediction(
+            latent_prediction=LocationInference(
                 # Initialize abstract location g_inf with zeros
                 abstract=[torch.zeros((batch_size, self.config.n_g[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
                 # Initialize grounded location p_inf with zeros
@@ -118,7 +111,7 @@ class InferenceModel(nn.Module):
             retrieved_grounded=None,  # No initial retrieved grounded location
         )
 
-    def inference(self, x: Tensor, locations: List[Dict[str, Any]], state: InferenceState, g_gen: TransitionParams) -> InferenceState:
+    def inference(self, x: SensoryObservation, locations: List[Dict[str, Any]], state: InferenceState, g_gen: TransitionParams) -> InferenceState:
         """Run the inference path to obtain abstract and grounded locations.
 
         The inference path compresses and temporally filters sensory input,
@@ -195,7 +188,7 @@ class InferenceModel(nn.Module):
 
         return InferenceState(
             memory_inf=state.memory_inf,  # Copy from previous state, will be updated by Hebbian plasticity
-            latent_prediction=LatentPrediction(abstract=g, grounded=p),
+            latent_prediction=LocationInference(abstract=g, grounded=p),
             filtered_observation=x_f,
             retrieved_grounded=p_x,
         )
@@ -204,7 +197,7 @@ class InferenceModel(nn.Module):
         self,
         p_x: Optional[GroundedLocation],
         g_gen: TransitionParams,
-        x: Tensor,
+        x: SensoryObservation,
         locations: List[Dict[str, Any]],
     ) -> AbstractLocation:
         """Infer abstract locations from memory retrieval and path integration.

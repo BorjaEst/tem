@@ -9,7 +9,6 @@ Implementation follows the reference model.py while using modular torch_tem
 components for maintainability and testability.
 """
 
-from abc import ABC
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -26,12 +25,7 @@ from torch_tem.losses import Losses
 from torch_tem.memory import MemoryState
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
-from torch_tem.types import AbstractLocation, GroundedLocation
-from torch_tem.types import LatentPrediction
-from torch_tem.types import LatentPrediction as Location
-from torch_tem.types import MultiScaleCode
-from torch_tem.types import SensoryPrediction
-from torch_tem.types import SensoryPrediction as Observation
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationInference, MultiScaleCode, SensoryObservation, SensoryPrediction
 
 
 @dataclass
@@ -90,7 +84,7 @@ class TEMState:
         return self.generative_state.sensory_prediction.values
 
     @property
-    def latent_prediction(self) -> LatentPrediction:
+    def latent_prediction(self) -> LocationInference:
         """Inferred locations (g_inf, p_inf)."""
         return self.inference_state.latent_prediction
 
@@ -171,7 +165,7 @@ class TEMModel(InferenceModel, GenerativeModel, nn.Module):
         GenerativeModel.__init__(self, params, self.projection, self.attractor)
         InferenceModel.__init__(self, params, self.projection, self.attractor)
 
-    def init_state(self, x: Tensor, memory: MemoryState) -> TEMState:
+    def init_state(self, x: SensoryObservation, memory: MemoryState) -> TEMState:
         """Initialize TEM state for a new sequence.
 
         This method sets up the initial TEMState for a new walk sequence,
@@ -203,7 +197,7 @@ class TEMModel(InferenceModel, GenerativeModel, nn.Module):
 
         return TEMState(inference_state=inference_state, generative_state=generative_state)
 
-    def iteration(self, x: Tensor, locations: List[Dict], action: int, state: TEMState) -> Tuple[Losses, TEMState]:
+    def iteration(self, x: SensoryObservation, locations: List[Dict], action: int, state: TEMState) -> Tuple[Losses, TEMState]:
         """Perform a single TEM iteration for one time step.
 
         This method combines transition dynamics, inference, generative
@@ -272,7 +266,7 @@ class TEMModel(InferenceModel, GenerativeModel, nn.Module):
 
         return losses, state
 
-    def loss(self, x: Tensor, g_gen: AbstractLocation, state: TEMState) -> Losses:
+    def loss(self, x: SensoryObservation, g_gen: AbstractLocation, state: TEMState) -> Losses:
         """Compute all TEM loss components for a single time step.
 
         The loss combines consistency terms between inferred and generated

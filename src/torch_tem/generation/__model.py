@@ -7,15 +7,7 @@ from torch import Tensor, nn
 from .. import utils
 from ..core import ProjectionHead
 from ..memory import AttractorDynamics
-from ..types import (
-    AbstractLocation,
-    GroundedLocation,
-    LatentPrediction,
-    Matrix,
-    MultiScaleCode,
-    SensoryPrediction,
-    TransitionOutput,
-)
+from ..types import AbstractLocation, GroundedLocation, LocationInference, Matrix, SensoryPrediction, TransitionOutput
 from . import location, observation, transition
 from .location import LocationGeneratorParams
 from .observation import DecoderParams
@@ -136,7 +128,7 @@ class GenerativeModel(nn.Module):
             p_gen=[torch.zeros((batch_size, self.config.n_p[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
         )
 
-    def generative(self, latent: LatentPrediction, g_gen: AbstractLocation, state: GenerativeState) -> GenerativeState:
+    def generative(self, latent: LocationInference, g_gen: AbstractLocation, state: GenerativeState) -> GenerativeState:
         """Run the generative path to reconstruct observations and locations.
 
         Using the inferred abstract and grounded locations, and the previous

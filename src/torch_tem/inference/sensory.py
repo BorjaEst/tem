@@ -51,6 +51,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from torch_tem.types import SensoryObservation
+
 
 class ProcessorParams(Protocol):
     """Minimal interface for SensoryProcessor.
@@ -191,7 +193,7 @@ class SensoryEncoder(nn.Module):
         self.n_x_c = params.n_x_c
         self.two_hot_table = two_hot_table
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: SensoryObservation) -> Tensor:
         """Encode one-hot observation [B, n_x] to two-hot [B, n_x_c].
 
         Args:

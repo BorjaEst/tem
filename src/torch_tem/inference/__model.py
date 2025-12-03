@@ -59,9 +59,9 @@ class InferenceModel(nn.Module):
     """Inference TEM model"""
 
     def __init__(self, params: Parameters, projection: ProjectionHead, attractor: AttractorDynamics):
-        nn.Module.__init__(self)
-        # Store configuration
-        self.config = params
+        super().__init__()
+        self.config = params  # Store configuration
+
         # Compute configuration-derived matrices
         two_hot_table = utils.create_two_hot_table(params.n_x, params.n_x_c)
         W_repeat = utils.create_W_repeat(params.n_g_subsampled_combined, params.n_x_f)

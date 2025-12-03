@@ -74,9 +74,9 @@ class GenerativeModel(nn.Module):
     """Generative TEM model"""
 
     def __init__(self, params: Parameters, projection: ProjectionHead, attractor: AttractorDynamics):
-        nn.Module.__init__(self)
-        # Store configuration
-        self.config = params
+        super().__init__()
+        self.config = params  # Store configuration
+
         # Compute configuration-derived matrices
         g_connections = utils.create_g_connections(params.n_f, params.n_f_g, params.n_f_ovc, params.f_extended)
         W_repeat = utils.matrices.create_W_repeat(params.n_g_subsampled_combined, [params.n_x_c] * params.n_f)

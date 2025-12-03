@@ -51,6 +51,11 @@ package-dir = { "" = "src" }
 [tool.setuptools.package-data]
 torch_tem = ["py.typed"]
 
+[tool.isort]
+profile = "black"
+line_length = 180
+known_first_party = ["torch_tem"]
+
 [tool.black]
 line-length = 180
 target-version = ["py312"]

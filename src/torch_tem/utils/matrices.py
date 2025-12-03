@@ -7,8 +7,10 @@ import torch
 from scipy.special import comb
 from torch import Tensor
 
+from ..types import GroundedLocation, Matrix, MultiScaleCode, Vector
 
-def squared_error_freq(value: Union[Tensor, List[Tensor]], target: Union[Tensor, List[Tensor]]) -> Union[Tensor, List[Tensor]]:
+
+def squared_error_freq(value: Union[Vector, MultiScaleCode], target: Union[Vector, MultiScaleCode]) -> Union[Vector, MultiScaleCode]:
     """Compute squared error across frequencies.
 
     Helper function for computing ||value - target||² * 0.5 across frequency modules.
@@ -26,7 +28,7 @@ def squared_error_freq(value: Union[Tensor, List[Tensor]], target: Union[Tensor,
     return torch.sum((value - target) ** 2, dim=1) * 0.5
 
 
-def create_W_repeat(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Tensor]:
+def create_W_repeat(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]:
     """Create repeat matrices for outer product computation.
 
     Matrix for repeating abstract location g to do outer product with sensory
@@ -42,7 +44,7 @@ def create_W_repeat(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Tensor]
     return [torch.tensor(np.kron(np.eye(g), np.ones((1, x))), dtype=torch.float) for g, x in zip(n_g_subsampled, n_x_f)]
 
 
-def create_W_tile(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Tensor]:
+def create_W_tile(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]:
     """Create tile matrices for outer product computation.
 
     Matrix for tiling sensory observation x to do outer product with abstract
@@ -58,7 +60,7 @@ def create_W_tile(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Tensor]:
     return [torch.tensor(np.kron(np.ones((1, g)), np.eye(x)), dtype=torch.float) for g, x in zip(n_g_subsampled, n_x_f)]
 
 
-def create_g_downsample(n_g: List[int], n_g_subsampled: List[int]) -> List[Tensor]:
+def create_g_downsample(n_g: List[int], n_g_subsampled: List[int]) -> List[Matrix]:
     """Create downsampling matrices for abstract location.
 
     Downsampling matrix to go from grid cells to compressed grid cells for
@@ -74,7 +76,7 @@ def create_g_downsample(n_g: List[int], n_g_subsampled: List[int]) -> List[Tenso
     return [torch.cat([torch.eye(dim_out, dtype=torch.float), torch.zeros((dim_in - dim_out, dim_out), dtype=torch.float)]) for dim_in, dim_out in zip(n_g, n_g_subsampled)]
 
 
-def create_two_hot_table(n_x: int, n_x_c: int) -> List[Tensor]:
+def create_two_hot_table(n_x: int, n_x_c: int) -> List[Vector]:
     """Create two-hot encoding lookup table.
 
     Table for converting one-hot to two-hot compressed representation.
@@ -115,7 +117,7 @@ def create_two_hot_table(n_x: int, n_x_c: int) -> List[Tensor]:
     return [torch.tensor(code, dtype=torch.float) for code in two_hot_table]
 
 
-def split_to_frequencies(p_flat: Tensor, n_p: List[int]) -> List[Tensor]:
+def split_to_frequencies(p_flat: Vector, n_p: List[int]) -> GroundedLocation:
     """Split concatenated place cell tensor into per-frequency list.
 
     This utility function converts between the two common formats for grounded
@@ -158,7 +160,7 @@ def split_to_frequencies(p_flat: Tensor, n_p: List[int]) -> List[Tensor]:
     return p_list
 
 
-def concatenate_frequencies(p_list: List[Tensor]) -> Tensor:
+def concatenate_frequencies(p_list: GroundedLocation) -> Vector:
     """Concatenate per-frequency place cell list into flat tensor.
 
     This utility function converts between the two common formats for grounded

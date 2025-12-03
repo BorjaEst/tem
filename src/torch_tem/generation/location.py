@@ -20,6 +20,7 @@ from torch import Tensor
 from torch_tem.core.mlp import MLP
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
+from torch_tem.types import AbstractLocation, GroundedLocation, Matrix
 
 
 class LocationGeneratorParams(Protocol):
@@ -58,7 +59,7 @@ class LocationGenerator(nn.Module):
         mlp_sigma_p: MLP for uncertainty estimation (only if do_sample=True)
     """
 
-    def __init__(self, params: LocationGeneratorParams, attractor: AttractorDynamics, W_repeat: List[Tensor]):
+    def __init__(self, params: LocationGeneratorParams, attractor: AttractorDynamics, W_repeat: List[Matrix]):
         """Initialize location generator.
 
         Sets up the g→p generative pathway with memory-based retrieval and
@@ -100,7 +101,7 @@ class LocationGenerator(nn.Module):
                 hidden_dim=[2 * p for p in params.n_p],
             )
 
-    def generate(self, g: List[Tensor], memory_state: Tensor, for_inference: bool = False) -> List[Tensor]:
+    def generate(self, g: AbstractLocation, memory_state: Matrix, for_inference: bool = False) -> GroundedLocation:
         """Generate grounded location (p) from abstract location (g) via memory retrieval.
 
         Implements the core g→p transformation using Hebbian associative memory:
@@ -181,7 +182,7 @@ class LocationGenerator(nn.Module):
             start_idx = end_idx
         return p
 
-    def forward(self, g: List[Tensor], memory_state: Tensor, for_inference: bool = False) -> List[Tensor]:
+    def forward(self, g: AbstractLocation, memory_state: Matrix, for_inference: bool = False) -> GroundedLocation:
         """Forward pass (alias for generate).
 
         PyTorch convention: defines the computation performed at every call.

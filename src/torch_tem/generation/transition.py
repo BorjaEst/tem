@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from torch_tem.core.mlp import MLP
+from torch_tem.types import AbstractLocation
 
 
 class TransitionParams(Protocol):
@@ -68,7 +69,7 @@ class TransitionModel(nn.Module):
         # Uncertainty estimation MLPs
         self.MLP_sigma_g_path = MLP(in_dim=[self.n_actions] * self.n_f, out_dim=self.n_g, activation=[torch.tanh, torch.exp], hidden_dim=[params.d_hidden_dim] * self.n_f)
 
-    def transition_with_action(self, g_prev: List[Tensor], a: Tensor) -> Tuple[List[Tensor], List[Tensor]]:
+    def transition_with_action(self, g_prev: AbstractLocation, a: Tensor) -> Tuple[AbstractLocation, AbstractLocation]:
         """Compute transition using action: g_t+1 = g_t + D(a) * g_connections.
 
         Args:
@@ -106,7 +107,7 @@ class TransitionModel(nn.Module):
 
         return mu_g, sigma_g
 
-    def transition_no_action(self, g_prev: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
+    def transition_no_action(self, g_prev: AbstractLocation) -> Tuple[AbstractLocation, AbstractLocation]:
         """Compute transition without action (for shiny environments).
 
         Args:
@@ -132,7 +133,7 @@ class TransitionModel(nn.Module):
 
         return mu_g, sigma_g
 
-    def sample(self, mu_g: List[Tensor], sigma_g: List[Tensor]) -> List[Tensor]:
+    def sample(self, mu_g: AbstractLocation, sigma_g: AbstractLocation) -> AbstractLocation:
         """Sample from transition distribution if do_sample=True.
 
         Args:
@@ -146,7 +147,7 @@ class TransitionModel(nn.Module):
             return [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
         return mu_g
 
-    def forward(self, g_prev: List[Tensor], a: Tensor, use_action: bool = True) -> Tuple[List[Tensor], List[Tensor]]:
+    def forward(self, g_prev: AbstractLocation, a: Tensor, use_action: bool = True) -> Tuple[AbstractLocation, AbstractLocation]:
         """Main forward pass.
 
         Args:

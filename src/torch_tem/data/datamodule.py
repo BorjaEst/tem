@@ -12,6 +12,8 @@ from torch_tem.data.policies import PolicyGenerator
 from torch_tem.data.shiny import ShinyConfig, ShinyEnvironmentBuilder
 from torch_tem.data.walks import Walk, WalkGenerator
 
+from ..types import Vector
+
 
 class InfiniteWalkDataset(IterableDataset):
     """Infinite stream of walks for training.
@@ -145,7 +147,7 @@ class TEMDataModule(L.LightningDataModule):
 
         return DataLoader(val_walks, batch_size=self.batch_size, collate_fn=self._collate_walks, num_workers=0)
 
-    def _collate_walks(self, walks: List[Walk]) -> Tuple[Tensor, Tensor, Tensor]:
+    def _collate_walks(self, walks: List[Walk]) -> Tuple[Vector, Vector, Vector]:
         """Collate walks into batched tensors.
 
         Args:
@@ -192,7 +194,7 @@ class TEMDataModule(L.LightningDataModule):
 
         return self.policy_gen.mix_policies(policies, weights)
 
-    def generate_batch(self, epoch: int = 0) -> Tuple[Tensor, Tensor, Tensor]:
+    def generate_batch(self, epoch: int = 0) -> Tuple[Vector, Vector, Vector]:
         """Generate single batch of walks for current epoch.
 
         Useful for manual training loops outside Lightning.

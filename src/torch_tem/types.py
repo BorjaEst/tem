@@ -203,12 +203,6 @@ class LocationInference:
     grounded: GroundedLocation
 
 
-# Import complex types from their respective modules
-from torch_tem.generation.__model import GenerativeState  # noqa: F401
-from torch_tem.inference.__model import InferenceState  # noqa: F401
-from torch_tem.memory import MemoryState  # noqa: F401
-
-
 @dataclass
 class StepInput:
     """Input data for a single TEM iteration.

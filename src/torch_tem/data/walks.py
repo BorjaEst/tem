@@ -10,6 +10,8 @@ from torch import Tensor
 from torch_tem.config import EnvironmentConfig
 from torch_tem.data.environment import Environment, Location
 
+from ..types import Vector
+
 
 class Walk(BaseModel):
     """Single walk trajectory.
@@ -26,9 +28,9 @@ class Walk(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    observations: Tensor = Field(description="One-hot observation tensors")
-    actions: Tensor = Field(description="Action indices")
-    locations: Tensor = Field(description="Location IDs")
+    observations: Vector = Field(description="One-hot observation tensors")
+    actions: Vector = Field(description="Action indices")
+    locations: Vector = Field(description="Location IDs")
     shiny_markers: Optional[Tensor] = Field(default=None, description="Shiny location flags")
 
     def __len__(self) -> int:
@@ -244,7 +246,7 @@ class WalkGenerator:
         """
         return [self.generate_shiny_walk(walk_length, shiny_locations, shiny_policies, returns) for _ in range(n_walks)]
 
-    def batch_walks(self, walks: List[Walk]) -> Tuple[Tensor, Tensor, Tensor]:
+    def batch_walks(self, walks: List[Walk]) -> Tuple[Vector, Vector, Vector]:
         """Stack walks into batched tensors for TEM.
 
         Args:

@@ -18,6 +18,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from ..types import MultiScaleCode, Vector
+
 
 # ==============================================================================
 # Protocols
@@ -99,8 +101,8 @@ def plot_frequency_bank(frequencies: List[float], title: str = "Frequency Bank C
 # Temporal Filtering Visualization
 # ==============================================================================
 def plot_temporal_filtering(
-    x_c_history: List[Tensor],
-    x_f_history: List[List[Tensor]],
+    x_c_history: List[Vector],
+    x_f_history: List[MultiScaleCode],
     frequencies: List[float],
     title: str = "Temporal Filtering Across Frequencies",
     figsize: Tuple[float, float] = (14, 2),
@@ -167,8 +169,8 @@ def plot_temporal_filtering(
 # Feature Comparison Visualization
 # ==============================================================================
 def plot_frequency_comparison(
-    x_c_history: List[Tensor],
-    x_f_history: List[List[Tensor]],
+    x_c_history: List[Vector],
+    x_f_history: List[MultiScaleCode],
     frequencies: List[float],
     feature_idx: int = 0,
     title: str = "Single Feature Across Frequencies",
@@ -228,8 +230,8 @@ def plot_frequency_comparison(
 # Normalization Effects Visualization
 # ==============================================================================
 def plot_normalization_effects(
-    x_f_raw: List[Tensor],
-    x_f_normalized: List[Tensor],
+    x_f_raw: MultiScaleCode,
+    x_f_normalized: MultiScaleCode,
     frequencies: List[float],
     title: str = "L2 Normalization Effects",
     figsize: Tuple[float, float] = (3, 6),
@@ -298,7 +300,7 @@ def plot_normalization_effects(
 # Multi-Frequency Representation Visualization
 # ==============================================================================
 def plot_multi_frequency_representation(
-    x_f_list: List[List[Tensor]],
+    x_f_list: List[MultiScaleCode],
     frequencies: List[float],
     timesteps: List[int],
     title: str = "Multi-Frequency Representation",
@@ -373,7 +375,7 @@ def plot_multi_frequency_representation(
 # Sensory Projection to Hippocampal p-space
 # ==============================================================================
 def plot_sensory_projection(
-    x_p_history: Union[List[List[Tensor]], List[Tensor], Tensor],
+    x_p_history: Union[List[MultiScaleCode], MultiScaleCode, Vector],
     n_p_per_freq: Optional[List[int]] = None,
     title: str = "Sensory Projection to Hippocampal p-space (x → p)",
     figsize: Tuple[float, float] = (12, 4),
@@ -436,7 +438,7 @@ def plot_sensory_projection(
             elif isinstance(inp[0], Tensor):
                 mat = torch.stack([t if t.dim() == 1 else t.view(-1) for t in inp], dim=0)
                 return mat.detach().cpu().numpy()
-        elif isinstance(inp, torch.Tensor):
+        elif isinstance(inp, Tensor):
             # Case C: Tensor [T, sum(n_p)] (already flattened)
             if inp.dim() == 2:
                 return inp.detach().cpu().numpy()

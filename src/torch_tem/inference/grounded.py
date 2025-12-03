@@ -21,6 +21,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from torch_tem.types import GroundedLocation, Matrix, MultiScaleCode
+
 
 class GroundedLocParams(Protocol):
     """Minimal interface for GroundedLocInference.
@@ -62,7 +64,7 @@ class GroundedLocInference(nn.Module):
         >>> p = grounded(g, x)  # Returns list of [4, 30] and [4, 24]
     """
 
-    def __init__(self, params: GroundedLocParams, W_repeat: List[Tensor], W_tile: List[Tensor]):
+    def __init__(self, params: GroundedLocParams, W_repeat: List[Matrix], W_tile: List[Matrix]):
         """Initialize with Kronecker product matrices for efficient outer product computation."""
         super().__init__()
         self.n_f = params.n_f
@@ -76,7 +78,7 @@ class GroundedLocInference(nn.Module):
         # Learnable weights control sensory vs spatial dominance per frequency
         self.w_p = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_f)])
 
-    def forward(self, g_downsampled: List[Tensor], x_filtered: List[Tensor]) -> List[Tensor]:
+    def forward(self, g_downsampled: MultiScaleCode, x_filtered: MultiScaleCode) -> GroundedLocation:
         """Compute grounded location via outer product p = g ⊗ x per frequency.
 
         Args:

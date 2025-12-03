@@ -7,7 +7,7 @@ from torch import Tensor, nn
 from .. import utils
 from ..core.projection import ProjectionHead
 from ..memory.attractor import AttractorDynamics
-from ..types import AbstractLocation, GroundedLocation, LocationInference, Matrix, MultiScaleCode, TransitionParams
+from ..types import AbstractLocation, GroundedLocation, LocationInference, Matrix, MultiScaleCode, SensoryObservation, TransitionParams
 from . import abstract, grounded, precission, sensory
 from .abstract import AbstractLocParams
 from .grounded import GroundedLocParams

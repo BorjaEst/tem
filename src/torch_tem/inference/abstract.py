@@ -39,6 +39,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from torch_tem.core.mlp import MLP
+from torch_tem.types import AbstractLocation
 
 
 class AbstractLocParams(Protocol):
@@ -87,8 +88,13 @@ class AbstractLocInference(nn.Module):
         self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
 
     def forward(
-        self, g_gen: List[Tensor], sigma_g_gen: List[Tensor], p_x: Optional[List[Tensor]], shiny_signals: Optional[Tuple[List[Tensor], List[Tensor]]], p2g_scale_offset: float
-    ) -> List[Tensor]:
+        self,
+        g_gen: AbstractLocation,
+        sigma_g_gen: AbstractLocation,
+        p_x: Optional[AbstractLocation],
+        shiny_signals: Optional[Tuple[AbstractLocation, AbstractLocation]],
+        p2g_scale_offset: float,
+    ) -> AbstractLocation:
         """Infer g via precision-weighted mean of sources.
 
         Args:
@@ -126,7 +132,7 @@ class AbstractLocInference(nn.Module):
         # Precision-weighted mean
         return self._precision_weighted_mean(sources_mu, sources_sigma)
 
-    def _compute_memory_quality(self, p_x: List[Tensor], mu_g_mem: List[Tensor]) -> List[Tensor]:
+    def _compute_memory_quality(self, p_x: AbstractLocation, mu_g_mem: AbstractLocation) -> List[Tensor]:
         """Compute memory quality indicators for uncertainty estimation.
 
         Returns a 2D signal per frequency indicating:
@@ -156,7 +162,7 @@ class AbstractLocInference(nn.Module):
 
         return quality_signals
 
-    def _precision_weighted_mean(self, means: List[List[Tensor]], sigmas: List[List[Tensor]]) -> List[Tensor]:
+    def _precision_weighted_mean(self, means: List[AbstractLocation], sigmas: List[AbstractLocation]) -> AbstractLocation:
         """Combine sources via precision weighting.
 
         precision_i = 1 / sigma_i^2
@@ -177,7 +183,7 @@ class AbstractLocInference(nn.Module):
             g_inf.append(weighted_sum / precision_sum)
         return g_inf
 
-    def _scale_sigma(self, sigma: List[Tensor], offset: float) -> List[Tensor]:
+    def _scale_sigma(self, sigma: AbstractLocation, offset: float) -> AbstractLocation:
         """Scale sigma for scheduling p->g influence.
 
         Args:

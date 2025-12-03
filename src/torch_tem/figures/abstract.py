@@ -17,6 +17,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from ..types import AbstractLocation, Vector
+
 
 # ==============================================================================
 # Protocols
@@ -33,7 +35,7 @@ class AbstractInferenceConfig(Protocol):
 # Source Contribution Analysis
 # ==============================================================================
 def plot_source_contributions(
-    precisions_history: List[Dict[str, List[Tensor]]],
+    precisions_history: List[Dict[str, AbstractLocation]],
     timesteps_to_plot: List[int],
     n_frequencies: int,
     title: str = "Source Precision Contributions Over Time",
@@ -108,7 +110,7 @@ def plot_source_contributions(
 # Uncertainty Evolution
 # ==============================================================================
 def plot_uncertainty_evolution(
-    sigma_history: Dict[str, List[List[Tensor]]],
+    sigma_history: Dict[str, List[AbstractLocation]],
     n_frequencies: int,
     title: str = "Uncertainty Evolution by Source",
     figsize: tuple = (12, 6),
@@ -164,7 +166,7 @@ def plot_uncertainty_evolution(
 # Abstract Location Evolution
 # ==============================================================================
 def plot_g_inf_evolution(
-    g_inf_history: List[List[Tensor]],
+    g_inf_history: List[AbstractLocation],
     n_frequencies: int,
     n_dims_to_plot: int = 3,
     batch_idx: int = 0,

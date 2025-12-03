@@ -6,8 +6,10 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from ..types import Matrix
 
-def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_initial: List[float]) -> Tensor:
+
+def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_initial: List[float]) -> Matrix:
     """Create hierarchical mask for memory updates.
 
     Set connections when forming Hebbian memory of grounded locations:
@@ -46,7 +48,7 @@ def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_i
     return p_update_mask
 
 
-def create_p_retrieve_mask(n_p: List[int], i_attractor: int, max_freq: List[int]) -> List[Tensor]:
+def create_p_retrieve_mask(n_p: List[int], i_attractor: int, max_freq: List[int]) -> List[Matrix]:
     """Create hierarchical masks for memory retrieval with early-stopping.
 
     Hierarchical memory retrieval is implemented by early-stopping low-frequency

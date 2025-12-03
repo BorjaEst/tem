@@ -7,8 +7,11 @@ and grid cell activity patterns for training Hebbian memory networks.
 
 from typing import List, Protocol, Tuple
 
+import numpy as np
 import torch
 from torch import Tensor
+
+from ..types import AbstractLocation, Vector
 
 
 class PatternGeneratorParams(Protocol):
@@ -54,7 +57,7 @@ class PlaceCellPatternGenerator:
         self.noise_scale = noise_scale
         self.n_p_total = sum(params.n_p)
 
-    def generate(self, batch_size: int) -> Tensor:
+    def generate(self, batch_size: int) -> Vector:
         """Generate batch of place cell activity patterns.
 
         Creates sparse, normalized activity patterns representing
@@ -82,7 +85,7 @@ class PlaceCellPatternGenerator:
 
         return patterns
 
-    def generate_sequence(self, n_steps: int, batch_size: int, temporal_smoothness: float = 0.7) -> Tensor:
+    def generate_sequence(self, n_steps: int, batch_size: int, temporal_smoothness: float = 0.7) -> Vector:
         """Generate temporally smooth sequence of place cell patterns.
 
         Creates sequences where adjacent timepoints have similar activity,
@@ -139,7 +142,7 @@ class GridCellPatternGenerator:
         self.noise_scale = noise_scale
         self.n_f = len(params.n_g)
 
-    def generate(self, batch_size: int) -> List[Tensor]:
+    def generate(self, batch_size: int) -> AbstractLocation:
         """Generate batch of grid cell patterns (one per frequency).
 
         Creates normalized grid cell activity patterns for each
@@ -167,7 +170,7 @@ class GridCellPatternGenerator:
 
         return patterns
 
-    def generate_sequence(self, n_steps: int, batch_size: int, temporal_smoothness: float = 0.8) -> List[Tensor]:
+    def generate_sequence(self, n_steps: int, batch_size: int, temporal_smoothness: float = 0.8) -> List[AbstractLocation]:
         """Generate temporally smooth sequences of grid cell patterns.
 
         Creates sequences with temporal continuity for each frequency module.
@@ -230,7 +233,7 @@ class PairedPatternGenerator:
         self.grid_gen = GridCellPatternGenerator(params, noise_scale)
         self.place_gen = PlaceCellPatternGenerator(params, place_sparsity, noise_scale)
 
-    def generate(self, batch_size: int) -> Tuple[List[Tensor], Tensor]:
+    def generate(self, batch_size: int) -> Tuple[AbstractLocation, Vector]:
         """Generate paired (g, p) patterns.
 
         Creates associated grid and place cell patterns with optional
@@ -274,7 +277,7 @@ class PairedPatternGenerator:
 
         return g_patterns, p_patterns
 
-    def generate_sequence(self, n_steps: int, batch_size: int, temporal_smoothness: float = 0.7) -> Tuple[List[Tensor], Tensor]:
+    def generate_sequence(self, n_steps: int, batch_size: int, temporal_smoothness: float = 0.7) -> Tuple[List[AbstractLocation], Vector]:
         """Generate temporally smooth sequences of paired patterns.
 
         Creates correlated sequences of grid and place cell patterns

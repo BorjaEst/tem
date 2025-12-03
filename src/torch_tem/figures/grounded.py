@@ -13,8 +13,11 @@ torch_tem visualization conventions:
 from typing import List, Protocol
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from torch import Tensor
+
+from ..types import AbstractLocation, GroundedLocation, MultiScaleCode, Vector
 
 
 # ==============================================================================
@@ -40,9 +43,9 @@ class PlaceCellHistoryProtocol(Protocol):
 # Plotting Functions
 # ==============================================================================
 def plot_grounded_location_activity(
-    p_history: List[List[Tensor]],
-    observations: List[Tensor],
-    locations: Tensor,
+    p_history: List[GroundedLocation],
+    observations: List[Vector],
+    locations: Vector,
     frequencies: List[float],
     n_cells_per_freq: List[int],
     max_cells: int = 100,
@@ -153,9 +156,9 @@ def plot_grounded_location_activity(
 
 
 def plot_outer_product_structure(
-    g_sample: List[Tensor],
-    x_sample: List[Tensor],
-    p_sample: List[Tensor],
+    g_sample: AbstractLocation,
+    x_sample: MultiScaleCode,
+    p_sample: GroundedLocation,
     frequencies: List[float],
     figsize: tuple = None,
     title: str = None,
@@ -241,8 +244,8 @@ def plot_outer_product_structure(
 
 
 def plot_place_cell_dynamics(
-    p_history: List[List[Tensor]],
-    observations: List[Tensor],
+    p_history: List[GroundedLocation],
+    observations: List[Vector],
     frequencies: List[float],
     n_cells_per_freq: List[int],
     cell_indices: List[int] = None,

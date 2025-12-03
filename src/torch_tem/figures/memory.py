@@ -18,7 +18,10 @@ from typing import Dict, List, Optional, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from torch import Tensor
+
+from ..types import Matrix, Vector
 
 # =======================================================================================
 # PROTOCOL INTERFACES
@@ -38,8 +41,8 @@ class MemoryParams(Protocol):
 
 
 def plot_memory_matrices(
-    M_gen: Tensor,
-    M_inf: Optional[Tensor] = None,
+    M_gen: Matrix,
+    M_inf: Optional[Matrix] = None,
     n_p_per_freq: Optional[List[int]] = None,
     n_training_steps: Optional[int] = None,
     title: Optional[str] = None,
@@ -129,9 +132,9 @@ def plot_memory_matrices(
 
 
 def plot_attractor_convergence(
-    queries: List[Tensor],
-    retrievals: List[Tensor],
-    targets: List[Tensor],
+    queries: List[Vector],
+    retrievals: List[Vector],
+    targets: List[Vector],
     query_labels: Optional[List[str]] = None,
     title: str = "Attractor Dynamics: Query → Retrieval Convergence",
     figsize: Optional[tuple] = None,
@@ -286,7 +289,7 @@ def plot_learning_curve(
 
 
 def plot_hierarchical_masks(
-    masks: List[Tensor],
+    masks: List[Vector],
     n_p_per_freq: Optional[List[int]] = None,
     title: str = "Hierarchical Mask Schedule (Coarse-to-Fine Convergence)",
     figsize: Optional[tuple] = None,
@@ -404,8 +407,8 @@ def plot_retrieval_quality(
 
 
 def plot_memory_difference(
-    M1: Tensor,
-    M2: Tensor,
+    M1: Matrix,
+    M2: Matrix,
     labels: tuple = ("Memory 1", "Memory 2"),
     n_p_per_freq: Optional[List[int]] = None,
     title: str = "Memory Matrix Difference",

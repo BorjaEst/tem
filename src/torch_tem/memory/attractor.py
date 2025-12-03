@@ -58,8 +58,8 @@ class AttractorDynamics:
     def __init__(
         self,
         model_params: ModelParams,
-        p_retrieve_mask_inf: List[Tensor],
-        p_retrieve_mask_gen: List[Tensor],
+        p_retrieve_mask_inf: List[Matrix],
+        p_retrieve_mask_gen: List[Matrix],
     ):
         """Initialize attractor dynamics with hierarchical retrieval masks.
 

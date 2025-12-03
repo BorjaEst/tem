@@ -63,7 +63,7 @@ class MemoryStorage:
         M_inf: Inference memory matrix (optional) [sum(n_p), sum(n_p)]
     """
 
-    def __init__(self, model_params: ModelParams, p_update_mask: Tensor, batch_size: int = 1):
+    def __init__(self, model_params: ModelParams, p_update_mask: Matrix, batch_size: int = 1):
         """Initialize memory storage with zero-initialized matrices.
 
         Args:
@@ -219,10 +219,10 @@ if __name__ == "__main__":
     This example shows how the memory system learns associations between grounded
     locations through repeated co-activation patterns during simulated navigation.
     """
-    from torch_tem.config.parameters import Parameters
+    from torch_tem.config.architecture import ModelConfig
 
     # Create configuration with 3 frequency modules
-    params = Parameters(
+    params = ModelConfig(
         n_g_subsampled=[10, 8, 6],  # 3 frequency modules (coarse to fine)
         n_x_c=5,  # 5 compressed sensory dimensions
         lambda_=0.95,  # 95% memory retention (slow forgetting)

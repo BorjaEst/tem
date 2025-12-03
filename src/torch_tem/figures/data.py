@@ -14,6 +14,8 @@ from torch import Tensor
 
 from torch_tem.utils import compute_graph_layout
 
+from ..types import Matrix, Vector
+
 
 # ==============================================================================
 # Protocols
@@ -24,7 +26,7 @@ class EnvironmentProtocol(Protocol):
     n_locations: int
     n_observations: int
     n_actions: int
-    adjacency: Tensor
+    adjacency: Matrix
 
 
 class LocationProtocol(Protocol):
@@ -38,9 +40,9 @@ class LocationProtocol(Protocol):
 class WalkProtocol(Protocol):
     """Minimal walk interface for plotting."""
 
-    observations: Tensor
-    actions: Tensor
-    locations: Tensor
+    observations: Vector
+    actions: Vector
+    locations: Vector
 
 
 # ==============================================================================
@@ -317,7 +319,7 @@ def plot_walk_statistics(walks: List[WalkProtocol], figsize: Tuple[float, float]
 # ==============================================================================
 # Batch Tensor Visualization
 # ==============================================================================
-def plot_batch_tensors(obs: Tensor, actions: Tensor, locations: Tensor, figsize: Tuple[float, float] = (14, 10), max_walks: int = 5) -> plt.Figure:
+def plot_batch_tensors(obs: Vector, actions: Vector, locations: Vector, figsize: Tuple[float, float] = (14, 10), max_walks: int = 5) -> plt.Figure:
     """Visualize batch tensor shapes and samples.
 
     Provides overview of batch structure with:

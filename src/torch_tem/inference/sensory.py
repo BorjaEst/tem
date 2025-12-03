@@ -51,7 +51,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.types import SensoryObservation
+from torch_tem.types import Matrix, MultiScaleCode, SensoryObservation
 
 
 class ProcessorParams(Protocol):
@@ -93,7 +93,7 @@ class SensoryProcessor(nn.Module):
         self.w_x = nn.Parameter(torch.ones(1, self.n_x_c))  # [1, n_x_c]
         self.b_x = nn.Parameter(torch.zeros(1, self.n_x_c))  # [1, n_x_c]
 
-    def filter_temporal(self, x_c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
+    def filter_temporal(self, x_c: Tensor, x_prev: MultiScaleCode) -> MultiScaleCode:
         """Apply exponential smoothing per frequency.
 
         x_f[freq] = freq * x_c + (1 - freq) * x_prev[freq]
@@ -113,7 +113,7 @@ class SensoryProcessor(nn.Module):
             x_f.append(freq * x_c + (1 - freq) * x_prev[f])
         return x_f
 
-    def normalize(self, x_f: List[Tensor]) -> List[Tensor]:
+    def normalize(self, x_f: MultiScaleCode) -> MultiScaleCode:
         """L2 normalize with learnable weights.
 
         x_norm = (w_x * x + b_x) / ||w_x * x + b_x||_2
@@ -135,7 +135,7 @@ class SensoryProcessor(nn.Module):
             x_normalized.append(x_norm)
         return x_normalized
 
-    def forward(self, x_c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
+    def forward(self, x_c: Tensor, x_prev: MultiScaleCode) -> MultiScaleCode:
         """Process sensory: filter and normalize.
 
         Args:
@@ -186,7 +186,7 @@ class SensoryEncoder(nn.Module):
         >>> x_c = encoder(x)  # Shape: [2, 5], each row has 2 active bits
     """
 
-    def __init__(self, params: EncoderParams, two_hot_table: List[Tensor]):
+    def __init__(self, params: EncoderParams, two_hot_table: List[Matrix]):
         """Initialize encoder with two-hot lookup table."""
         super().__init__()
         self.n_x = params.n_x
@@ -250,7 +250,7 @@ class SensoryProjection(nn.Module):
         Output: List of [B, n_p[f]] tensors (one per frequency)
     """
 
-    def __init__(self, params: ProjectionParams, W_tile: List[Tensor]):
+    def __init__(self, params: ProjectionParams, W_tile: List[Matrix]):
         """Initialize sensory projection with tiling matrices and gate weights."""
         super().__init__()
         self.n_f = params.n_f
@@ -260,7 +260,7 @@ class SensoryProjection(nn.Module):
         # Initialize learnable gate weights (one per frequency module)
         self.w_p = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_f)])
 
-    def forward(self, x_normalized: List[Tensor]) -> List[Tensor]:
+    def forward(self, x_normalized: MultiScaleCode) -> MultiScaleCode:
         """Transform normalized sensory input to p-space representation.
 
         Args:

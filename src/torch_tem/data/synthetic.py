@@ -6,6 +6,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from ..types import AbstractLocation
+
 
 class SyntheticGridParams(Protocol):
     """Protocol for synthetic grid cell generation configuration.
@@ -56,7 +58,7 @@ class SyntheticGridGenerator:
         if len(self.params.n_g) != len(self.params.f_extended):
             raise ValueError(f"n_g length ({len(self.params.n_g)}) must match " f"f_extended length ({len(self.params.f_extended)})")
 
-    def generate(self) -> List[List[Tensor]]:
+    def generate(self) -> List[AbstractLocation]:
         """Generate synthetic grid cell activity patterns.
 
         Creates oscillating patterns with frequency-dependent dynamics to simulate
@@ -95,7 +97,7 @@ class SyntheticGridGenerator:
 
         return g_history
 
-    def generate_batch(self) -> List[List[Tensor]]:
+    def generate_batch(self) -> List[AbstractLocation]:
         """Generate single batch of synthetic grid patterns.
 
         Convenience method for generating one batch.

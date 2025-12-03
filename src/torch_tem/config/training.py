@@ -1,7 +1,9 @@
 """Training configuration for the Temporal Experience Model (TEM)."""
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
-from torch import Tensor, zeros
+from torch import zeros
+
+from torch_tem.types import Vector
 
 
 class TrainingConfig(BaseModel):
@@ -51,7 +53,7 @@ class TrainingConfig(BaseModel):
     loss_weights_g: float = Field(default=1.0, ge=0, description="Weight of abstract location losses on g")
     loss_weights_reg_g: float = Field(default=0.01, ge=0, description="Weight of regularisation loss on abstract location")
     loss_weights_reg_p: float = Field(default=0.02, ge=0, description="Weight of regularisation loss on grounded location")
-    loss_weights: Tensor = Field(default_factory=lambda: zeros(8), description="Combined loss weights [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]")
+    loss_weights: Vector = Field(default_factory=lambda: zeros(8), description="Combined loss weights [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]")
 
     # ===================================================================================
     # CURRICULUM SCHEDULES

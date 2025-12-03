@@ -17,6 +17,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from torch_tem.core.mlp import MLP
+from torch_tem.types import GroundedLocation, SensoryObservation
 
 
 class DecoderParams(Protocol):
@@ -122,7 +123,7 @@ class ObservationGenerator(nn.Module):
         super().__init__()
         self.decoder = decoder
 
-    def generate(self, p: List[Tensor]) -> Tuple[Tensor, Tensor]:
+    def generate(self, p: GroundedLocation) -> Tuple[SensoryObservation, Tensor]:
         """Generate sensory observation from grounded location.
 
         Decodes the highest-frequency place cell representation into a distribution
@@ -148,7 +149,7 @@ class ObservationGenerator(nn.Module):
         # Delegate to decoder (uses only p[0])
         return self.decoder(p)
 
-    def forward(self, p: List[Tensor]) -> Tuple[Tensor, Tensor]:
+    def forward(self, p: GroundedLocation) -> Tuple[SensoryObservation, Tensor]:
         """Forward pass (alias for generate).
 
         PyTorch convention: defines the computation performed at every call.

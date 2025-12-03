@@ -13,7 +13,7 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import Tensor, nn
 
 
 class _FunctionActivation(nn.Module):
@@ -23,7 +23,7 @@ class _FunctionActivation(nn.Module):
     used within nn.Sequential blocks alongside nn.Module layers.
     """
 
-    def __init__(self, func: Callable[[torch.Tensor], torch.Tensor]) -> None:
+    def __init__(self, func: Callable[[Tensor], Tensor]) -> None:
         """Initialize the activation wrapper.
 
         Args:
@@ -32,7 +32,7 @@ class _FunctionActivation(nn.Module):
         super().__init__()
         self.func = func
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         """Apply the activation function.
 
         Args:
@@ -76,7 +76,7 @@ class MLP(nn.Module):
         self,
         in_dim: Union[int, List[int]],
         out_dim: Union[int, List[int]],
-        activation: Tuple[Optional[Callable[[torch.Tensor], torch.Tensor]], Optional[Callable[[torch.Tensor], torch.Tensor]]] = (torch.nn.functional.elu, None),
+        activation: Tuple[Optional[Callable[[Tensor], Tensor]], Optional[Callable[[Tensor], Tensor]]] = (torch.nn.functional.elu, None),
         hidden_dim: Optional[Union[int, List[int]]] = None,
         bias: Tuple[bool, bool] = (True, True),
     ) -> None:
@@ -158,7 +158,7 @@ class MLP(nn.Module):
                         if layer.bias is not None:
                             layer.bias.fill_(0.0)
 
-    def set_weights(self, from_layer: int, value: Union[float, torch.Tensor, List[torch.Tensor]]) -> None:
+    def set_weights(self, from_layer: int, value: Union[float, Tensor, List[Tensor]]) -> None:
         """Set weights of a specific layer.
 
         This method allows direct manipulation of layer weights, which is useful for:
@@ -199,13 +199,13 @@ class MLP(nn.Module):
                 linear_layer = self.networks[n][linear_idx]
 
                 # If a tensor is provided: copy the tensor to the weights
-                if isinstance(input_value[n], torch.Tensor):
+                if isinstance(input_value[n], Tensor):
                     linear_layer.weight.copy_(input_value[n])
                 # If only a single value is provided: set that value everywhere
                 else:
                     linear_layer.weight.fill_(input_value[n])
 
-    def get_weights(self, from_layer: int) -> List[torch.Tensor]:
+    def get_weights(self, from_layer: int) -> List[Tensor]:
         """Get weights of a specific layer.
 
         Returns the weight matrices (not biases) of the specified layer across
@@ -233,7 +233,7 @@ class MLP(nn.Module):
         linear_idx = from_layer * 2
         return [self.networks[n][linear_idx].weight for n in range(self.N)]
 
-    def forward(self, data: Union[torch.Tensor, List[torch.Tensor]]) -> Union[torch.Tensor, List[torch.Tensor]]:
+    def forward(self, data: Union[Tensor, List[Tensor]]) -> Union[Tensor, List[Tensor]]:
         """Forward pass through the MLP.
 
         Processes input data through the 2-layer network(s). For multi-module MLPs,

@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..types import AbstractLocation, MultiScaleCode
+from ..types import AbstractLocation, Matrix, MultiScaleCode
 
 
 class ProjectionParams(Protocol):
@@ -35,7 +35,7 @@ class ProjectionHead(nn.Module):
     - Downsampling for memory indexing
     """
 
-    def __init__(self, params: ProjectionParams, g_downsample: List[Tensor]):
+    def __init__(self, params: ProjectionParams, g_downsample: List[Matrix]):
         """Initialize projection head.
 
         Args:
@@ -93,7 +93,7 @@ class ProjectionHead(nn.Module):
         """
         return [torch.matmul(g[f], self.g_downsample[f].to(g[f].device)) for f in range(self.n_f)]
 
-    def inverse_project(self, p: MultiScaleCode, W_repeat: List[Tensor]) -> MultiScaleCode:
+    def inverse_project(self, p: MultiScaleCode, W_repeat: List[Matrix]) -> MultiScaleCode:
         """Project from grounded location (p) back to abstract location space (g).
 
         This implements the reverse transformation p → g used in the memory inference path,

@@ -12,6 +12,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from ..types import AbstractLocation, Vector
+
 
 class AbstractInferenceParams(Protocol):
     """Protocol for abstract inference synthetic data generation configuration.
@@ -64,7 +66,7 @@ class TransitionPredictionGenerator:
         self.uncertainty_modulation = uncertainty_modulation
         self.uncertainty_period = uncertainty_period
 
-    def generate(self) -> Tuple[List[List[Tensor]], List[List[Tensor]]]:
+    def generate(self) -> Tuple[List[AbstractLocation], List[AbstractLocation]]:
         """Generate synthetic transition predictions with uncertainty.
 
         Creates g_gen and sigma_g_gen sequences following Ornstein-Uhlenbeck
@@ -128,7 +130,7 @@ class MemorySignalGenerator:
         self.amplitude_modulation = amplitude_modulation
         self.modulation_period = modulation_period
 
-    def generate(self) -> List[List[Tensor]]:
+    def generate(self) -> List[AbstractLocation]:
         """Generate synthetic memory-based signals.
 
         Creates p_x sequences with temporal correlation simulating memory
@@ -182,7 +184,7 @@ class ShinySignalGenerator:
         self.signal_duration = signal_duration
         self.signal_strength = signal_strength
 
-    def generate(self) -> Tuple[List[Optional[List[Tensor]]], List[Optional[List[Tensor]]]]:
+    def generate(self) -> Tuple[List[Optional[AbstractLocation]], List[Optional[AbstractLocation]]]:
         """Generate synthetic salient object signals.
 
         Creates intermittent strong signals (mu_shiny, sigma_shiny) with

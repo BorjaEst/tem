@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..types import AbstractLocation, Vector
+from ..types import AbstractLocation, Transition, Vector
 
 
 class PatternGeneratorParams(Protocol):
@@ -235,7 +235,16 @@ class OscillatoryGridGenerator:
     - Random phase offsets for variation across cells
     """
 
-    def __init__(self, params: OscillatoryGridParams, walk_length: int, batch_size: int = 1, time_scale: float = 10.0, harmonic_weight: float = 0.3, noise_scale: float = 0.2):
+    def __init__(
+        self,
+        params: OscillatoryGridParams,
+        walk_length: int,
+        batch_size: int = 1,
+        time_scale: float = 10.0,
+        harmonic_weight: float = 0.3,
+        noise_scale: float = 0.2,
+        sigma_scale: float = 0.1,
+    ):
         """Initialize oscillatory grid generator.
 
         Args:
@@ -245,6 +254,7 @@ class OscillatoryGridGenerator:
             time_scale: Time scaling factor for oscillations
             harmonic_weight: Weight for second harmonic component (0.0-1.0)
             noise_scale: Scale of Gaussian noise added to patterns
+            sigma_scale: Scale for uncertainty estimation (sigma_g)
         """
         self.params = params
         self.walk_length = walk_length
@@ -252,25 +262,28 @@ class OscillatoryGridGenerator:
         self.time_scale = time_scale
         self.harmonic_weight = harmonic_weight
         self.noise_scale = noise_scale
+        self.sigma_scale = sigma_scale
 
         # Validate matching lengths
         if len(self.params.n_g) != len(self.params.f_extended):
             raise ValueError(f"n_g length ({len(self.params.n_g)}) must match " f"f_extended length ({len(self.params.f_extended)})")
 
-    def generate(self) -> List[AbstractLocation]:
+    def generate(self) -> List[Transition]:
         """Generate oscillatory grid cell activity patterns.
 
         Creates oscillating patterns with frequency-dependent dynamics to simulate
         grid cell responses during spatial navigation.
 
         Returns:
-            List of T timesteps, each containing a list of n_f tensors [B, n_g[f]]
-            This matches the standard convention: List[T] of List[n_f] of [B, n_g[f]]
+            List of T timesteps, each containing a Transition tuple (g_gen, sigma_g)
+            where g_gen and sigma_g are List[n_f] of [B, n_g[f]]
         """
         n_f = len(self.params.n_g)
 
         # Generate patterns per frequency: [T, B, n_g[f]]
         g_per_freq = []
+        sigma_per_freq = []
+
         for f in range(n_f):
             # Create time axis scaled by frequency
             t = torch.linspace(0, self.time_scale * self.params.f_extended[f], self.walk_length)
@@ -288,21 +301,26 @@ class OscillatoryGridGenerator:
 
             g_per_freq.append(pattern)  # [T, B, n_g[f]]
 
-        # Reorganize to List[T] of List[n_f] of [B, n_g[f]]
-        g_history = []
+            # Generate constant uncertainty
+            sigma = torch.ones_like(pattern) * self.sigma_scale
+            sigma_per_freq.append(sigma)
+
+        # Reorganize to List[T] of Transition
+        history = []
         for t in range(self.walk_length):
             g_t = [g_per_freq[f][t] for f in range(n_f)]  # List[n_f] of [B, n_g[f]]
-            g_history.append(g_t)
+            sigma_t = [sigma_per_freq[f][t] for f in range(n_f)]
+            history.append((g_t, sigma_t))
 
-        return g_history
+        return history
 
-    def generate_batch(self) -> List[AbstractLocation]:
+    def generate_batch(self) -> List[Transition]:
         """Generate single batch of oscillatory grid patterns.
 
         Convenience method for generating one batch.
 
         Returns:
-            List of T timesteps, each with n_f tensors [B, n_g[f]]
+            List of T timesteps, each containing a Transition tuple
         """
         return self.generate()
 

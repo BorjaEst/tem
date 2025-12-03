@@ -19,11 +19,13 @@ from torch_tem.figures.grounded import plot_grounded_location_activity, plot_out
 from torch_tem.figures.memory import plot_attractor_convergence, plot_hierarchical_masks, plot_learning_curve, plot_memory_difference, plot_memory_matrices, plot_retrieval_quality
 from torch_tem.figures.patterns import (
     plot_grid_cell_patterns,
+    plot_grid_temporal_evolution,
     plot_oscillatory_patterns,
     plot_pattern_comparison,
     plot_pattern_correlations,
     plot_place_cell_patterns,
     plot_temporal_patterns,
+    plot_transition_uncertainty,
 )
 from torch_tem.figures.sensory import (
     plot_frequency_bank,
@@ -48,6 +50,8 @@ __all__ = [
     "plot_oscillatory_patterns",
     "plot_pattern_correlations",
     "plot_pattern_comparison",
+    "plot_transition_uncertainty",
+    "plot_grid_temporal_evolution",
     # Grounded location inference
     "plot_grounded_location_activity",
     "plot_outer_product_structure",

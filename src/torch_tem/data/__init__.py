@@ -13,9 +13,6 @@ from torch_tem.data.policies import PolicyGenerator
 from torch_tem.data.shiny import ShinyConfig, ShinyEnvironmentBuilder
 from torch_tem.data.walks import Walk, WalkGenerator
 
-# Backward compatibility alias
-SyntheticGridGenerator = OscillatoryGridGenerator
-
 __all__ = [
     "Environment",
     "Location",
@@ -28,7 +25,6 @@ __all__ = [
     "TEMDataModule",
     "InfiniteWalkDataset",
     "OscillatoryGridGenerator",
-    "SyntheticGridGenerator",  # Backward compatibility alias
     "PlaceCellPatternGenerator",
     "GridCellPatternGenerator",
     "PairedPatternGenerator",

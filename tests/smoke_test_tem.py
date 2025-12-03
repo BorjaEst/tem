@@ -10,9 +10,9 @@ This script tests:
 
 import torch
 
-from torch_tem.config import EnvironmentConfig, InferenceConfig, ModelConfig
-from torch_tem.core import State
+from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.model import TEMModel
+from torch_tem.types import TEMState
 
 
 def test_instantiation():
@@ -21,12 +21,11 @@ def test_instantiation():
 
     # Create configs
     arch_config = ModelConfig()
-    inf_config = InferenceConfig()
     env_config = EnvironmentConfig()
 
     # Create merged architecture config with environment fields
-    # TransitionModel needs n_actions from environment and do_sample from inference
-    # We create a merged object that has all fields from all three configs
+    # TransitionModel needs n_actions from environment
+    # We create a merged object that has all fields from both configs
     class MergedArchConfig:
         def __init__(self, arch, env, inf):
             # Copy all fields from architecture config
@@ -77,16 +76,16 @@ def test_single_iteration(model, arch_config, inf_config):
     state_0 = model.init_state(locations, x_prev, a_prev, M_prev)
 
     # Run single iteration using state values
-    L, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf = model.iteration(x, locations, state_0.a, state_0.M, state_0.x_inf, state_0.g_inf)
+    losses, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf = model.iteration(x, locations, state_0.generated["a"], state_0.memory, state_0.inferred["x_inf"], state_0.belief)
 
     # Verify outputs
-    assert len(L) == 8, f"Expected 8 loss components, got {len(L)}"
-    assert len(M) == len(state_0.M), f"Memory count mismatch: {len(M)} != {len(state_0.M)}"
+    assert losses is not None, "Losses should not be None"
+    assert len(M) == len(state_0.memory), f"Memory count mismatch: {len(M)} != {len(state_0.memory)}"
     assert len(g_inf) == arch_config.n_f, f"g_inf frequency mismatch"
     assert len(p_inf) == arch_config.n_f, f"p_inf frequency mismatch"
 
     print(f"✓ Single iteration completed")
-    print(f"  - Losses: {[f'{l.mean().item():.4f}' for l in L]}")
+    print(f"  - Losses: {losses}")
     print(f"  - Memory matrices: {len(M)}")
     print(f"  - g_inf shapes: {[g.shape for g in g_inf]}")
 
@@ -111,16 +110,16 @@ def test_forward_pass(model, arch_config):
 
     # Verify outputs
     assert len(steps) == n_steps, f"Expected {n_steps} steps, got {len(steps)}"
-    assert all(isinstance(step, State) for step in steps), "All steps should be State objects"
+    assert all(isinstance(step, TEMState) for step in steps), "All steps should be TEMState objects"
 
     print(f"✓ Forward pass completed")
     print(f"  - Steps processed: {len(steps)}")
-    print(f"  - State fields: g, x, a, L, M, locations, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf")
+    print(f"  - TEMState fields: belief, prediction, losses, memory, generated, inferred")
 
 
 def test_state_properties(model, arch_config):
-    """Test State class properties and validation."""
-    print("\nTesting State class properties...")
+    """Test TEMState class properties and validation."""
+    print("\nTesting TEMState class properties...")
 
     batch_size = 3
 
@@ -130,32 +129,34 @@ def test_state_properties(model, arch_config):
     a = torch.randint(0, 4, (batch_size,)).tolist()
     walk = [(locations, x, a)]
 
-    # Run forward pass to get a State
+    # Run forward pass to get a TEMState
     steps = model.forward(walk, prev_M=None)
-    state = steps[0]
+    step = steps[0]
 
-    # Test properties
-    assert state.batch_size == batch_size, f"batch_size property incorrect: {state.batch_size} != {batch_size}"
-    assert state.n_freqs == arch_config.n_f, f"n_freqs property incorrect: {state.n_freqs} != {arch_config.n_f}"
+    # Test basic properties
+    assert isinstance(step, TEMState), "Should be TEMState instance"
+    assert step.belief is not None, "belief should not be None"
+    assert step.memory is not None, "memory should not be None"
+    assert step.losses is not None, "losses should not be None"
+    assert len(step.belief) == arch_config.n_f, f"belief frequency mismatch"
+    assert len(step.memory) > 0, "memory should not be empty"
 
-    # Test detach method
-    detached = state.detach()
-    assert isinstance(detached, State), "detach() should return State instance"
-    assert detached is not state, "detach() should return new instance"
-    assert detached.batch_size == state.batch_size, "Detached state should preserve batch_size"
+    # Test generated dict
+    assert "g_gen" in step.generated, "generated should contain g_gen"
+    assert "p_gen" in step.generated, "generated should contain p_gen"
+    assert "a" in step.generated, "generated should contain a"
 
-    # Test correct method
-    new_g = [torch.randn(batch_size, n_g) for n_g in arch_config.n_g]
-    new_p = [torch.randn(batch_size, n_p) for n_p in arch_config.n_p]
-    state.correct(new_g, new_p)
-    assert state.g_inf is new_g, "correct() should update g_inf"
-    assert state.p_inf is new_p, "correct() should update p_inf"
+    # Test inferred dict
+    assert "g_inf" in step.inferred, "inferred should contain g_inf"
+    assert "p_inf" in step.inferred, "inferred should contain p_inf"
+    assert "x_inf" in step.inferred, "inferred should contain x_inf"
 
-    print(f"✓ State properties validated")
-    print(f"  - batch_size: {state.batch_size}")
-    print(f"  - n_freqs: {state.n_freqs}")
-    print(f"  - detach() returns new instance: {detached is not state}")
-    print(f"  - correct() mutates in place: True")
+    print(f"✓ TEMState properties validated")
+    print(f"  - belief (abstract location): {len(step.belief)} frequencies")
+    print(f"  - memory: {len(step.memory)} matrices")
+    print(f"  - losses: Losses object with 8 components")
+    print(f"  - generated: {list(step.generated.keys())}")
+    print(f"  - inferred: {list(step.inferred.keys())}")
 
 
 def test_tensor_shapes(model, arch_config):

@@ -4,13 +4,15 @@
 This example demonstrates the torch_tem.data.patterns module capabilities:
 - Place cell pattern generation with configurable sparsity
 - Grid cell pattern generation across multiple frequencies
-- Oscillatory grid cell patterns with temporal dynamics
-- Paired pattern generation with correlation
-- Temporal sequence generation and smoothness analysis
+- Oscillatory grid cell patterns with Transition objects (mean + uncertainty)
+- Paired pattern generation with correlation structure
+- Temporal sequence generation with smoothness analysis
+- Transition visualization (g, sigma) for uncertainty-aware patterns
 
 Usage:
     python examples/data_patterns.py --batch-size 8 --place-sparsity 0.15
     python examples/data_patterns.py --n-frequencies 4 --walk-length 100
+    python examples/data_patterns.py --sigma-scale 0.2
     python examples/data_patterns.py --help
 """
 
@@ -60,6 +62,7 @@ class ExampleConfig(BaseSettings):
     time_scale: float = Field(default=10.0, ge=1.0, le=50.0, description="Time scaling for oscillations")
     harmonic_weight: float = Field(default=0.3, ge=0.0, le=1.0, description="Weight for second harmonic")
     oscillatory_noise: float = Field(default=0.2, ge=0.0, le=1.0, description="Noise scale for oscillatory patterns")
+    sigma_scale: float = Field(default=0.15, ge=0.01, le=1.0, description="Uncertainty scale for Transition objects")
 
     # Paired patterns
     correlation: float = Field(default=0.3, ge=0.0, le=1.0, description="Correlation between grid and place patterns")
@@ -145,32 +148,60 @@ if __name__ == "__main__":
         fig2.savefig(config.output_dir / "02_grid_cell_patterns.png", dpi=150, bbox_inches="tight")
 
     # ==========================================================================
-    # Example 3: Oscillatory Grid Cell Patterns
+    # Example 3: Oscillatory Grid Cell Patterns with Transition Objects
     # ==========================================================================
     print(f"\n{'-'*80}")
-    print("3. Generating Oscillatory Grid Cell Patterns")
+    print("3. Generating Oscillatory Grid Cell Patterns (Transition Objects)")
     print(f"{'-'*80}")
 
     oscillatory_gen = data.OscillatoryGridGenerator(
-        pattern_config, walk_length=config.walk_length, batch_size=1, time_scale=config.time_scale, harmonic_weight=config.harmonic_weight, noise_scale=config.oscillatory_noise
+        pattern_config,
+        walk_length=config.walk_length,
+        batch_size=1,
+        time_scale=config.time_scale,
+        harmonic_weight=config.harmonic_weight,
+        noise_scale=config.oscillatory_noise,
+        sigma_scale=config.sigma_scale,
     )
-    g_history = oscillatory_gen.generate()
+    transition_history = oscillatory_gen.generate()
 
-    print(f"  Generated: {len(g_history)} timesteps")
+    # Extract abstract locations (g) and uncertainties (sigma) from Transition objects
+    g_history = [t[0] for t in transition_history]
+    sigma_history = [t[1] for t in transition_history]
+
+    print(f"  Generated: {len(transition_history)} Transition objects")
+    print(f"  Each Transition contains (g, sigma) tuple")
     print(f"  Frequencies: {len(g_history[0])} modules")
     for f in range(len(g_history[0])):
         g_f_shape = g_history[0][f].shape
-        print(f"    Frequency {f}: shape={g_f_shape}")
+        sigma_f_mean = sigma_history[0][f].mean().item()
+        print(f"    Frequency {f}: g_shape={g_f_shape}, σ_mean={sigma_f_mean:.4f}")
 
-    fig3 = figures.plot_oscillatory_patterns(g_history, pattern_config.f_extended, title="Oscillatory Grid Cell Patterns", cell_indices=[0, 1, 2])
+    fig3 = figures.plot_oscillatory_patterns(g_history, pattern_config.f_extended, title="Oscillatory Grid Cell Patterns (Mean)", cell_indices=[0, 1, 2])
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_oscillatory_patterns.png", dpi=150, bbox_inches="tight")
 
     # ==========================================================================
-    # Example 4: Paired Grid-Place Patterns
+    # Example 4: Transition Uncertainty Visualization
     # ==========================================================================
     print(f"\n{'-'*80}")
-    print("4. Generating Paired (Grid, Place) Patterns")
+    print("4. Visualizing Transition Uncertainty (g, sigma)")
+    print(f"{'-'*80}")
+
+    print(f"  Transition objects contain both mean (g) and uncertainty (sigma)")
+    print(f"  Sigma scale: {config.sigma_scale:.4f}")
+
+    fig4 = figures.plot_transition_uncertainty(
+        transition_history, pattern_config.f_extended, title=f"Transition Uncertainty (σ_scale={config.sigma_scale:.3f})", n_cells_display=10
+    )
+    if config.save_plots:
+        fig4.savefig(config.output_dir / "04_transition_uncertainty.png", dpi=150, bbox_inches="tight")
+
+    # ==========================================================================
+    # Example 5: Paired Grid-Place Patterns
+    # ==========================================================================
+    print(f"\n{'-'*80}")
+    print("5. Generating Paired (Grid, Place) Patterns")
     print(f"{'-'*80}")
 
     paired_gen = data.PairedPatternGenerator(pattern_config, correlation=config.correlation, place_sparsity=config.place_sparsity, noise_scale=config.place_noise_scale)
@@ -179,69 +210,69 @@ if __name__ == "__main__":
     print(f"  Grid patterns: {len(g_paired)} modules")
     print(f"  Place patterns: {p_paired.shape}")
     print(f"  Correlation: {config.correlation:.2f}")
+    print(f"  Total grid cells: {sum(g.shape[1] for g in g_paired)}")
+    print(f"  Total place cells: {p_paired.shape[1]}")
 
-    fig4 = figures.plot_pattern_correlations(g_paired, p_paired, pattern_config.f_extended, title=f"Grid-Place Correlations (ρ={config.correlation:.2f})")
+    fig5 = figures.plot_pattern_correlations(g_paired, p_paired, pattern_config.f_extended, title=f"Grid-Place Correlations (ρ={config.correlation:.2f})")
     if config.save_plots:
-        fig4.savefig(config.output_dir / "04_pattern_correlations.png", dpi=150, bbox_inches="tight")
+        fig5.savefig(config.output_dir / "05_pattern_correlations.png", dpi=150, bbox_inches="tight")
 
     # ==========================================================================
-    # Example 5: Temporal Place Cell Sequences
+    # Example 6: Paired Temporal Sequences
     # ==========================================================================
     print(f"\n{'-'*80}")
-    print("5. Generating Temporal Place Cell Sequences")
+    print("6. Generating Paired Temporal Sequences")
     print(f"{'-'*80}")
 
-    p_sequence = place_gen.generate_sequence(config.walk_length, config.batch_size, temporal_smoothness=config.temporal_smoothness)
-
-    print(f"  Sequence shape: {p_sequence.shape}")
-    print(f"  Temporal smoothness: {config.temporal_smoothness:.2f}")
-
-    fig5 = figures.plot_temporal_patterns(p_sequence, title=f"Temporal Place Cell Evolution (smoothness={config.temporal_smoothness:.2f})", n_cells_display=50)
-    if config.save_plots:
-        fig5.savefig(config.output_dir / "05_temporal_sequences.png", dpi=150, bbox_inches="tight")
-
-    # ==========================================================================
-    # Example 6: Temporal Grid Cell Sequences
-    # ==========================================================================
-    print(f"\n{'-'*80}")
-    print("6. Generating Temporal Grid Cell Sequences")
-    print(f"{'-'*80}")
-
-    g_sequences = grid_gen.generate_sequence(config.walk_length, config.batch_size, temporal_smoothness=config.temporal_smoothness)
+    g_sequences, p_sequence = paired_gen.generate_sequence(config.walk_length, config.batch_size, temporal_smoothness=config.temporal_smoothness)
 
     print(f"  Grid sequences: {len(g_sequences)} frequency modules")
     for f, g_f_seq in enumerate(g_sequences):
         print(f"    Frequency {f}: shape={g_f_seq.shape}")
+    print(f"  Place sequence: {p_sequence.shape}")
+    print(f"  Temporal smoothness: {config.temporal_smoothness:.2f}")
 
-    # Flatten grid sequences for visualization
-    g_seq_flat = g_sequences[0]  # Show first frequency
-    fig6 = figures.plot_temporal_patterns(g_seq_flat, title=f"Temporal Grid Cell Evolution (Freq 0, smoothness={config.temporal_smoothness:.2f})", n_cells_display=30)
+    fig6 = figures.plot_temporal_patterns(p_sequence, title=f"Paired Place Cell Temporal Evolution (smoothness={config.temporal_smoothness:.2f})", n_cells_display=50)
     if config.save_plots:
-        fig6.savefig(config.output_dir / "06_temporal_grid_sequences.png", dpi=150, bbox_inches="tight")
+        fig6.savefig(config.output_dir / "06_paired_temporal_sequences.png", dpi=150, bbox_inches="tight")
 
     # ==========================================================================
-    # Example 7: Pattern Generator Comparison
+    # Example 7: Multi-frequency Grid Temporal Evolution
     # ==========================================================================
     print(f"\n{'-'*80}")
-    print("7. Comparing Different Pattern Types")
+    print("7. Multi-frequency Grid Cell Temporal Evolution")
     print(f"{'-'*80}")
 
-    # Generate patterns with different configurations
-    sparse_place = data.PlaceCellPatternGenerator(pattern_config, sparsity=0.05, noise_scale=0.2).generate(config.batch_size)
+    # Visualize all frequencies together
+    fig7 = figures.plot_grid_temporal_evolution(g_sequences, pattern_config.f_extended, title="Multi-frequency Grid Cell Evolution", n_cells_per_freq=5)
+    if config.save_plots:
+        fig7.savefig(config.output_dir / "07_grid_temporal_evolution.png", dpi=150, bbox_inches="tight")
+
+    # ==========================================================================
+    # Example 8: Pattern Generator Comparison
+    # ==========================================================================
+    print(f"\n{'-'*80}")
+    print("8. Comparing Different Generator Configurations")
+    print(f"{'-'*80}")
+
+    # Compare different sparsity levels and noise scales
+    sparse_place = data.PlaceCellPatternGenerator(pattern_config, sparsity=0.05, noise_scale=0.1).generate(config.batch_size)
     medium_place = data.PlaceCellPatternGenerator(pattern_config, sparsity=0.15, noise_scale=0.2).generate(config.batch_size)
-    dense_place = data.PlaceCellPatternGenerator(pattern_config, sparsity=0.30, noise_scale=0.2).generate(config.batch_size)
+    dense_place = data.PlaceCellPatternGenerator(pattern_config, sparsity=0.30, noise_scale=0.3).generate(config.batch_size)
 
     patterns_comparison = {
-        "Sparse Place (5%)": sparse_place,
-        "Medium Place (15%)": medium_place,
-        "Dense Place (30%)": dense_place,
+        "Sparse (5%, σ=0.1)": sparse_place,
+        "Medium (15%, σ=0.2)": medium_place,
+        "Dense (30%, σ=0.3)": dense_place,
     }
 
-    print(f"  Comparing {len(patterns_comparison)} pattern types")
+    print(f"  Comparing {len(patterns_comparison)} configurations")
+    print(f"  Varying sparsity: 5% → 15% → 30%")
+    print(f"  Varying noise: 0.1 → 0.2 → 0.3")
 
-    fig7 = figures.plot_pattern_comparison(patterns_comparison, title="Sparsity Comparison: Place Cell Patterns", n_samples=3)
+    fig8 = figures.plot_pattern_comparison(patterns_comparison, title="Generator Configuration Comparison", n_samples=3)
     if config.save_plots:
-        fig7.savefig(config.output_dir / "07_pattern_comparison.png", dpi=150, bbox_inches="tight")
+        fig8.savefig(config.output_dir / "08_generator_comparison.png", dpi=150, bbox_inches="tight")
 
     # ==========================================================================
     # Summary
@@ -249,13 +280,19 @@ if __name__ == "__main__":
     print(f"\n{'='*80}")
     print("Pattern Generation Summary")
     print(f"{'='*80}")
+    print(f"\nPattern Generators Demonstrated:")
+    print(f"  1. PlaceCellPatternGenerator - Sparse hippocampal patterns")
+    print(f"  2. GridCellPatternGenerator - Multi-frequency entorhinal patterns")
+    print(f"  3. OscillatoryGridGenerator - Temporal patterns with Transition objects")
+    print(f"  4. PairedPatternGenerator - Correlated grid-place patterns")
     print(f"\nGenerated patterns:")
     print(f"  Place cells: {sum(pattern_config.n_p)} total across {config.n_frequencies} frequencies")
     print(f"  Grid cells: {sum(pattern_config.n_g)} total across {config.n_frequencies} frequencies")
     print(f"  Batch size: {config.batch_size}")
     print(f"  Temporal length: {config.walk_length}")
+    print(f"  Transition uncertainty (σ): {config.sigma_scale:.4f}")
     print(f"\nVisualizations saved to: {config.output_dir}")
-    print(f"  Total plots: 7")
+    print(f"  Total plots: 8")
 
     # Show or close plots
     if config.show_plots:

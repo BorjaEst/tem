@@ -216,8 +216,8 @@ if __name__ == "__main__":
     # PHASE 3: Generate Synthetic Grid Cell Patterns
     # =========================================================================
     print("Phase 3: Generating synthetic grid cell patterns...")
-    grid_generator = data.SyntheticGridGenerator(model_config, config.walk_length, batch_size=1)
-    g_history = grid_generator.generate()  # List[T] of List[n_f] of [1, n_g[f]]
+    grid_generator = data.OscillatoryGridGenerator(model_config, config.walk_length, batch_size=1, sigma_scale=0.5)
+    transition_history = grid_generator.generate()  # List[T] of Transition (g, sigma)
     print(f"  ✓ Generated {config.walk_length} timesteps of grid cell activity")
     print()
 
@@ -264,18 +264,15 @@ if __name__ == "__main__":
         p_x = utils.split_to_frequencies(p_x_concat, model_config.n_p)  # List[n_f] of [1, n_p[f]]
 
         # Step 5: Get synthetic grid cells at time t (for generative path)
-        g_t = g_history[t]  # List[n_f] of [1, n_g[f]]
+        transition = transition_history[t]  # Transition (g, sigma) from generator
 
         # Step 6: Prepare inputs for abstract location inference
         # For g_mem path: project p_x to abstract location space via W_repeat
         g_mem_downsampled = [torch.matmul(p_x[f], W_repeat[f].t()) for f in range(model_config.n_f)]  # List[n_f] of [1, n_g_sub[f]]
 
-        # Use g_t as generative prediction with moderate uncertainty
-        sigma_gen = [torch.ones(1, n_g) * 0.5 for n_g in model_config.n_g]
-
         # Step 7: Infer abstract location via precision-weighted fusion
         offset = p2g_schedule[t]
-        g_inf = abstract(g_t, sigma_gen, g_mem_downsampled if config.use_p_inf else None, shiny_signals=None, p2g_scale_offset=offset)
+        g_inf = abstract(transition, g_mem_downsampled if config.use_p_inf else None, shiny_signals=None, p2g_scale_offset=offset)
 
         # Step 8: Update memory with Hebbian learning (using p_x from retrieval)
         storage.update(p_x_concat, p_x_concat, eta=config.eta, lamb=config.lambda_)
@@ -288,6 +285,7 @@ if __name__ == "__main__":
         g_inf_history.append(g_inf)
 
         # Track precisions for visualization
+        g_t, sigma_gen = transition
         precisions = {"transition": [1.0 / (sigma_gen[f] ** 2 + 1e-8) for f in range(model_config.n_f)]}
         if config.use_p_inf:
             # Approximate memory uncertainty (simplified)

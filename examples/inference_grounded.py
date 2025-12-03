@@ -18,7 +18,7 @@ Pipeline Stages:
    - SensoryProcessor: Multi-frequency temporal filtering
 
 2. Abstract Location: Synthetic grid cell patterns (simulating entorhinal cortex)
-   - SyntheticGridGenerator: Generate grid cell activity patterns
+   - OscillatoryGridGenerator: Generate grid cell activity patterns
 
 3. Grounded Location Inference: Final place cells from abstract location
    - ProjectionHead: Transform and downsample g
@@ -180,8 +180,8 @@ if __name__ == "__main__":
     # PHASE 3: Generate Synthetic Grid Cell Patterns
     # =========================================================================
     print("Phase 3: Generating synthetic grid cell patterns...")
-    grid_generator = data.SyntheticGridGenerator(model_config, config.walk_length, batch_size=1)
-    g_history = grid_generator.generate()  # List[T] of List[n_f] of [1, n_g[f]]
+    grid_generator = data.OscillatoryGridGenerator(model_config, config.walk_length, batch_size=1)
+    transition_history = grid_generator.generate()  # List[T] of Transition (g, sigma)
     print(f"  ✓ Generated {config.walk_length} timesteps of grid cell activity")
     print()
 
@@ -204,7 +204,7 @@ if __name__ == "__main__":
         x_f = processor(x_c, x_prev)  # List[n_f] of [1, n_x_c]
 
         # Step 3: Get synthetic grid cells at time t (simulating abstract location)
-        g_t = g_history[t]  # List[n_f] of [1, n_g[f]]
+        g_t, _ = transition_history[t]  # Unpack Transition to get g (ignore sigma)
 
         # Step 4: Transform and downsample grid cells
         g_transformed = projection.transform(g_t)
@@ -249,7 +249,7 @@ if __name__ == "__main__":
 
     # Plot 5: Outer product structure (mid-point)
     mid_point = config.walk_length // 2
-    g_mid = g_history[mid_point]  # List[n_f] of [1, n_g[f]]
+    g_mid, _ = transition_history[mid_point]  # Unpack Transition to get g
     g_mid_downsampled = projection.downsample(projection.transform(g_mid))
     g_sample = [g_mid_downsampled[f][0] for f in range(model_config.n_f)]
     fig5 = figures.plot_outer_product_structure(g_sample, x_f_history[mid_point], p_history[mid_point], model_config.f_extended)

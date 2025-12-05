@@ -36,6 +36,7 @@ class ModelConfig(BaseModel):
     g_init_std: float = Field(default=0.5, gt=0, description="Std of initial abstract location g (before learning)")
     g_mem_std: float = Field(default=0.1, gt=0, description="Std for MLP hidden→output weights in g transition network")
     d_hidden_dim: int = Field(default=20, ge=1, description="Hidden layer width of the abstract-location transition MLP")
+    n_actions: int = Field(default=5, ge=1, description="Total number of actions (can include 'stay' action)")
 
     # ===================================================================================
     # MEMORY STRUCTURE

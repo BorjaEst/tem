@@ -62,6 +62,7 @@ class EnvironmentParams(Protocol):
     height: int
     observation_mode: Literal["unique", "tiled", "random"]
     n_actions: int
+    has_static_action: bool
 
     @property
     def n_locations(self) -> int:  # pragma: no cover - simple protocol
@@ -109,8 +110,11 @@ class Environment:
         else:
             raise ValueError(f"Invalid observation_mode: {params.observation_mode}")
 
-        # 4 directional actions: up, right, down, left
-        n_actions = params.n_actions
+        # Directional actions: up, right, down, left
+        # Optional stay action if has_static_action=True
+        has_static = params.has_static_action
+        n_directional = params.n_actions
+        n_actions = n_directional + (1 if has_static else 0)
         adjacency: List[List[float]] = [[0.0] * n_locations for _ in range(n_locations)]
         locations: List[Location] = []
 
@@ -119,42 +123,50 @@ class Environment:
             j = loc_id % width  # column
 
             actions: List[Action] = []
+            action_id_offset = 1 if has_static else 0
+            base_probability = 1.0 / n_actions
 
-            # Up (action 0)
+            # Optional stay action (action 0) - self-loop
+            if has_static:
+                transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
+                adjacency[loc_id][loc_id] = 1.0
+                actions.append(Action(id=0, probability=base_probability, transition=transition))
+
+            # Up (action 0 or 1 depending on has_static)
             if i > 0:
                 next_loc = (i - 1) * width + j
                 adjacency[loc_id][next_loc] = 1.0
                 transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
             else:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append(Action(id=0, probability=0.25, transition=transition))
+            actions.append(Action(id=action_id_offset + 0, probability=base_probability, transition=transition))
 
-            # Right (action 1)
+            # Right (action 1 or 2 depending on has_static)
             if j < width - 1:
                 next_loc = i * width + (j + 1)
                 adjacency[loc_id][next_loc] = 1.0
                 transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
             else:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append(Action(id=1, probability=0.25, transition=transition))
+            actions.append(Action(id=action_id_offset + 1, probability=base_probability, transition=transition))
 
-            # Down (action 2)
+            # Down (action 2 or 3 depending on has_static)
             if i < height - 1:
                 next_loc = (i + 1) * width + j
                 adjacency[loc_id][next_loc] = 1.0
                 transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
             else:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append(Action(id=2, probability=0.25, transition=transition))
+            actions.append(Action(id=action_id_offset + 2, probability=base_probability, transition=transition))
 
-            # Left (action 3)
+            # Left (action 3 or 4 depending on has_static)
             if j > 0:
                 next_loc = i * width + (j - 1)
                 adjacency[loc_id][next_loc] = 1.0
                 transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
             else:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append(Action(id=3, probability=0.25, transition=transition))
+            actions.append(Action(id=action_id_offset + 3, probability=base_probability, transition=transition))
 
             locations.append(
                 Location(

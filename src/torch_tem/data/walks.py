@@ -101,9 +101,11 @@ class WalkGenerator:
             # Select action with repeat bias
             action_probs = np.array([action.probability for action in current_location.actions])
 
-            # Apply repeat bias to previous action if applicable
-            if prev_action_id is not None and current_location_id != location_ids[-1]:
-                action_probs[prev_action_id] *= self.repeat_bias
+            # Apply repeat bias to previous action if we actually moved
+            # (don't bias toward stay action or repeating when stuck at boundaries)
+            if prev_action_id is not None and len(location_ids) > 1:
+                if location_ids[-1] != location_ids[-2]:  # Only if moved
+                    action_probs[prev_action_id] *= self.repeat_bias
 
             # Renormalize
             if np.sum(action_probs) > 0:

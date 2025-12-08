@@ -50,7 +50,6 @@ from typing import List, Protocol
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.nn import functional as F
 
 from torch_tem.types import Matrix, MultiScaleCode, SensoryObservation
 
@@ -124,7 +123,7 @@ class SensoryProcessor(nn.Module):
         Returns:
             x_normalized: Normalized sensory [n_f] of [B, n_x_c]
         """
-        return [F.normalize(torch.relu(x - x.mean(dim=-1, keepdim=True)), p=2, dim=-1) for x in x_f]
+        return [torch.nn.functional.normalize(torch.relu(x - x.mean(dim=-1, keepdim=True)), p=2, dim=-1) for x in x_f]
 
     def forward(self, x_c: Tensor, x_prev: MultiScaleCode) -> MultiScaleCode:
         """Process sensory: filter and normalize.

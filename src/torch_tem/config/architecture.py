@@ -147,6 +147,8 @@ class ModelConfig(BaseModel):
 
     do_sample: bool = Field(default=False, description="If False, use distribution means instead of sampling (no observation noise)")
     use_p_inf: bool = Field(default=True, description="Use inferred ground location p_inf when inferring new abstract location")
+    p2g_scale_offset: float = Field(default=0.0, ge=0, description="Variance offset scaling for memory path during abstract inference (controls memory influence)")
+    p2g_sig_val: float = Field(default=10000.0, ge=0, description="Base variance magnitude for memory-derived abstract location uncertainty")
 
     # ===================================================================================
     # MEMORY DYNAMICS (can be tuned at inference time)

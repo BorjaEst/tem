@@ -16,8 +16,11 @@ Fusion rule (precision-weighted mean):
         g_inf = sum_i precision_i * mu_i / sum_i precision_i
 
 Key ideas:
-- Memory influence is scheduled via an offset added to ``sigma_g_mem``
-    (``p2g_scale_offset``), delaying strong reliance on memory early on.
+- **Memory influence scheduling**: The uncertainty of memory-derived locations
+    can be artificially increased by adding an offset:
+    ``sigma_g_mem = sigma_base + p2g_scale_offset * p2g_sig_val``
+    Higher offset → lower precision → less influence during fusion.
+    This allows gradual integration of memory during training/inference.
 - Memory uncertainty is predicted from simple quality indicators
     (norm and placeholder reconstruction error) per frequency.
 - The output ``g_inf`` supports structural generalization while remaining

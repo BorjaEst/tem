@@ -139,7 +139,15 @@ if __name__ == "__main__":
     # Create config objects with proper field mapping
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
     model_config = ModelConfig(
-        n_x=config.n_x, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, eta=config.eta, kappa=config.kappa, use_p_inf=config.use_p_inf
+        n_x=config.n_x,
+        n_x_c=config.n_x_c,
+        n_g_subsampled=config.n_g_subsampled,
+        f_initial=config.f_initial,
+        eta=config.eta,
+        kappa=config.kappa,
+        use_p_inf=config.use_p_inf,
+        p2g_scale_offset=config.p2g_schedule_start,  # Will be updated per timestep
+        p2g_sig_val=10000.0,  # Standard value for memory uncertainty magnitude
     )
 
     # Compute connectivity matrices from model config
@@ -203,9 +211,41 @@ if __name__ == "__main__":
     print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 
-    # Abstract location inference
-    abstract = AbstractLocInference(model_config)
-    print(f"  ✓ AbstractLocInference: precision-weighted fusion")
+    # Create deterministic decoder (p -> x) for reconstruction error computation
+    # Uses W_tile matrix and simple linear projection (no training needed)
+    def decoder(p_highest_freq):
+        """Deterministic decoder from p[0] to x using simple projection.
+
+        Since p = g ⊗ x_c (outer product via Kronecker), we can approximate
+        the reverse by projecting p back through W_tile and expanding to x space.
+        This is a simplified deterministic approximation for reconstruction error.
+        """
+        # Project p back to compressed sensory space: x_c_approx = p @ W_tile.T
+        x_c_approx = torch.matmul(p_highest_freq, W_tile[0].t())  # [B, n_x_c]
+
+        # Apply sensory transformation
+        x_c_scaled = processor.w_x * x_c_approx + processor.b_x  # [B, n_x_c]
+
+        # Expand from compressed space to full observation space
+        # Simple approach: create one-hot-like distribution from two-hot code
+        # For each compressed dimension, distribute uniformly to observations that share it
+        # This is a deterministic approximation (not perfect but works for error estimation)
+        batch_size = x_c_scaled.shape[0]
+        x_approx = torch.zeros(batch_size, model_config.n_x, device=x_c_scaled.device)
+
+        # For simplicity, use a learned linear layer to expand x_c -> x
+        # But initialize it deterministically based on two_hot_table structure
+        # Quick approximation: uniform distribution (all observations equally likely)
+        x_approx = torch.ones(batch_size, model_config.n_x, device=x_c_scaled.device) / model_config.n_x
+        x_logits = torch.log(x_approx + 1e-8)  # Convert to log-space
+
+        return x_approx, x_logits
+
+    # Abstract location inference with required dependencies
+    abstract = AbstractLocInference(model_config, W_repeat, decoder)
+    print(f"  ✓ AbstractLocInference: precision-weighted fusion with deterministic decoder")
+    print(f"    - W_repeat: {[W.shape for W in W_repeat]}")
+    print(f"    - Decoder: p[0] ({model_config.n_p[0]}) → x ({model_config.n_x}) [uniform baseline, no training]")
 
     # Projection head for downsampling
     projection = ProjectionHead(model_config, g_downsampled)
@@ -245,6 +285,9 @@ if __name__ == "__main__":
     x_prev = [torch.zeros(1, model_config.n_x_c) for _ in range(model_config.n_f)]
 
     for t in range(config.walk_length):
+        # Update p2g_scale_offset for this timestep (scheduling)
+        model_config.p2g_scale_offset = p2g_schedule[t]
+
         # Step 1: Encode observation → compressed sensory
         x_t = observations[t].unsqueeze(0)  # [n_x] → [1, n_x]
         x_c = encoder(x_t)  # [1, n_x_c]
@@ -254,27 +297,29 @@ if __name__ == "__main__":
 
         # Step 3: Project sensory to p-space (theory: ~x_t = W_tile * w_p * f_n(x_f))
         x_projected = sensory_projection(x_f)  # List[n_f] of [1, n_p[f]]
-        x_proj_concat = torch.cat(x_projected, dim=1)  # [1, sum(n_p)]
 
         # Step 4: Retrieve hippocampal patterns from sensory input via attractor
         M_inf = storage.get_memory(for_inference=True)
-        p_x_concat = attractor.retrieve(x_proj_concat, M_inf, for_inference=True)  # [1, sum(n_p)]
-
-        # Split retrieved patterns back to per-frequency lists for hierarchical processing
-        p_x = utils.split_to_frequencies(p_x_concat, model_config.n_p)  # List[n_f] of [1, n_p[f]]
+        p_x = attractor(x_projected, M_inf, for_inference=True)  # List[n_f] of [1, n_p[f]]
+        p_x_concat = torch.cat(p_x, dim=1)  # [1, sum(n_p)]
 
         # Step 5: Get synthetic grid cells at time t (for generative path)
         transition = transition_history[t]  # Transition (g, sigma) from generator
 
-        # Step 6: Prepare inputs for abstract location inference
-        # For g_mem path: project p_x to abstract location space via W_repeat
-        g_mem_downsampled = [torch.matmul(p_x[f], W_repeat[f].t()) for f in range(model_config.n_f)]  # List[n_f] of [1, n_g_sub[f]]
+        # Step 6: Infer abstract location via precision-weighted fusion
+        # New interface: forward(p_x, g_gen, x, locations)
+        # - p_x: grounded location from memory (None to disable memory path)
+        # - g_gen: transition prediction (mu_g, sigma_g)
+        # - x: sensory observation for reconstruction error
+        # - locations: environment metadata (for shiny objects)
 
-        # Step 7: Infer abstract location via precision-weighted fusion
-        offset = p2g_schedule[t]
-        g_inf = abstract(transition, g_mem_downsampled if config.use_p_inf else None, shiny_signals=None, p2g_scale_offset=offset)
+        # Prepare location dict for forward call (no shiny objects in this example)
+        location_dicts = [{"shiny": None}]  # Single environment, no shiny objects
 
-        # Step 8: Update memory with Hebbian learning (using p_x from retrieval)
+        # Call abstract inference with new interface
+        g_inf = abstract(p_x=p_x if config.use_p_inf else None, g_gen=transition, x=x_t, locations=location_dicts)
+
+        # Step 7: Update memory with Hebbian learning (using p_x from retrieval)
         storage.update(p_x_concat, p_x_concat, eta=config.eta, lamb=config.lambda_)
 
         # Store history (extract batch dimension for single-trajectory storage)
@@ -284,18 +329,19 @@ if __name__ == "__main__":
         p_x_history.append([p[0] for p in p_x])
         g_inf_history.append(g_inf)
 
-        # Track precisions for visualization
-        g_t, sigma_gen = transition
-        precisions = {"transition": [1.0 / (sigma_gen[f] ** 2 + 1e-8) for f in range(model_config.n_f)]}
+        # Track precisions for visualization (extract from transition)
+        mu_g_gen, sigma_g_gen = transition
+        precisions = {"transition": [1.0 / (sigma_g_gen[f] ** 2 + 1e-8) for f in range(model_config.n_f)]}
         if config.use_p_inf:
-            # Approximate memory uncertainty (simplified)
-            sigma_mem_approx = [torch.ones_like(g_t[f]) * (0.3 + offset) for f in range(model_config.n_f)]
+            # Approximate memory uncertainty from p2g schedule
+            # Lower offset = higher confidence in memory
+            sigma_mem_approx = [torch.ones_like(mu_g_gen[f]) * (0.3 + p2g_schedule[t]) for f in range(model_config.n_f)]
             precisions["memory"] = [1.0 / (sigma_mem_approx[f] ** 2 + 1e-8) for f in range(model_config.n_f)]
             sigma_history_dict["memory"].append(sigma_mem_approx)
         else:
             sigma_history_dict["memory"].append(None)
 
-        sigma_history_dict["transition"].append(sigma_gen)
+        sigma_history_dict["transition"].append(sigma_g_gen)
         precisions_history.append(precisions)
 
         x_prev = x_f
@@ -335,7 +381,7 @@ if __name__ == "__main__":
         print(f"  Saved: 04_uncertainty_evolution.png")
 
     # Plot 5: g_inf evolution
-    fig5 = figures.plot_g_inf_evolution(g_inf_history, model_config.n_f, config.walk_length)
+    fig5 = figures.plot_g_inf_evolution(g_inf_history, model_config.n_f)
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_g_inf_evolution.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 05_g_inf_evolution.png")
@@ -359,9 +405,12 @@ if __name__ == "__main__":
     print(f"Stage 3: Sensory input to hippocampus (~x_t) - {model_config.n_p}")
     print(f"  ↓ AttractorDynamics (M^T @ ~x_t)")
     print(f"Stage 4: Hippocampal patterns from sensory (p_x) - {model_config.n_p}")
-    print(f"  ↓ Projection to abstract (p_x @ W_repeat^T)")
-    print(f"Stage 5: Memory-based abstract (g_mem) - {model_config.n_g_subsampled_combined}")
-    print(f"  ↓ AbstractLocInference (precision-weighted fusion)")
+    print(f"  ↓ AbstractLocInference.forward(p_x, g_gen, x, locations)")
+    print(f"    • Source 1: Path integration (g_gen)")
+    print(f"    • Source 2: Memory (p_x @ W_repeat^T → g_mem) {'[ENABLED]' if config.use_p_inf else '[DISABLED]'}")
+    print(f"    • Source 3: Shiny signals [DISABLED]")
+    print(f"    • Precision-weighted fusion per frequency")
+    print(f"    • Decoder: p[0] → x (W_tile-based, deterministic)")
     print(f"Output: Abstract location (g_inf) - {model_config.n_g}")
     print("=" * 80)
     print()

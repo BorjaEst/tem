@@ -124,7 +124,7 @@ class SensoryProcessor(nn.Module):
         Returns:
             x_normalized: Normalized sensory [n_f] of [B, n_x_c]
         """
-        return [F.normalize(torch.relu(x - x.mean()), p=2, dim=-1) for x in x_f]
+        return [F.normalize(torch.relu(x - x.mean(dim=-1, keepdim=True)), p=2, dim=-1) for x in x_f]
 
     def forward(self, x_c: Tensor, x_prev: MultiScaleCode) -> MultiScaleCode:
         """Process sensory: filter and normalize.

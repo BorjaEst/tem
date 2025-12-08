@@ -160,6 +160,32 @@ def split_to_frequencies(p_flat: Vector, n_p: List[int]) -> GroundedLocation:
     return p_list
 
 
+def compute_snr_db(signal: Tensor, noisy_signal: Tensor) -> float:
+    """Compute signal-to-noise ratio in decibels.
+
+    Calculates SNR as 10 * log10(signal_power / noise_power) where:
+    - signal_power = mean(signal^2)
+    - noise_power = mean((signal - noisy_signal)^2)
+
+    Args:
+        signal: Clean signal tensor of any shape
+        noisy_signal: Noisy version of signal (same shape as signal)
+
+    Returns:
+        SNR in decibels (dB), or infinity if noise power is zero
+
+    Example:
+        >>> clean = torch.randn(10, 100)
+        >>> noisy = clean + torch.randn(10, 100) * 0.1
+        >>> snr = compute_snr_db(clean, noisy)
+        >>> print(f"SNR: {snr:.2f} dB")
+        SNR: 20.15 dB
+    """
+    signal_power = (signal**2).mean()
+    noise_power = ((signal - noisy_signal) ** 2).mean()
+    return 10 * torch.log10(signal_power / noise_power).item() if noise_power > 0 else float("inf")
+
+
 def concatenate_frequencies(p_list: GroundedLocation) -> Vector:
     """Concatenate per-frequency place cell list into flat tensor.
 

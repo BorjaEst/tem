@@ -135,7 +135,9 @@ def plot_attractor_convergence(
     queries: List[Vector],
     retrievals: List[Vector],
     targets: List[Vector],
+    n_samples: Optional[int] = None,
     query_labels: Optional[List[str]] = None,
+    n_p_per_freq: Optional[List[int]] = None,
     title: str = "Attractor Dynamics: Query → Retrieval Convergence",
     figsize: Optional[tuple] = None,
     ylim: Optional[tuple] = None,
@@ -147,11 +149,17 @@ def plot_attractor_convergence(
     This allows direct visual comparison of how attractor dynamics refine noisy
     or partial queries toward stored patterns.
 
+    Accepts batched MultiScaleCode (per-frequency tensors) and automatically handles
+    per-sample extraction for visualization. When n_p_per_freq is provided, frequency
+    module structure is visualized with background colors, boundary lines, and labels.
+
     Args:
-        queries: List of query patterns [n_p_total] (one per test case)
-        retrievals: List of retrieved patterns [n_p_total] (one per test case)
-        targets: List of target patterns [n_p_total] (one per test case)
+        queries: Batched MultiScaleCode - List of [n_samples, n_p[f]] tensors (one per frequency)
+        retrievals: Batched MultiScaleCode - List of [n_samples, n_p[f]] tensors
+        targets: Batched MultiScaleCode - List of [n_samples, n_p[f]] tensors
+        n_samples: Number of samples to plot (default: all samples in batch)
         query_labels: Optional labels for each query (e.g., ["Query 1", "Query 2"])
+        n_p_per_freq: Place cell counts per frequency. Enables frequency visualization
         title: Figure title
         figsize: Figure size (width, height). If None, auto-sized based on n_queries
         ylim: Y-axis limits for all subplots. If None, auto-scaled based on data range
@@ -161,13 +169,30 @@ def plot_attractor_convergence(
         direct comparison of query, retrieval, and target patterns
 
     Example:
-        >>> queries = [noisy_pattern1, noisy_pattern2]
-        >>> retrievals = [attractor.retrieve(q, M) for q in queries]
-        >>> targets = [clean_pattern1, clean_pattern2]
-        >>> fig = plot_attractor_convergence(queries, retrievals, targets)
-        >>> fig.savefig('convergence.png')
+        >>> # Batched MultiScaleCode format
+        >>> queries_list = split_to_frequencies(test_queries, n_p)  # List of [5, n_p[f]]
+        >>> retrievals_list = attractor(queries_list, M)  # List of [5, n_p[f]]
+        >>> targets_list = split_to_frequencies(test_targets, n_p)
+        >>> fig = plot_attractor_convergence(
+        ...     queries_list, retrievals_list, targets_list,
+        ...     n_p_per_freq=params.n_p
+        ... )
     """
-    n_queries = len(queries)
+    # Auto-detect number of samples from first frequency tensor
+    if n_samples is None:
+        n_samples = queries[0].shape[0]
+
+    # Concatenate frequencies for plotting
+    queries_cat = torch.cat(queries, dim=-1)  # [n_samples, sum(n_p)]
+    retrievals_cat = torch.cat(retrievals, dim=-1)
+    targets_cat = torch.cat(targets, dim=-1)
+
+    # Convert to list of individual samples
+    queries = [queries_cat[i] for i in range(n_samples)]
+    retrievals = [retrievals_cat[i] for i in range(n_samples)]
+    targets = [targets_cat[i] for i in range(n_samples)]
+
+    n_queries = n_samples
 
     # Auto-compute y-axis limits if not provided
     # Use the 95th percentile to avoid outliers dominating the scale
@@ -192,6 +217,12 @@ def plot_attractor_convergence(
     x = np.arange(n_cells)
     width = 0.25  # Width of each bar
 
+    # Prepare frequency visualization if n_p_per_freq is provided
+    freq_colors = ["#fff5f0", "#fee0d2", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d"]
+    if n_p_per_freq is not None:
+        boundaries = [0] + [sum(n_p_per_freq[: i + 1]) for i in range(len(n_p_per_freq))]
+        freq_centers = [(boundaries[i] + boundaries[i + 1]) / 2 for i in range(len(boundaries) - 1)]
+
     for i in range(n_queries):
         # Generate label
         label = query_labels[i] if query_labels is not None else f"{i+1}"
@@ -201,17 +232,40 @@ def plot_attractor_convergence(
         retrieval_vals = retrievals[i].cpu().numpy()
         target_vals = targets[i].cpu().numpy()
 
+        # Add frequency module background colors
+        if n_p_per_freq is not None:
+            for freq_idx in range(len(n_p_per_freq)):
+                axes[i].axvspan(boundaries[freq_idx], boundaries[freq_idx + 1], alpha=0.15, color=freq_colors[freq_idx % len(freq_colors)], zorder=0)
+            # Add vertical boundary lines
+            for boundary in boundaries[1:-1]:  # Skip first and last
+                axes[i].axvline(boundary, color="gray", linestyle="--", alpha=0.4, linewidth=1.5)
+
         # Plot all three patterns as grouped bars with offset positions
-        axes[i].bar(x - width, query_vals, width, alpha=0.7, label="Query (Noisy)", color="C0")
-        axes[i].bar(x, retrieval_vals, width, alpha=0.7, label="Retrieved", color="green")
-        axes[i].bar(x + width, target_vals, width, alpha=0.7, label="Target (Ground Truth)", color="orange")
+        axes[i].bar(x - width, query_vals, width, alpha=0.7, label="Query (Noisy)", color="C0", zorder=3)
+        axes[i].bar(x, retrieval_vals, width, alpha=0.7, label="Retrieved", color="green", zorder=3)
+        axes[i].bar(x + width, target_vals, width, alpha=0.7, label="Target (Ground Truth)", color="orange", zorder=3)
 
         axes[i].set_title(f"Pattern {label}: Query → Retrieval vs Target")
-        axes[i].set_xlabel("Place Cell Index")
+
+        # Enhanced x-axis labeling for frequency modules
+        if n_p_per_freq is not None:
+            axes[i].set_xlabel("Frequency Module → Place Cell Index")
+            axes[i].set_xticks(freq_centers)
+            axes[i].set_xticklabels([f"F{j+1}" for j in range(len(n_p_per_freq))])
+            # Add secondary x-axis with actual indices
+            ax2 = axes[i].twiny()
+            ax2.set_xlim(axes[i].get_xlim())
+            ax2.set_xticks(x[:: max(1, n_cells // 10)])
+            ax2.set_xticklabels(x[:: max(1, n_cells // 10)], fontsize=8, alpha=0.6)
+            ax2.set_xlabel("Cell Index", fontsize=8, alpha=0.6)
+        else:
+            axes[i].set_xlabel("Place Cell Index")
+            axes[i].set_xticks(x[:: max(1, n_cells // 10)])  # Show ~10 tick labels max
+
         axes[i].set_ylabel("Activation")
         axes[i].set_ylim(ylim)
         axes[i].legend(loc="upper right")
-        axes[i].set_xticks(x[:: max(1, n_cells // 10)])  # Show ~10 tick labels max
+        axes[i].grid(True, alpha=0.2, axis="y", zorder=1)
 
     fig.suptitle(title)
     plt.tight_layout()

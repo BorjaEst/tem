@@ -164,9 +164,7 @@ if __name__ == "__main__":
     test_queries = query_logits.softmax(dim=1)
 
     # Compute signal-to-noise ratio for reporting
-    signal_power = (test_targets**2).mean()
-    noise_power = ((test_targets - test_queries) ** 2).mean()
-    snr_db = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float("inf")
+    snr_db = utils.compute_snr_db(test_targets, test_queries)
     print(f"  Signal-to-noise ratio: {snr_db:.2f} dB")
     print()
 
@@ -176,21 +174,24 @@ if __name__ == "__main__":
     # - M^T@p[t]: memory-driven update (pulls toward associated patterns)
     # - mask[t]: hierarchical early-stopping (coarse→fine refinement)
     M_inf = storage.get_memory(for_inference=True)
-    test_retrievals = attractor.retrieve(test_queries, M_inf, for_inference=True)
 
-    # Package results for visualization
-    # Convert from batched tensors to lists of individual patterns
-    queries_list = [test_queries[i] for i in range(config.n_test_queries)]
-    retrievals_list = [test_retrievals[i] for i in range(config.n_test_queries)]
-    targets_list = [test_targets[i] for i in range(config.n_test_queries)]
+    # Convert batched tensors to per-frequency list format
+    test_queries_list = utils.split_to_frequencies(test_queries, model_config.n_p)
+    # Attractor expects and returns per-frequency lists (MultiScaleCode)
+    test_retrievals_list = attractor(test_queries_list, M_inf, for_inference=True)
 
     # Compute retrieval quality metrics
     # MSE measures how close retrieved patterns are to ground truth
     print("Retrieval quality metrics:")
     improvements = []
+
+    # Concatenate for metrics computation
+    test_queries_cat = torch.cat(test_queries_list, dim=1)
+    test_retrievals_cat = torch.cat(test_retrievals_list, dim=1)
+
     for i in range(config.n_test_queries):
-        query_error = torch.nn.functional.mse_loss(test_queries[i], test_targets[i]).item()
-        retrieval_error = torch.nn.functional.mse_loss(test_retrievals[i], test_targets[i]).item()
+        query_error = torch.nn.functional.mse_loss(test_queries_cat[i], test_targets[i]).item()
+        retrieval_error = torch.nn.functional.mse_loss(test_retrievals_cat[i], test_targets[i]).item()
         improvement = ((query_error - retrieval_error) / query_error) * 100  # Percentage improvement
         improvements.append(improvement)
         print(f"  Query {i+1}: query_error={query_error:.6f}, retrieval_error={retrieval_error:.6f}, improvement={improvement:.1f}%")
@@ -213,20 +214,21 @@ if __name__ == "__main__":
         noisy_query_logits = target_logits + noise_logits
         noisy_queries = noisy_query_logits.softmax(dim=1)
 
+        # Convert to per-frequency list format for attractor
+        noisy_queries_list = utils.split_to_frequencies(noisy_queries, model_config.n_p)
+
         # Test inference memory (used for sensory→location inference)
-        retrieved_inf = attractor.retrieve(noisy_queries, storage.get_memory(for_inference=True), for_inference=True)
-        error_inf = torch.nn.functional.mse_loss(retrieved_inf, test_targets).item()
+        retrieved_inf_list = attractor(noisy_queries_list, storage.get_memory(for_inference=True), for_inference=True)
+        error_inf = torch.nn.functional.mse_loss(torch.cat(retrieved_inf_list, dim=1), test_targets).item()
         errors_by_mode["Inference"].append(error_inf)
 
         # Test generative memory (used for abstract→location prediction)
-        retrieved_gen = attractor.retrieve(noisy_queries, storage.get_memory(for_inference=False), for_inference=False)
-        error_gen = torch.nn.functional.mse_loss(retrieved_gen, test_targets).item()
+        retrieved_gen_list = attractor(noisy_queries_list, storage.get_memory(for_inference=False), for_inference=False)
+        error_gen = torch.nn.functional.mse_loss(torch.cat(retrieved_gen_list, dim=1), test_targets).item()
         errors_by_mode["Generative"].append(error_gen)
 
         # Compute SNR for this noise level
-        signal_power = (test_targets**2).mean()
-        noise_power = ((test_targets - noisy_queries) ** 2).mean()
-        snr_db = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float("inf")
+        snr_db = utils.compute_snr_db(test_targets, noisy_queries)
 
         print(f"  Noise {noise_level:.1f} (SNR={snr_db:+.1f}dB): Inference MSE={error_inf:.6f}, Generative MSE={error_gen:.6f}")
 
@@ -250,10 +252,14 @@ if __name__ == "__main__":
 
     # Plot 2: Attractor convergence trajectories
     # Show how noisy queries are iteratively refined toward targets
+    # Split targets to per-frequency format for visualization
+    test_targets_list = utils.split_to_frequencies(test_targets, model_config.n_p)
+
     fig2 = figures.plot_attractor_convergence(
-        queries_list,  # Initial noisy patterns
-        retrievals_list,  # Final retrieved patterns
-        targets_list,  # Ground truth patterns
+        test_queries_list,  # Batched MultiScaleCode: List of [n_queries, n_p[f]]
+        test_retrievals_list,  # Batched MultiScaleCode
+        test_targets_list,  # Batched MultiScaleCode
+        n_p_per_freq=model_config.n_p,  # Enable frequency module visualization
     )
     if config.save_plots:
         save_path = config.output_dir / "02_attractor_convergence.png"

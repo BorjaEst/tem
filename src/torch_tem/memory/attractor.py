@@ -14,9 +14,8 @@ spatial relationships and predictive inference.
 from typing import List, Protocol
 
 import torch
-from torch import Tensor
 
-from ..types import Matrix, Vector
+from ..types import Matrix, MultiScaleCode
 
 
 class ModelParams(Protocol):
@@ -24,6 +23,7 @@ class ModelParams(Protocol):
 
     i_attractor: int
     kappa: float
+    n_p: List[int]
 
 
 class AttractorDynamics:
@@ -51,29 +51,25 @@ class AttractorDynamics:
     Attributes:
         kappa: Decay factor for attractor update (controls stability)
         i_attractor: Number of attractor iterations (typically equals n_f_g)
-        p_retrieve_mask_inf: Hierarchical masks for inference mode retrieval
-        p_retrieve_mask_gen: Hierarchical masks for generative mode retrieval
+        mask_inf: Hierarchical masks for inference mode retrieval
+        mask_gen: Hierarchical masks for generative mode retrieval
     """
 
-    def __init__(
-        self,
-        model_params: ModelParams,
-        p_retrieve_mask_inf: List[Matrix],
-        p_retrieve_mask_gen: List[Matrix],
-    ):
+    def __init__(self, model_params: ModelParams, mask_inf: List[Matrix], mask_gen: List[Matrix]):
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:
-            model_params: Architecture configuration (i_attractor, kappa)
-            p_retrieve_mask_inf: Hierarchical masks for inference retrieval
-            p_retrieve_mask_gen: Hierarchical masks for generative retrieval
+            model_params: Architecture configuration (i_attractor, kappa, n_p)
+            mask_inf: Hierarchical masks for inference retrieval
+            mask_gen: Hierarchical masks for generative retrieval
         """
         self.kappa = model_params.kappa
         self.i_attractor = model_params.i_attractor
-        self.p_retrieve_mask_inf = p_retrieve_mask_inf
-        self.p_retrieve_mask_gen = p_retrieve_mask_gen
+        self.n_p = model_params.n_p
+        self.p_retrieve_mask_inf = mask_inf
+        self.p_retrieve_mask_gen = mask_gen
 
-    def retrieve(self, p_query: Vector, M: Matrix, for_inference: bool = False) -> Vector:
+    def __call__(self, p_query: MultiScaleCode, M: Matrix, for_inference: bool = False) -> MultiScaleCode:
         """Retrieve grounded location from memory via iterative attractor dynamics.
 
         Implements content-addressable memory recall by iteratively refining the query
@@ -87,18 +83,17 @@ class AttractorDynamics:
         3. Recall stored spatial relationships via associative memory
 
         Args:
-            p_query: Initial query pattern representing grounded location [B, sum(n_p)]
-                    where sum(n_p) is the total number of place cells across all frequencies
+            p_query: Initial query pattern representing grounded location per frequency
+                    List of [B, n_p[f]] tensors (one per frequency module)
             M: Hebbian memory matrix storing location associations [sum(n_p), sum(n_p)]
                learned via outer product updates: M = λ*M + η*outer(p_inf, p_gen)
             for_inference: If True, use inference masks; if False, use generative masks
                           (inference typically requires more iterations for stable convergence)
 
         Returns:
-            p_retrieved: Refined grounded location pattern [B, sum(n_p)] after convergence.
-                        **Format**: Concatenated tensor across all frequencies.
-                        Use `utils.split_to_frequencies(p_retrieved, n_p)` to convert to
-                        per-frequency list format for hierarchical processing components.
+            p_retrieved: Refined grounded location pattern per frequency module.
+                        **Format**: List of [B, n_p[f]] tensors (one per frequency).
+                        Ready for direct use by downstream TEM components.
 
         Note:
             The hierarchical masking implements the following schedule:
@@ -110,40 +105,43 @@ class AttractorDynamics:
             representation during early retrieval.
 
         Example:
-            >>> # Memory retrieval returns concatenated format
-            >>> p_retrieved = attractor.retrieve(query, M_inf, for_inference=True)
-            >>> # Convert to per-frequency format for hierarchical inference
-            >>> from torch_tem.utils import split_to_frequencies
-            >>> p_list = split_to_frequencies(p_retrieved, model_config.n_p)
-            >>> # Now ready for AbstractLocInference
-            >>> g_inf = abstract(g_gen, sigma_gen, p_list, ...)
+            >>> # Memory retrieval with per-frequency list format
+            >>> p_retrieved = attractor(p_query_list, M_inf, for_inference=True)
+            >>> # Ready for AbstractLocInference
+            >>> g_inf = abstract(g_gen, sigma_gen, p_retrieved, ...)
         """
         # Select appropriate hierarchical masks based on retrieval mode
         retrieve_mask = self.p_retrieve_mask_inf if for_inference else self.p_retrieve_mask_gen
 
-        p = p_query
-        for it in range(self.i_attractor):
+        # Concatenate per-frequency query into single vector
+        p = torch.cat(p_query, dim=1)
+
+        # Apply activation to initial query (stability)
+        p = torch.nn.functional.leaky_relu(torch.clamp(p, min=-1.0, max=1.0))
+
+        for tau in range(self.i_attractor):
             # Memory readout: Query the Hebbian matrix (associative recall)
             # Matrix multiply retrieves patterns associated with current state
-            # Handle both batched [B, n_p, n_p] and unbatched [n_p, n_p] memory
-            if M.ndim == 3:
-                # Batched memory: [B, n_p, n_p] requires unsqueeze/squeeze
-                p_update = torch.matmul(p.unsqueeze(1), M.to(p.device)).squeeze(1)
-            else:
-                # Unbatched memory: [n_p, n_p] uses standard matmul
-                p_update = torch.matmul(p, M.to(p.device))
+            # Handle batched [B, n_p, n_p] memory
+            p_readout = torch.matmul(p.unsqueeze(1), M.to(p.device)).squeeze(1)
+
+            # Calculate candidate update with decay and activation
+            p_candidate = self.kappa * p + p_readout
+            p_candidate = torch.nn.functional.leaky_relu(torch.clamp(p_candidate, min=-1.0, max=1.0))
 
             # Apply hierarchical mask for coarse-to-fine refinement
             # Early iterations update only low-frequency (coarse) components
             # Later iterations progressively enable higher frequencies (finer detail)
-            mask = retrieve_mask[it].unsqueeze(0).to(p.device)
-            p_update = p_update * mask
+            mask = retrieve_mask[tau].unsqueeze(0).to(p.device)
 
-            # Attractor update: Combine decay with memory-driven update
-            # κ term provides stability, M^T @ p term pulls toward stored patterns
-            p = self.kappa * p + p_update
+            # Update only active frequencies, keep others unchanged
+            p = (1 - mask) * p + mask * p_candidate
 
-        return p
+        # Split concatenated result back into per-frequency list (like legacy)
+        n_p_cumsum = [0] + torch.cumsum(torch.tensor(self.n_p), dim=0).tolist()
+        p_list = [p[:, n_p_cumsum[f] : n_p_cumsum[f + 1]] for f in range(len(self.n_p))]
+
+        return p_list
 
 
 # ======================================================================================
@@ -156,37 +154,44 @@ if __name__ == "__main__":
     This example shows how attractor dynamics refine a noisy query pattern
     by iteratively pulling it toward stored patterns in the memory matrix.
     """
-    from torch_tem.config.parameters import Parameters
+    import types
 
-    # Create configuration with 3 frequency modules
-    params = Parameters(
-        n_g_subsampled=[10, 8, 6],  # 3 frequency modules
-        n_x_c=5,  # 5 compressed sensory dimensions
-        kappa=0.8,  # Moderate decay for stable convergence
-        i_attractor=3,  # 3 iterations (one per frequency)
+    # Create simple params with required fields
+    params = types.SimpleNamespace(
+        kappa=0.8,
+        i_attractor=3,
+        n_p=[15, 12, 10],  # 3 frequency modules with different dimensions
     )
 
+    # Create simple masks (all ones for this demo)
+    n_p_total = sum(params.n_p)
+    mask_inf = [torch.ones(n_p_total) for _ in range(params.i_attractor)]
+    mask_gen = [torch.ones(n_p_total) for _ in range(params.i_attractor)]
+
     # Initialize attractor dynamics
-    attractor = AttractorDynamics(params)
+    attractor = AttractorDynamics(params, mask_inf=mask_inf, mask_gen=mask_gen)
 
     # Create a simple memory matrix (normally learned via Hebbian updates)
-    n_p_total = sum(params.n_p)
     batch_size = 4
 
     # Random memory matrix (in practice, this is learned during training)
     M = torch.randn(n_p_total, n_p_total) * 0.01
     M = M + M.T  # Make symmetric for stable dynamics
 
-    # Noisy query pattern representing uncertain grounded location
-    p_query = torch.randn(batch_size, n_p_total) * 0.5
+    # Noisy query pattern representing uncertain grounded location (per-frequency list)
+    p_query = [torch.randn(batch_size, n_p) * 0.5 for n_p in params.n_p]
 
     # Retrieve refined pattern from memory
-    p_retrieved = attractor.retrieve(p_query, M, for_inference=True)
+    p_retrieved = attractor(p_query, M, for_inference=True)
 
-    print(f"Query pattern shape: {p_query.shape}")
-    print(f"Retrieved pattern shape: {p_retrieved.shape}")
-    print(f"Query mean activation: {p_query.abs().mean():.4f}")
-    print(f"Retrieved mean activation: {p_retrieved.abs().mean():.4f}")
+    print(f"Query pattern (list of {len(p_query)} frequencies)")
+    for f, p in enumerate(p_query):
+        print(f"  Frequency {f}: shape {tuple(p.shape)}")
+    print(f"\nRetrieved pattern (list of {len(p_retrieved)} frequencies)")
+    for f, p in enumerate(p_retrieved):
+        print(f"  Frequency {f}: shape {tuple(p.shape)}")
+    print(f"\nQuery mean activation: {torch.cat(p_query, dim=1).abs().mean():.4f}")
+    print(f"Retrieved mean activation: {torch.cat(p_retrieved, dim=1).abs().mean():.4f}")
     print("\nHierarchical mask schedule:")
     for it, mask in enumerate(attractor.p_retrieve_mask_inf):
         print(f"  Iteration {it}: {mask.sum().item()}/{n_p_total} neurons active")

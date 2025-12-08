@@ -3,6 +3,7 @@
 from .layouts import compute_graph_layout
 from .masks import create_g_connections, create_p_retrieve_mask, create_p_update_mask
 from .matrices import (
+    compute_snr_db,
     concatenate_frequencies,
     create_g_downsample,
     create_two_hot_table,
@@ -14,6 +15,7 @@ from .matrices import (
 )
 
 __all__ = [
+    "compute_snr_db",
     "create_W_repeat",
     "create_W_tile",
     "create_g_downsample",

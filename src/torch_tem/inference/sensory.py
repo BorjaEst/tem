@@ -47,6 +47,7 @@ Notes
 
 from typing import List, Protocol
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -64,11 +65,7 @@ class ProcessorParams(Protocol):
     n_x_c: int
     n_f: int
     n_x_f: List[int]
-
-    @property
-    def f_extended(self) -> List[float]:
-        """Extended frequency list including OVC modules when they are separate"""
-        ...
+    f_extended: List[float]
 
 
 class SensoryProcessor(nn.Module):
@@ -93,6 +90,12 @@ class SensoryProcessor(nn.Module):
         self.w_x = nn.Parameter(torch.ones(1, self.n_x_c))  # [1, n_x_c]
         self.b_x = nn.Parameter(torch.zeros(1, self.n_x_c))  # [1, n_x_c]
 
+        # Store LOGIT (inverse sigmoid) as learnable parameter
+        # This allows unconstrained optimization while sigmoid maps to (0, 1)
+        f_tensor = torch.tensor(self.f_initial, dtype=torch.float)
+        logits = torch.logit(f_tensor)
+        self.alpha_logit = nn.ParameterList([nn.Parameter(logits[i : i + 1]) for i in range(self.n_f)])
+
     def filter_temporal(self, x_c: Tensor, x_prev: MultiScaleCode) -> MultiScaleCode:
         """Apply exponential smoothing per frequency.
 
@@ -105,20 +108,15 @@ class SensoryProcessor(nn.Module):
         Returns:
             x_f: Filtered sensory [n_f] of [B, n_x_c]
         """
-        x_f = []
-        for f in range(self.n_f):
-            # Scalar frequency weight for this channel
-            freq = self.f_initial[f]
-            # EMA-like update combining current input with previous filtered state
-            x_f.append(freq * x_c + (1 - freq) * x_prev[f])
-        return x_f
+        alpha = [torch.sigmoid(self.alpha_logit[f]) for f in range(self.n_f)]
+        return [alpha[f] * x_c + (1 - alpha[f]) * x_prev[f] for f in range(self.n_f)]
 
     def normalize(self, x_f: MultiScaleCode) -> MultiScaleCode:
         """L2 normalize with learnable weights.
 
-        x_norm = (w_x * x + b_x) / ||w_x * x + b_x||_2
-
-        Applied per frequency for consistency with original implementation.
+        Legacy normalization: L2(ReLU(x - mean(x)))
+        Note: w_x and b_x are NOT used here, but are stored in this module
+        for use by the ObservationDecoder (shared parameters).
 
         Args:
             x_f: Filtered sensory [n_f] of [B, n_x_c]
@@ -128,10 +126,13 @@ class SensoryProcessor(nn.Module):
         """
         x_normalized = []
         for f in range(self.n_f):
-            # Apply element-wise affine transform prior to normalization
-            x_weighted = self.w_x * x_f[f] + self.b_x
-            # Stabilized L2 normalization (add small epsilon to avoid divide-by-zero)
-            x_norm = x_weighted / (torch.norm(x_weighted, dim=1, keepdim=True) + 1e-8)
+            # Legacy normalization:
+            # 1. Center by subtracting scalar mean
+            x_centered = x_f[f] - torch.mean(x_f[f])
+            # 2. Apply ReLU
+            x_relu = torch.relu(x_centered)
+            # 3. L2 normalize
+            x_norm = torch.nn.functional.normalize(x_relu, p=2, dim=-1)
             x_normalized.append(x_norm)
         return x_normalized
 

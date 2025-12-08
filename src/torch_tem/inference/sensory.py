@@ -246,10 +246,18 @@ class SensoryProjection(nn.Module):
         super().__init__()
         self.n_f = params.n_f
         self.n_x_f = params.n_x_f
-        self.W_tile = W_tile
+
+        # Register W_tile matrices as buffers (non-trainable, device-aware)
+        for f, W in enumerate(W_tile):
+            self.register_buffer(f"W_tile_{f}", W)
 
         # Initialize learnable gate weights (one per frequency module)
         self.w_p = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_f)])
+
+    @property
+    def W_tile(self) -> List[Matrix]:
+        """Access the list of tiling matrices."""
+        return [getattr(self, f"W_tile_{f}") for f in range(self.n_f)]
 
     def forward(self, x_normalized: MultiScaleCode) -> MultiScaleCode:
         """Transform normalized sensory input to p-space representation.
@@ -261,16 +269,12 @@ class SensoryProjection(nn.Module):
         Returns:
             List of [B, n_p[f]] tensors ready for memory indexing
         """
-        x_ = []
-        for f in range(self.n_f):
-            # Gate sensory input with learnable weight (sigmoid ensures [0,1])
-            gate = torch.sigmoid(self.w_p[f])
-            # Apply tiling transformation to match p-space dimensions
-            W_tile_f = self.W_tile[f].to(x_normalized[f].device)
-            x_f = gate * torch.matmul(x_normalized[f], W_tile_f)
-            x_.append(x_f)
+        # Pre-compute all gates once (vectorized sigmoid)
+        gates = torch.sigmoid(torch.stack([self.w_p[f] for f in range(self.n_f)]))
 
-        return x_
+        # Apply projection with list comprehension (can't avoid due to non-uniform dims)
+        W_tile = self.W_tile  # Pre-compute property access
+        return [gates[f] * torch.matmul(x_normalized[f], W_tile[f]) for f in range(self.n_f)]
 
 
 if __name__ == "__main__":

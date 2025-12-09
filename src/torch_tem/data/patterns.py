@@ -310,7 +310,7 @@ class OscillatoryGridGenerator:
         for t in range(self.walk_length):
             g_t = [g_per_freq[f][t] for f in range(n_f)]  # List[n_f] of [B, n_g[f]]
             sigma_t = [sigma_per_freq[f][t] for f in range(n_f)]
-            history.append((g_t, sigma_t))
+            history.append(Transition(mean=g_t, uncertainty=sigma_t))
 
         return history
 

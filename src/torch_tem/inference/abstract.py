@@ -43,6 +43,7 @@ from torch import Tensor
 
 from torch_tem.core.mlp import MLP
 from torch_tem.types import AbstractLocation, GroundedLocation, Matrix, SensoryObservation, Transition
+from torch_tem.utils.fusion import fuse_transitions, sample_transition
 
 
 class AbstractLocParams(Protocol):
@@ -119,154 +120,200 @@ class AbstractLocInference(nn.Module):
         self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
 
     def forward(self, p_x: Optional[GroundedLocation], g_gen: Transition, x: SensoryObservation, locations: List[Dict[str, Any]]) -> AbstractLocation:
-        """Infer abstract location matching legacy inf_g interface.
+        """Infer abstract location via multi-source Bayesian fusion.
+
+        Fusion Pipeline:
+            1. Path integration (g_gen) - always present
+            2. Memory-based (p_x → g) - if memory available
+            3. Shiny objects - if present in environment
+
+        Each source contributes proportional to its precision (1/σ²).
 
         Args:
             p_x: Grounded location retrieved from memory using sensory input.
+                 Used to compute memory-based location estimate via learned mapping.
                  If None, memory-based inference is skipped.
-            g_gen: Transition prediction as (mu_g_path, sigma_g_path)
-            x: Current sensory observation for reconstruction error computation
+            g_gen: Path integration estimate from transition model.
+                   Contains mean and uncertainty from previous location + action.
+            x: Raw sensory observation. Used to assess memory retrieval quality
+               via reconstruction error (even when p_x is None for initialization).
             locations: Environment descriptors containing shiny object information
 
         Returns:
-            g_inf: Inferred abstract location (sampled or mean depending on config)
+            Inferred abstract location (sampled or mean depending on do_sample flag)
+
+        Theory:
+            Precision-weighted fusion combines multiple probabilistic estimates:
+                precision_i = 1 / σ²_i
+                g_fused = Σ(precision_i * g_i) / Σ(precision_i)
+            Sources with higher uncertainty (larger σ) receive lower weight.
+            Memory influence is controlled via uncertainty scheduling to enable
+            gradual integration during learning.
         """
-        # Start with path integration as base (Source 1: always present)
-        g_transition = g_gen
+        # Collect all available estimates
+        estimates = [g_gen]  # Always have path integration
 
-        # Source 2: Memory-based inference (only if p_x is provided)
-        if p_x is not None:
-            g_transition = self._fuse_memory_path(g_transition, p_x, x)
+        # Add memory estimate (if available)
+        if memory_estimate := self._compute_memory_estimate(p_x, x):
+            estimates.append(memory_estimate)
 
-        # Source 3: Shiny objects (if present in environment)
-        shiny_envs = [location.get("shiny") is not None for location in locations]
-        if any(shiny_envs):
-            g_transition = self._fuse_shiny_signals(g_transition, locations, shiny_envs)
+        # Add shiny object cues (if any)
+        if shiny_estimate := self._compute_shiny_estimate(locations):
+            estimates.append(shiny_estimate)
 
-        # Sample or return mean based on configuration
-        mu_g, sigma_g = g_transition
-        if self.do_sample:
-            g = [mu_g[f] + sigma_g[f] * torch.randn_like(mu_g[f]) for f in range(self.n_f)]
-        else:
-            g = mu_g
+        # Fuse all estimates
+        fused = fuse_transitions(estimates)
 
-        return g
+        # Return sampled or mean location
+        return sample_transition(fused) if self.do_sample else fused.mean
 
-    def _fuse_memory_path(
-        self,
-        g_transition: Transition,
-        p_x: GroundedLocation,
-        x: SensoryObservation,
-    ) -> Transition:
-        """Fuse memory-based inference with current estimates.
+    def _compute_memory_estimate(self, p_x: Optional[GroundedLocation], x: SensoryObservation) -> Optional[Transition]:
+        """Compute memory-based location estimate with quality-dependent uncertainty.
 
-        Implements precision-weighted fusion of abstract location estimates
-        from path integration and memory retrieval.
+        Maps retrieved grounded location p_x to abstract location g via:
+            1. Project: p_x @ W_repeat^T → g_downsampled
+            2. Upsample: g_downsampled → mu_g_mem (via MLP)
+            3. Quality: reconstruction_error(x, decode(p_x)) → sigma_g_mem
+            4. Schedule: sigma_g_mem += memory_offset (controls influence)
 
         Args:
-            g_transition: Current abstract location transition (mu_g, sigma_g)
-            p_x: Grounded location retrieved from memory
-            x: Sensory observation for reconstruction error
+            p_x: Retrieved grounded location from memory (None if unavailable)
+            x: Raw sensory observation for reconstruction error computation
 
         Returns:
-            g_fused: Updated abstract location transition with memory
+            Memory estimate with quality-dependent uncertainty, or None if p_x unavailable
+
+        Theory:
+            Memory influence is controlled by uncertainty scheduling:
+                σ_mem_effective = σ_base + scheduling_offset
+            Higher offset → lower precision → less influence on fusion.
+            This enables gradual memory integration during training.
         """
-        mu_g, sigma_g = g_transition
+        # Early return if memory retrieval unavailable
+        if p_x is None:
+            return None
 
-        # Step 1: Project p_x to g_downsampled using W_repeat^T
-        # Legacy: g_downsampled = [torch.matmul(p_x[f], torch.t(self.hyper['W_repeat'][f]))]
-        g_downsampled = [torch.matmul(p_x[f], self.W_repeat[f].t()) for f in range(self.n_f)]
+        # Step 1: Project retrieved location to downsampled abstract space
+        g_downsampled = [p_x[f] @ self.W_repeat[f].t() for f in range(self.n_f)]
 
-        # Step 2: Compute mu_g_mem from g_downsampled via MLP
+        # Step 2: Upsample to full abstract location via learned MLP
         mu_g_mem = self.mlp_mu_g_mem(g_downsampled)
 
-        # Step 3: Compute reconstruction error for memory quality
-        # Legacy: with torch.no_grad(): x_hat, _ = self.gen_x(p_x[0]); err = utils.squared_error(x, x_hat)
-        with torch.no_grad():
-            x_hat, _ = self.decoder(p_x[0])
-            # Squared error: (x - x_hat)^2 summed over observation dimension
-            err = torch.sum((x - x_hat) ** 2, dim=1)
+        # Step 3: Assess memory quality via reconstruction error
+        sigma_g_mem = self._compute_memory_uncertainty(mu_g_mem, x, p_x)
 
-        # Step 4: Compute sigma_g_mem from memory quality indicators
-        # Legacy: sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err, dim=1)), dim=1)]
-        quality = [torch.cat([torch.sum(g**2, dim=1, keepdim=True), err.unsqueeze(1)], dim=1) for g in mu_g_mem]
-        sigma_g_mem_base = self.mlp_sigma_g_mem(quality)
-
-        # Apply scheduling offset (legacy: sigma + p2g_scale_offset * p2g_sig_val)
-        sigma_g_mem = [s + self.p2g_scale_offset * self.p2g_sig_val for s in sigma_g_mem_base]
-
-        # Step 5: Clamp mu_g_mem to [-1, 1] (legacy stability)
+        # Step 4: Clamp to valid range (legacy stability)
         mu_g_mem = [torch.clamp(g, -1, 1) for g in mu_g_mem]
 
-        # Step 6: Precision-weighted fusion per frequency
-        mu_g_fused = []
-        sigma_g_fused = []
-        for f in range(self.n_f):
-            mu_f, sigma_f = self._precision_weighted_mean([mu_g[f], mu_g_mem[f]], [sigma_g[f], sigma_g_mem[f]])
-            mu_g_fused.append(mu_f)
-            sigma_g_fused.append(sigma_f)
+        return Transition(mean=mu_g_mem, uncertainty=sigma_g_mem)
 
-        return (mu_g_fused, sigma_g_fused)
+    def _compute_memory_uncertainty(self, mu_g_mem: AbstractLocation, x: SensoryObservation, p_x: GroundedLocation) -> AbstractLocation:
+        """Compute memory uncertainty from retrieval quality indicators.
 
-    def _fuse_shiny_signals(
-        self,
-        g_transition: Transition,
-        locations: List[Dict[str, Any]],
-        shiny_envs: List[bool],
-    ) -> Transition:
-        """Fuse salient object signals with current estimates.
+        Quality indicators (per frequency):
+            1. Norm: ||g||² (energy in retrieved code)
+            2. Reconstruction error: ||x - decode(p_x)||² (sensory fidelity)
 
-        Applies precision-weighted fusion only to environments and frequency
-        modules affected by shiny object cues.
+        Lower reconstruction error → lower uncertainty → higher precision weight
 
         Args:
-            g_transition: Current abstract location transition (mu_g, sigma_g)
-            locations: Environment descriptors with shiny information
-            shiny_envs: Boolean mask indicating which environments have shiny objects
+            mu_g_mem: Memory-derived abstract location estimate
+            x: Ground-truth sensory observation
+            p_x: Retrieved grounded location
 
         Returns:
-            g_fused: Updated abstract location transition with shiny cues
+            Memory uncertainty with scheduling offset applied
         """
-        mu_g, sigma_g = g_transition
+        # Compute reconstruction error (detached to avoid backprop)
+        with torch.no_grad():
+            x_hat, _ = self.decoder(p_x[0])  # Decode first frequency
+            reconstruction_error = torch.sum((x - x_hat) ** 2, dim=1)
 
-        # Step 1: Extract shiny indicators from environments with shiny objects
-        shiny_locs = torch.stack([torch.tensor(loc["shiny"], dtype=torch.float, device=mu_g[0].device) for loc in locations if loc["shiny"] is not None]).unsqueeze(-1)
+        # Concatenate quality indicators: [||g||², reconstruction_error]
+        quality_features = [
+            torch.cat(
+                [
+                    torch.sum(g**2, dim=1, keepdim=True),  # Norm indicator
+                    reconstruction_error.unsqueeze(1),  # Reconstruction indicator
+                ],
+                dim=1,
+            )
+            for g in mu_g_mem
+        ]
 
-        # Step 2: Determine number of OVC modules
+        # Predict base uncertainty from quality via MLP
+        sigma_base = self.mlp_sigma_g_mem(quality_features)
+
+        # Apply scheduling offset to control memory influence
+        # Higher offset → higher sigma → lower precision → less influence
+        sigma_scheduled = [sigma + self._compute_memory_scheduling() for sigma in sigma_base]
+
+        return sigma_scheduled
+
+    def _compute_memory_scheduling(self) -> float:
+        """Compute current memory scheduling offset.
+
+        Returns larger values during early training to reduce memory influence.
+        As training progresses, offset decreases to allow stronger memory integration.
+
+        Returns:
+            Scheduling offset to add to memory uncertainty
+        """
+        return self.p2g_scale_offset * self.p2g_sig_val
+
+    def _compute_shiny_estimate(self, locations: List[Dict[str, Any]]) -> Optional[Transition]:
+        """Compute location estimate from salient object cues.
+
+        Shiny objects provide direct location information from environmental features.
+        Only environments with shiny objects receive this estimate, with per-environment
+        masking applied during fusion.
+
+        Args:
+            locations: Environment descriptors with shiny information
+
+        Returns:
+            Shiny object estimate with per-environment masking, or None if no shiny objects
+
+        Theory:
+            Object vector cells encode salient landmark locations directly.
+            This bypasses path integration, providing absolute positioning cues.
+        """
+        # Check which environments have shiny objects
+        shiny_envs = [loc.get("shiny") is not None for loc in locations]
+        if not any(shiny_envs):
+            return None
+
+        # Extract shiny indicators from environments with shiny objects
+        shiny_locs = torch.stack([torch.tensor(loc["shiny"], dtype=torch.float, device=self.g_init[0].device) for loc in locations if loc["shiny"] is not None]).unsqueeze(-1)
+
+        # Determine number of OVC modules
         n_ovc_modules = self.n_f_ovc if self.separate_ovc else self.n_f
 
-        # Step 3: Compute mu_g_shiny and sigma_g_shiny via MLPs
+        # Compute mu_g_shiny and sigma_g_shiny via MLPs
         mu_g_shiny = self.mlp_mu_g_shiny([shiny_locs] * n_ovc_modules)
         sigma_g_shiny = self.mlp_sigma_g_shiny([shiny_locs] * n_ovc_modules)
 
-        # Step 4: Take absolute for object vector cells (legacy: OVCs are positive)
+        # Take absolute for object vector cells (legacy: OVCs are positive)
         mu_g_shiny = [torch.abs(mu) for mu in mu_g_shiny]
 
-        # Step 5: Apply clamp and leaky_relu (like grounded location activation)
+        # Apply clamp and leaky_relu (like grounded location activation)
         mu_g_shiny = self._apply_grounded_activation(mu_g_shiny)
 
-        # Step 6: Determine which frequency modules are affected (separate_ovc config)
+        # Build full estimate with masking for non-shiny environments
         module_start = self.n_f_g if self.separate_ovc else 0
+        batch_size = len(locations)
 
-        # Step 7: Precision-weighted fusion only for affected modules and environments
-        # Make copies to avoid in-place modification
-        mu_g_fused = [mu.clone() for mu in mu_g]
-        sigma_g_fused = [sigma.clone() for sigma in sigma_g]
+        # Initialize with zeros for all environments and frequencies
+        mu_g_full = [torch.zeros(batch_size, self.n_g[f], device=self.g_init[0].device) for f in range(self.n_f)]
+        sigma_g_full = [torch.ones(batch_size, self.n_g[f], device=self.g_init[0].device) * 1e6 for f in range(self.n_f)]  # High uncertainty for non-shiny
 
+        # Fill in shiny estimates only for affected modules
         for f in range(module_start, self.n_f):
-            # Get shiny module index (offset by module_start)
             shiny_idx = f - module_start
+            mu_g_full[f][shiny_envs, :] = mu_g_shiny[shiny_idx]
+            sigma_g_full[f][shiny_envs, :] = sigma_g_shiny[shiny_idx]
 
-            # Fuse only for environments with shiny objects
-            mu_fused, sigma_fused = self._precision_weighted_mean([mu_g[f][shiny_envs, :], mu_g_shiny[shiny_idx]], [sigma_g[f][shiny_envs, :], sigma_g_shiny[shiny_idx]])
-
-            # Step 8: Use masked_scatter to update only shiny environments
-            mask = torch.zeros_like(mu_g[f], dtype=torch.bool)
-            mask[shiny_envs, :] = True
-            mu_g_fused[f] = mu_g_fused[f].masked_scatter(mask, mu_fused)
-            sigma_g_fused[f] = sigma_g_fused[f].masked_scatter(mask, sigma_fused)
-
-        return (mu_g_fused, sigma_g_fused)
+        return Transition(mean=mu_g_full, uncertainty=sigma_g_full)
 
     def _apply_grounded_activation(self, p: List[Tensor]) -> List[Tensor]:
         """Apply grounded location activation (clamp + leaky_relu).
@@ -280,39 +327,3 @@ class AbstractLocInference(nn.Module):
             Activated tensors with clamp and leaky_relu applied
         """
         return [torch.nn.functional.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p]
-
-    def _precision_weighted_mean(self, means: List[Tensor], sigmas: List[Tensor]) -> Tuple[Tensor, Tensor]:
-        """Compute precision-weighted mean of multiple estimates.
-
-        Fuses multiple Gaussian estimates by weighting each by its precision
-        (inverse variance). This is the optimal linear combination under
-        Gaussian assumptions.
-
-        Args:
-            means: List of mean estimates [mu_1, mu_2, ...]
-            sigmas: List of uncertainty estimates [sigma_1, sigma_2, ...]
-
-        Returns:
-            (mu_fused, sigma_fused): Combined mean and uncertainty
-
-        Theory:
-            Given multiple Gaussian estimates N(mu_i, sigma_i^2):
-            precision_i = 1 / sigma_i^2
-            mu_fused = sum(precision_i * mu_i) / sum(precision_i)
-            sigma_fused = 1 / sqrt(sum(precision_i))
-        """
-        # Stack estimates along first dimension
-        mus_stacked = torch.stack(means, dim=0)  # [n_sources, ...]
-        sigmas_stacked = torch.stack(sigmas, dim=0)  # [n_sources, ...]
-
-        # Compute precisions (inverse variance)
-        precisions = 1.0 / (sigmas_stacked**2)  # [n_sources, ...]
-
-        # Precision-weighted mean
-        total_precision = torch.sum(precisions, dim=0)  # [...]
-        weighted_mean = torch.sum(precisions * mus_stacked, dim=0) / total_precision  # [...]
-
-        # Combined uncertainty
-        combined_sigma = 1.0 / torch.sqrt(total_precision)  # [...]
-
-        return weighted_mean, combined_sigma

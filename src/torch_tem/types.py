@@ -99,13 +99,28 @@ Theory:
     organized into modules with different spatial frequencies.
 """
 
-Transition = Tuple[AbstractLocation, AbstractLocation]
-"""Transition prediction containing (mean/sample, uncertainty).
 
-Structure:
-    - First element: Predicted abstract location (g_gen)
-    - Second element: Uncertainty of prediction (sigma_g)
-"""
+@dataclass(frozen=True)
+class Transition:
+    """Probabilistic abstract location estimate with uncertainty quantification.
+
+    Represents a Gaussian estimate of abstract location across multiple
+    frequency modules. Each frequency has independent mean and uncertainty.
+
+    Attributes:
+        mean: Predicted abstract location per frequency [List of (B, n_g[f])]
+        uncertainty: Prediction uncertainty (sigma) per frequency [List of (B, n_g[f])]
+
+    Theory:
+        The transition model produces Gaussian estimates for path integration.
+        Uncertainty is used to weight fusion with memory and sensory cues
+        via precision (1/σ²) weighting. See torch_tem.utils.fusion for
+        fusion algorithms.
+    """
+
+    mean: AbstractLocation
+    uncertainty: AbstractLocation
+
 
 GroundedLocation = MultiScaleCode
 """Grounded place cell representation (p) from memory retrieval.

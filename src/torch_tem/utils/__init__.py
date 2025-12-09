@@ -1,5 +1,6 @@
 """Utility functions for torch_tem package."""
 
+from .fusion import fuse_transitions, precision_weighted_mean, sample_transition
 from .layouts import compute_graph_layout
 from .masks import create_g_connections, create_p_retrieve_mask, create_p_update_mask
 from .matrices import (
@@ -15,6 +16,9 @@ from .matrices import (
 )
 
 __all__ = [
+    "fuse_transitions",
+    "precision_weighted_mean",
+    "sample_transition",
     "compute_snr_db",
     "create_W_repeat",
     "create_W_tile",

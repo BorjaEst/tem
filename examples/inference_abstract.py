@@ -330,7 +330,7 @@ if __name__ == "__main__":
         g_inf_history.append(g_inf)
 
         # Track precisions for visualization (extract from transition)
-        mu_g_gen, sigma_g_gen = transition
+        mu_g_gen, sigma_g_gen = transition.mean, transition.uncertainty
         precisions = {"transition": [1.0 / (sigma_g_gen[f] ** 2 + 1e-8) for f in range(model_config.n_f)]}
         if config.use_p_inf:
             # Approximate memory uncertainty from p2g schedule

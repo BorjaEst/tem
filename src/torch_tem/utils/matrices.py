@@ -76,6 +76,62 @@ def create_g_downsample(n_g: List[int], n_g_subsampled: List[int]) -> List[Matri
     return [torch.cat([torch.eye(dim_out, dtype=torch.float), torch.zeros((dim_in - dim_out, dim_out), dtype=torch.float)]) for dim_in, dim_out in zip(n_g, n_g_subsampled)]
 
 
+def create_W_random_projection(n_g: List[int], n_p: List[int], sparsity: float = 1.0, seed: Optional[int] = None) -> List[Matrix]:
+    """Create random fixed projection matrices from entorhinal cortex to hippocampus.
+
+    Biologically-inspired alternative to downsampling + W_repeat expansion.
+    Models the random connectivity from EC (grid cells) to HPC (place cells)
+    as observed in experimental data and used in CAN models (Chandra et al. 2025).
+
+    This replaces the two-step structured transformation:
+        g → downsample → g_ → W_repeat expansion → hippocampal space
+    With a single direct random projection:
+        g → W_random → hippocampal space
+
+    The random projection is fixed (non-learnable) and can be sparse to match
+    biological connectivity patterns (~10-20% in real circuits).
+
+    Args:
+        n_g: Full abstract location dimensions per frequency (EC grid cells)
+        n_p: Grounded location dimensions per frequency (HPC place cells)
+        sparsity: Connection probability (1.0 = fully connected, 0.1 = 10% connectivity)
+        seed: Random seed for reproducibility (optional)
+
+    Returns:
+        List of random projection matrices [n_g[f], n_p[f]], one per frequency module
+
+    Example:
+        >>> n_g = [36, 30, 24]  # Grid cell dimensions
+        >>> n_p = [96, 80, 64]  # Place cell dimensions
+        >>> W_random = create_W_random_projection(n_g, n_p, sparsity=0.15)
+        >>> # Use in projection head:
+        >>> g_ = [g[f] @ W_random[f] for f in range(n_f)]
+
+    References:
+        Chandra et al. (2025). "Episodic and associative memory from spatial
+        scaffolds in the hippocampus." CAN model architecture.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    matrices = []
+    for g_dim, p_dim in zip(n_g, n_p):
+        # Random Gaussian initialization scaled by input dimension
+        # This ensures variance is maintained across the projection
+        W = torch.randn(g_dim, p_dim, dtype=torch.float) / np.sqrt(g_dim)
+
+        # Apply sparsity mask if requested
+        if sparsity < 1.0:
+            mask = torch.rand(g_dim, p_dim) < sparsity
+            W = W * mask.float()
+            # Rescale to maintain expected magnitude after sparsification
+            W = W / np.sqrt(sparsity)
+
+        matrices.append(W)
+
+    return matrices
+
+
 def create_two_hot_table(n_x: int, n_x_c: int) -> List[Vector]:
     """Create two-hot encoding lookup table.
 

@@ -42,6 +42,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from torch_tem.core.mlp import MLP
+from torch_tem.core.projection import ProjectionHead
 from torch_tem.types import AbstractLocation, GroundedLocation, Matrix, SensoryObservation, Transition
 from torch_tem.utils.fusion import fuse_transitions, sample_transition
 
@@ -78,12 +79,12 @@ class AbstractLocInference(nn.Module):
         the decision to the caller.
     """
 
-    def __init__(self, params: AbstractLocParams, W_repeat: List[Matrix], decoder: Callable):
+    def __init__(self, params: AbstractLocParams, projection: ProjectionHead, decoder: Callable):
         """Initialize abstract location inference.
 
         Args:
             params: Architecture configuration (n_f, n_g, n_g_subsampled, g_init_std, g_mem_std, p2g_scale_offset, p2g_sig_val)
-            W_repeat: Projection matrices for p_x -> g_downsampled transformation
+            projection: Projection module for p_x -> g_downsampled transformation
             decoder: Decoder function (p -> x) for reconstruction error computation
         """
         super().__init__()
@@ -97,8 +98,8 @@ class AbstractLocInference(nn.Module):
         self.n_f_g = params.n_f_g
         self.n_f_ovc = params.n_f_ovc
 
-        # Store projection matrices and decoder
-        self.W_repeat = W_repeat
+        # Store projection module and decoder
+        self.projection = projection
         self.decoder = decoder
 
         # MLPs for memory-based g inference
@@ -171,19 +172,16 @@ class AbstractLocInference(nn.Module):
         """Compute memory-based location estimate with quality-dependent uncertainty.
 
         Maps retrieved grounded location p_x to abstract location g via:
-            1. Project: reshape p_x and take mean over sensory dimension → g_downsampled
+            1. Project: p_x → g_downsampled (via projection.inverse_project())
             2. Upsample: g_downsampled → mu_g_mem (via MLP)
             3. Quality: reconstruction_error(x, decode(p_x)) → sigma_g_mem
             4. Schedule: sigma_g_mem += memory_offset (controls influence)
 
         Note:
-            Uses mean instead of sum for projection (p_x → g_downsampled) for:
-            - Better numerical stability (values don't scale with n_x_f)
-            - Scale invariance (independent of sensory dimension)
-            - Improved gradient properties (smaller, more stable gradients)
-
-            This matches the original TensorFlow implementation and provides
-            better practical performance than sum-based projection.
+            The projection module's inverse_project() handles the p→g transformation.
+            This delegates the implementation details (mean vs sum, matrix operations)
+            to the projection module, ensuring consistency across the codebase.
+            The current implementation matches the original TensorFlow behavior.
 
         Args:
             p_x: Retrieved grounded location from memory (None if unavailable)
@@ -203,10 +201,9 @@ class AbstractLocInference(nn.Module):
             return None
 
         # Step 1: Project retrieved location to downsampled abstract space
-        # Use mean over sensory dimension for better numerical stability
-        batch_size = p_x[0].shape[0]
-        n_x_f = [self.W_repeat[f].shape[1] // self.n_g_subsampled[f] for f in range(self.n_f)]
-        g_downsampled = [p_x[f].view(batch_size, self.n_g_subsampled[f], n_x_f[f]).mean(dim=2) for f in range(self.n_f)]
+        # Use projection module's inverse_project() which implements the p→g transformation
+        # matching the original TensorFlow implementation (mean over sensory dimension)
+        g_downsampled = self.projection.inverse_project(p_x)
 
         # Step 2: Upsample to full abstract location via learned MLP
         mu_g_mem = self.mlp_mu_g_mem(g_downsampled)

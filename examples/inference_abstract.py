@@ -241,15 +241,17 @@ if __name__ == "__main__":
 
         return x_approx, x_logits
 
-    # Abstract location inference with required dependencies
-    abstract = AbstractLocInference(model_config, W_repeat, decoder)
-    print(f"  ✓ AbstractLocInference: precision-weighted fusion with deterministic decoder")
+    # Projection head for g↔p transformations
+    projection = ProjectionHead(model_config, g_downsampled, W_repeat)
+    print(f"  ✓ ProjectionHead: downsampling + expansion (g↔p transformations)")
     print(f"    - W_repeat: {[W.shape for W in W_repeat]}")
-    print(f"    - Decoder: p[0] ({model_config.n_p[0]}) → x ({model_config.n_x}) [uniform baseline, no training]")
+    print(f"    - Handles: downsample, expand, inverse_project")
 
-    # Projection head for downsampling
-    projection = ProjectionHead(model_config, g_downsampled)
-    print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
+    # Abstract location inference with required dependencies
+    abstract = AbstractLocInference(model_config, projection, decoder)
+    print(f"  ✓ AbstractLocInference: precision-weighted fusion with deterministic decoder")
+    print(f"    - Uses projection.inverse_project() for p→g transformation")
+    print(f"    - Decoder: p[0] ({model_config.n_p[0]}) → x ({model_config.n_x}) [uniform baseline, no training]")
     print()
 
     # =========================================================================

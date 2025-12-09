@@ -98,8 +98,11 @@ class ProjectionHead(nn.Module):
         """Project from grounded location (p) back to abstract location space (g).
 
         This implements the reverse transformation p → g used in the memory inference path,
-        where hippocampal place cell patterns are projected back to grid cell space via
-        the transpose of the W_repeat matrix (sum over sensory preferences).
+        where hippocampal place cell patterns are projected back to grid cell space by
+        taking the mean over sensory preferences (sensory dimension).
+
+        Implementation uses reshape + mean, matching the original TensorFlow implementation.
+        This provides better numerical stability than sum-based projection.
 
         Args:
             p: Grounded location [n_f] of [B, n_p[f]]
@@ -107,13 +110,29 @@ class ProjectionHead(nn.Module):
         Returns:
             g_downsampled: Projected abstract location [n_f] of [B, n_g_subsampled[f]]
 
-        Note:
-            This does NOT apply inverse Laplacian transform. The original TEM stores
-            transformed g in memory (via g2g_), so the retrieval from memory already
-            includes the transform implicitly. The transpose W_repeat^T provides the
-            geometric inverse (sum over sensory dimensions).
+        Theory:
+            The W_repeat matrix has structure: kron(eye(n_g), ones(1, n_x))
+            This means p has shape [B, n_g_subsampled * n_x_f].
+            Reshaping to [B, n_g_subsampled, n_x_f] and taking mean over dim=2
+            gives the average activation per grid cell across sensory preferences.
+
+            Original TensorFlow used tf.reduce_mean, which we replicate here.
+            Jacob's PyTorch port used W_repeat^T (sum), which differs from original.
         """
-        return [torch.matmul(p[f], self.W_repeat[f].t().to(p[f].device)) for f in range(self.n_f)]
+        batch_size = p[0].shape[0]
+        n_x_f = [self.W_repeat[f].shape[1] // self._get_n_g_subsampled(f) for f in range(self.n_f)]
+        return [p[f].view(batch_size, self._get_n_g_subsampled(f), n_x_f[f]).mean(dim=2) for f in range(self.n_f)]
+
+    def _get_n_g_subsampled(self, f: int) -> int:
+        """Get n_g_subsampled for frequency f from W_repeat dimensions.
+
+        Args:
+            f: Frequency module index
+
+        Returns:
+            n_g_subsampled[f]: Number of downsampled grid cells for this frequency
+        """
+        return self.W_repeat[f].shape[0]
 
     def forward(self, g: AbstractLocation) -> MultiScaleCode:
         """Complete g→g_ transformation: downsample then expand to place cell space.

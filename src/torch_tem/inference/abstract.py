@@ -171,10 +171,19 @@ class AbstractLocInference(nn.Module):
         """Compute memory-based location estimate with quality-dependent uncertainty.
 
         Maps retrieved grounded location p_x to abstract location g via:
-            1. Project: p_x @ W_repeat^T → g_downsampled
+            1. Project: reshape p_x and take mean over sensory dimension → g_downsampled
             2. Upsample: g_downsampled → mu_g_mem (via MLP)
             3. Quality: reconstruction_error(x, decode(p_x)) → sigma_g_mem
             4. Schedule: sigma_g_mem += memory_offset (controls influence)
+
+        Note:
+            Uses mean instead of sum for projection (p_x → g_downsampled) for:
+            - Better numerical stability (values don't scale with n_x_f)
+            - Scale invariance (independent of sensory dimension)
+            - Improved gradient properties (smaller, more stable gradients)
+
+            This matches the original TensorFlow implementation and provides
+            better practical performance than sum-based projection.
 
         Args:
             p_x: Retrieved grounded location from memory (None if unavailable)
@@ -194,7 +203,10 @@ class AbstractLocInference(nn.Module):
             return None
 
         # Step 1: Project retrieved location to downsampled abstract space
-        g_downsampled = [p_x[f] @ self.W_repeat[f].t() for f in range(self.n_f)]
+        # Use mean over sensory dimension for better numerical stability
+        batch_size = p_x[0].shape[0]
+        n_x_f = [self.W_repeat[f].shape[1] // self.n_g_subsampled[f] for f in range(self.n_f)]
+        g_downsampled = [p_x[f].view(batch_size, self.n_g_subsampled[f], n_x_f[f]).mean(dim=2) for f in range(self.n_f)]
 
         # Step 2: Upsample to full abstract location via learned MLP
         mu_g_mem = self.mlp_mu_g_mem(g_downsampled)

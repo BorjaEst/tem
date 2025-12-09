@@ -64,7 +64,7 @@ from torch_tem import data, figures, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.core.projection import ProjectionHead
 from torch_tem.inference.grounded import GroundedLocInference
-from torch_tem.inference.sensory import SensoryEncoder, SensoryProcessor
+from torch_tem.inference.sensory import SensoryEncoder, SensoryProcessor, SensoryProjection
 
 
 # ==============================================================================
@@ -166,14 +166,16 @@ if __name__ == "__main__":
     # Sensory processing
     encoder = SensoryEncoder(model_config, two_hot_table)
     processor = SensoryProcessor(model_config)
+    tiling = SensoryProjection(model_config, W_tile)
     print(f"  ✓ SensoryEncoder: {model_config.n_x} → {model_config.n_x_c} (two-hot)")
     print(f"  ✓ SensoryProcessor: {model_config.n_f} frequency channels")
+    print(f"  ✓ SensoryProjection: x_f → x_ (W_tile expansion + w_p gating)")
 
     # Grounded location inference
-    projection = ProjectionHead(model_config, g_downsampled)
-    grounded = GroundedLocInference(model_config, W_repeat, W_tile)
+    projection = ProjectionHead(model_config, g_downsampled, W_repeat)
+    grounded = GroundedLocInference(model_config)
     print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
-    print(f"  ✓ GroundedLocInference: g ⊗ x → p (outer product)")
+    print(f"  ✓ GroundedLocInference: g_ ⊙ x_ → p (element-wise product)")
     print()
 
     # =========================================================================
@@ -203,15 +205,18 @@ if __name__ == "__main__":
         # Step 2: Temporal filtering → multi-frequency representation
         x_f = processor(x_c, x_prev)  # List[n_f] of [1, n_x_c]
 
-        # Step 3: Get synthetic grid cells at time t (simulating abstract location)
-        g_t, _ = transition_history[t]  # Unpack Transition to get g (ignore sigma)
+        # Step 3: Expand sensory to place dimensions (W_tile + w_p gating)
+        x_expanded = tiling(x_f)  # List[n_f] of [1, n_p[f]]
 
-        # Step 4: Transform and downsample grid cells
-        g_transformed = projection.transform(g_t)
-        g_downsampled = projection.downsample(g_transformed)
+        # Step 4: Get synthetic grid cells at time t (simulating abstract location)
+        transition = transition_history[t]  # Transition with mean and uncertainty
+        g_t = transition.mean  # Extract mean abstract location
 
-        # Step 5: Compute grounded location via outer product g ⊗ x
-        p_t = grounded(g_downsampled, x_f)  # List[n_f] of [1, n_p[f]]
+        # Step 5: Expand grid cells to place dimensions (transform + downsample + W_repeat)
+        g_expanded = projection(g_t)  # List[n_f] of [1, n_p[f]]
+
+        # Step 6: Compute grounded location via element-wise product
+        p_t = grounded(g_expanded, x_expanded)  # List[n_f] of [1, n_p[f]]
 
         # Store history (extract batch dimension for single-trajectory storage)
         x_c_history.append(x_c[0])
@@ -249,8 +254,9 @@ if __name__ == "__main__":
 
     # Plot 5: Outer product structure (mid-point)
     mid_point = config.walk_length // 2
-    g_mid, _ = transition_history[mid_point]  # Unpack Transition to get g
-    g_mid_downsampled = projection.downsample(projection.transform(g_mid))
+    transition_mid = transition_history[mid_point]  # Get Transition at mid-point
+    g_mid = transition_mid.mean  # Extract mean abstract location
+    g_mid_downsampled = projection.downsample(g_mid)  # Just downsample for plotting
     g_sample = [g_mid_downsampled[f][0] for f in range(model_config.n_f)]
     fig5 = figures.plot_outer_product_structure(g_sample, x_f_history[mid_point], p_history[mid_point], model_config.f_extended)
     if config.save_plots:
@@ -271,12 +277,14 @@ if __name__ == "__main__":
     print(f"  ↓ SensoryEncoder (two-hot)")
     print(f"Stage 1: {model_config.n_x_c}-dim compressed sensory (x_c)")
     print(f"  ↓ SensoryProcessor ({model_config.n_f} frequencies)")
-    print(f"Stage 2: Multi-frequency filtered sensory (x_f)")
+    print(f"Stage 2: Multi-frequency filtered sensory (x_f) - {model_config.n_x_c} per freq")
+    print(f"  ↓ SensoryProjection (W_tile expansion + w_p gating)")
+    print(f"Stage 3: Expanded sensory (x_) - {model_config.n_p}")
     print(f"  ↓ Synthetic grid cell generation")
-    print(f"Stage 3: Abstract location (g) - {model_config.n_g}")
-    print(f"  ↓ ProjectionHead (transform + downsample)")
-    print(f"Stage 4: Downsampled abstract (g_sub) - {model_config.n_g_subsampled_combined}")
-    print(f"  ↓ GroundedLocInference (g ⊗ x_f)")
+    print(f"Stage 4: Abstract location (g) - {model_config.n_g}")
+    print(f"  ↓ ProjectionHead (transform + downsample + W_repeat expansion)")
+    print(f"Stage 5: Expanded abstract (g_) - {model_config.n_p}")
+    print(f"  ↓ GroundedLocInference (g_ ⊙ x_ element-wise product)")
     print(f"Output: Final grounded location (p) - {model_config.n_p}")
     print("=" * 80)
     print()

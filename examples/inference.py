@@ -187,13 +187,13 @@ if __name__ == "__main__":
 
     # Sensory projection to p-space
     sensory_projection = SensoryProjection(model_config, W_tile)
-    print(f"  ✓ SensoryProjection: x_f → ~x (W_tile transformation to p-space)")
+    print(f"  ✓ SensoryProjection: x_f → x_ (W_tile expansion + w_p gating)")
 
     # Grounded location inference
-    projection = ProjectionHead(model_config, g_downsample)
-    grounded = GroundedLocInference(model_config, W_repeat, W_tile)
-    print(f"  ✓ ProjectionHead: Laplacian transform + downsampling")
-    print(f"  ✓ GroundedLocInference: g ⊗ x → p (includes W_tile internally)")
+    projection = ProjectionHead(model_config, g_downsample, W_repeat)
+    grounded = GroundedLocInference(model_config)
+    print(f"  ✓ ProjectionHead: Laplacian transform + downsampling + expansion")
+    print(f"  ✓ GroundedLocInference: g_ ⊙ x_ → p (element-wise product)")
 
     # Memory system
     storage = MemoryStorage(model_config, p_update_mask)
@@ -260,9 +260,9 @@ if __name__ == "__main__":
         #   - g_gen (from transition/generative model: path integration + action)
         #   - g_mem (from p_x via learned MLP projection p→g)
 
-        # Project p_x to downsampled grid cell space using W_repeat^T
+        # Project p_x to downsampled grid cell space using inverse projection
         # This "sums over sensory preferences" to collapse place cells to grid cells
-        g_downsampled = projection.inverse_project(p_x, W_repeat)  # List[n_f] of [1, n_g_sub[f]]
+        g_downsampled = projection.inverse_project(p_x)  # List[n_f] of [1, n_g_sub[f]]
 
         # AbstractLocInference performs:
         # 1. Apply learned MLP: g_mem = f_mu_g_mem(g_downsampled)
@@ -276,14 +276,16 @@ if __name__ == "__main__":
         g = g_prev = abstract(transition, g_downsampled, shiny_signals=None, p2g_scale_offset=0.5)
         g_history.append(g)
 
-        # Step 6 (Manuscript): Entorhinal input to hippocampus ~g = W_repeat·f_down(g)
-        g_ = projection.transform(g)
-        g_ = projection.downsample(g_)  # ~g (downsampled)
-        g__history.append(g_)
+        # Step 6 (Manuscript): Entorhinal input to hippocampus g_ = projection(g)
+        # This performs downsample + W_repeat expansion to place cell dimensions
+        g_ = projection(g)  # List[n_f] of [1, n_p[f]]
+        g__history.append([g[0] for g in g_])
 
-        # Step 7 (Manuscript): Infer hippocampus p ~ N(μ = f_p(~g ⊗ ~x), σ = f(~x, ~g))
-        # The outer product ~g ⊗ ~x forms the conjunctive representation
-        p = grounded(g_, x_f)  # List[n_f] of [1, n_p[f]]
+        # Step 7 (Manuscript): Infer hippocampus p ~ N(μ = f_p(g_ ⊙ x_), σ = f(x_, g_))
+        # The element-wise product g_ ⊙ x_ forms the conjunctive representation
+        # Note: x_ was already expanded to place dimensions in Step 3
+        x_expanded = utils.split_to_frequencies(x_, model_config.n_p)  # Split back to list
+        p = grounded(g_, x_expanded)  # List[n_f] of [1, n_p[f]]
         p_history.append([p[0] for p in p])
         p = utils.concatenate_frequencies(p)  # [1, sum(n_p)]
 

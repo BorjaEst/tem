@@ -59,7 +59,8 @@ class Projection(nn.Module):
         self.n_p = params.n_p
 
         # Register tiling matrices as buffers for automatic device management
-        W_tile = utils.create_W_tile(params.n_x_f, params.n_g_subsampled_combined)
+        # W_tile matrices expand sensory from n_x_f to n_p (n_g_subsampled × n_x_f)
+        W_tile = utils.create_W_tile(params.n_g_subsampled_combined, params.n_x_f)
         for i, matrix in enumerate(W_tile):
             self.register_buffer(f"W_tile_{i}", matrix)
 
@@ -108,8 +109,9 @@ class Projection(nn.Module):
             scales are most informative for spatial navigation and memory tasks.
 
         Mathematical Operation:
-            x̃[f] = sigmoid(w_p[f]) * (x_f[f] @ W_tile[f]^T)
+            x̃[f] = sigmoid(w_p[f]) * (x_f[f] @ W_tile[f])
             where x̃[f] ∈ ℝ^(batch × n_p[f]) and x_f[f] ∈ ℝ^(batch × n_x_f[f])
+            W_tile[f] ∈ ℝ^(n_x_f[f] × n_p[f]) created via Kronecker product
 
         Args:
             x_f: Normalized sensory representations, List[n_f] of (batch, n_x_f[f]).
@@ -118,7 +120,7 @@ class Projection(nn.Module):
             Tiled sensory representations, List[n_f] of (batch, n_p[f]).
                 Ready for outer product with grid cells to form place cells.
         """
-        return [torch.sigmoid(self.w_p[f]) * x_f[f] @ self.get_tile_matrix(f).T for f in range(self.n_f)]
+        return [torch.sigmoid(self.w_p[f]) * x_f[f] @ self.get_tile_matrix(f) for f in range(self.n_f)]
 
     def forward(self, x_f: MultiScaleCode) -> MultiScaleCode:
         """Project filtered sensory to hippocampal space: x_f → x̃.

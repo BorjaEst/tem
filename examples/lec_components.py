@@ -51,11 +51,12 @@ Usage Examples:
 
 Outputs:
 --------
-When save_plots=true, generates 4 visualizations in outputs/inference_sensory/:
-    1. 01_frequency_bank.png - Frequency channel configuration
+When save_plots=true, generates 5 visualizations in outputs/inference_sensory/:
+    1. 01_frequency_bank.png - Frequency channel configuration and time constants
     2. 02_temporal_filtering.png - Temporal filtering heatmaps across all frequencies
     3. 03_frequency_comparison.png - Single feature comparison across frequencies
     4. 04_normalization_effects.png - Before/after normalization effects
+    5. 05_sensory_projection.png - Projection to hippocampal p-space over time
 """
 
 from pathlib import Path
@@ -222,9 +223,11 @@ if __name__ == "__main__":
         x_f = processor(x_c, x_prev)  # [1, n_x_c] → List[n_f] of [1, n_x_c]
         x_f_history.append([x[0] for x in x_f])  # List[n_f] of [1, n_x_c] → List[n_f] of [n_x_c]
 
-        # Step 3: Projection to hippocampus (not used in this example)
-        x_ = projection(x_f)  # List[n_f] of [1, n_x_f] → [1, sum(n_p)]
-        x__history.append(x_[0])  # [1, sum(n_p)] → List[n_f] of [sum(n_p)]
+        # Step 3: Projection to hippocampus → tiled sensory ready for outer product
+        # Projection applies normalization, tiling, and frequency weighting
+        # x̃[f] = sigmoid(w_p[f]) * (normalize(x_f[f]) @ W_tile[f]^T)
+        x_ = projection(x_f)  # List[n_f] of [1, n_x_c] → List[n_f] of [1, n_p[f]]
+        x__history.append([x[0] for x in x_])  # List[n_f] of [1, n_p[f]] → List[n_f] of [n_p[f]]
 
         # Update previous state for next timestep
         x_prev = x_f
@@ -243,9 +246,9 @@ if __name__ == "__main__":
     x_c_demo = encoder(observations_stacked[midpoint : midpoint + 5])  # [5, n_x_c]
     x_prev_demo = [torch.zeros(5, model_config.n_x_c) for _ in range(model_config.n_f)]
 
-    # Compare raw filtering vs normalized filtering
+    # Compare raw filtering vs normalized filtering (using projection.normalize)
     x_f_raw = processor.filter_temporal(x_c_demo, x_prev_demo)  # Raw exponential smoothing only
-    x_f_normalized = processor(x_c_demo, x_prev_demo)  # Full pipeline (smoothing + normalization)
+    x_f_normalized = projection.normalize(x_f_raw)  # Projection normalization (demean + ReLU + L2)
 
     # Plot 1: Frequency bank configuration
     fig1 = figures.plot_frequency_bank(model_config.f_extended)
@@ -271,20 +274,40 @@ if __name__ == "__main__":
         fig4.savefig(config.output_dir / "04_normalization_effects.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 04_normalization_effects.png")
 
-    # TODO Add some visualization for the projection to the hippocampus
+    # Plot 5: Projection to hippocampal p-space over time
+    # Shows the tiled sensory representation ready for conjunction with grid cells
+    fig5 = figures.plot_sensory_projection(
+        x__history,
+        n_p_per_freq=model_config.n_p,
+        title="LEC → Hippocampus Projection: Sensory in p-space (x̃)",
+    )
+    if config.save_plots:
+        fig5.savefig(config.output_dir / "05_sensory_projection.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 05_sensory_projection.png")
 
     print()
     print("=" * 80)
-    print("Pipeline Summary:")
+    print("LEC Sensory Processing Pipeline Summary")
     print("=" * 80)
     print(f"Input:  {model_config.n_x}-dim observations ({config.observation_mode} mode)")
-    print(f"  ↓ SensoryEncoder (two-hot)")
+    print(f"  ↓ LEC Encoder (two-hot compression)")
     print(f"Stage 1: {model_config.n_x_c}-dim compressed sensory (x_c)")
-    print(f"  ↓ SensoryProcessor ({model_config.n_f} frequencies)")
-    print(f"Stage 2: Multi-frequency filtered sensory (x_f)")
+    print(f"  ↓ LEC Processor ({model_config.n_f} frequencies: {model_config.f_initial})")
+    print(f"Stage 2: Multi-frequency filtered sensory (x_f) - List[{model_config.n_f}] of [batch, {model_config.n_x_c}]")
+    print(f"  ↓ LEC Projection (tiling + weighting)")
+    print(f"Stage 3: Hippocampal-ready sensory (x̃) - List[{model_config.n_f}] of [batch, n_p[f]]")
+    print(f"         Dimensions per frequency: {model_config.n_p}")
+    print(f"         Total hippocampal dimension: {sum(model_config.n_p)}")
     print("=" * 80)
     print()
-    print(f"All outputs saved to: {config.output_dir}")
+    print("TEM Theory:")
+    print("  • LEC provides sensory 'what' information to hippocampus")
+    print("  • MEC provides spatial 'where' information (grid cells g)")
+    print("  • Hippocampus forms conjunctive codes: p = g ⊗ x̃ ('where × what')")
+    print("  • Multi-frequency filtering enables temporal credit assignment")
+    print("=" * 80)
+    print()
+    print(f"All {5 if config.save_plots else 0} visualizations saved to: {config.output_dir}")
 
     # Show or close plots
     if config.show_plots:

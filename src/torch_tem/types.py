@@ -17,7 +17,7 @@ Multi-Scale Representations:
     - GroundedLocation: Grounded place cell code (p) from memory retrieval
 
 Sensory Input:
-    - SensoryObservation: Ground-truth sensory observation (x) as single tensor
+    - Observation: Ground-truth sensory observation (x) as single tensor
 
 Memory Structures:
     - HebbianMemory: Attractor network connection weights
@@ -135,7 +135,7 @@ Theory:
     locations is learned through Hebbian plasticity.
 """
 
-SensoryObservation = Tensor
+Observation = Tensor
 """Ground-truth sensory observation (x) from the environment.
 
 The sensory observation represents the actual sensory input received
@@ -275,32 +275,6 @@ class Trajectory:
         """Iterate over steps in the trajectory."""
         return iter(self.steps)
 
-
-# =============================================================================
-# Transition Dynamics
-# =============================================================================
-
-
-@dataclass
-class TransitionParams:
-    """Parameters for the transition model (path integration).
-
-    Attributes:
-        mean: Mean of the predicted abstract location
-        uncertainty: Uncertainty (sigma) of the prediction
-
-    Theory:
-        The transition model predicts the next abstract location based on
-        the previous location and action. The uncertainty quantifies
-        prediction confidence and is used to weight inference and generation.
-    """
-
-    mean: AbstractLocation
-    uncertainty: AbstractLocation
-
-
-TransitionOutput = Tuple[AbstractLocation, TransitionParams]
-"""Output from transition model: (g_gen, (g_gen_mu, sigma_gen))."""
 
 # =============================================================================
 # Batch Processing

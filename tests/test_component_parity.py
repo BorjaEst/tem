@@ -87,8 +87,7 @@ def _copy_weights(legacy: LegacyModel, refactored: TEMModel, params: dict):
         # 2. Transition (MLP_D_a, D_no_a, MLP_sigma_g_path)
         print("DEBUG: Copying MLP_D_a...")
         # MLP_D_a needs input dimension expansion (4D → 5D) for gym-standard actions
-        _copy_mlp(legacy.MLP_D_a, refactored.generative.transition.MLP_D_a,
-                  expand_input_dim=True, has_static_action=params["has_static_action"])
+        _copy_mlp(legacy.MLP_D_a, refactored.generative.transition.MLP_D_a, expand_input_dim=True, has_static_action=params["has_static_action"])
         print("DEBUG: Copying MLP_sigma_g_path...")
         _copy_mlp(legacy.MLP_sigma_g_path, refactored.generative.transition.MLP_sigma_g_path)
         for i in range(len(legacy.D_no_a)):
@@ -131,21 +130,21 @@ def _copy_weights(legacy: LegacyModel, refactored: TEMModel, params: dict):
 
 def _expand_action_weights(legacy_weight, has_static_action=True):
     """Expand action MLP weights from legacy (4D) to gym standard (5D).
-    
+
     Legacy encoding with has_static_action=True:
     - Action 0 → [0,0,0,0] (all zeros, handled by special logic)
     - Action 1-4 → one-hot(0-3) in 4D space
-    
+
     Gym encoding:
     - Action 0-4 → standard one-hot(0-4) in 5D space
-    
+
     To maintain equivalence:
     - Prepend zero column (action 0 = "stay" with no learned transition)
     - Keep remaining columns as-is (action 1-4 map to same movements)
     """
     if not has_static_action:
         return legacy_weight
-    
+
     # Prepend zero column for "stay" action
     zero_column = torch.zeros(legacy_weight.shape[0], 1, device=legacy_weight.device)
     expanded = torch.cat([zero_column, legacy_weight], dim=1)
@@ -154,7 +153,7 @@ def _expand_action_weights(legacy_weight, has_static_action=True):
 
 def _copy_mlp(legacy_mlp, refactored_mlp, expand_input_dim=False, has_static_action=False):
     """Copy weights between MLPs.
-    
+
     Args:
         expand_input_dim: If True, expand input layer from 4D to 5D (for MLP_D_a)
         has_static_action: Whether legacy used special static action encoding
@@ -177,7 +176,7 @@ def _copy_mlp(legacy_mlp, refactored_mlp, expand_input_dim=False, has_static_act
                 refactored_mlp.networks[i][0].weight.data.copy_(expanded_weight)
             else:
                 refactored_mlp.networks[i][0].weight.data.copy_(legacy_weight)
-            
+
             if legacy_mlp.w[i][0].bias is not None:
                 refactored_mlp.networks[i][0].bias.data.copy_(legacy_mlp.w[i][0].bias.data)
 
@@ -196,7 +195,7 @@ def _copy_mlp(legacy_mlp, refactored_mlp, expand_input_dim=False, has_static_act
             refactored_mlp.networks[0][0].weight.data.copy_(expanded_weight)
         else:
             refactored_mlp.networks[0][0].weight.data.copy_(legacy_weight)
-        
+
         if legacy_mlp.w[0][0].bias is not None:
             refactored_mlp.networks[0][0].bias.data.copy_(legacy_mlp.w[0][0].bias.data)
 

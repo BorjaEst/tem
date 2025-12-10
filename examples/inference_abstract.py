@@ -1,61 +1,4 @@
-#!/usr/bin/env python3
-"""Abstract location inference example demonstrating precision-weighted fusion.
-
-This example demonstrates the torch_tem.inference.AbstractLocInference capabilities:
-- Precision-weighted fusion of multiple information sources
-- Transition-based prediction (g_gen) with uncertainty
-- Memory-based inference (p_x → g_mem) via learned projections
-- Salient object ("shiny") signals integration (optional)
-- Scheduled memory influence via p2g_scale_offset
-- Uncertainty estimation from memory quality indicators
-- Source contribution analysis and visualization
-
-Pipeline Stages:
-----------------
-1. Generate synthetic walk trajectory in environment
-2. Process observations through sensory encoder and temporal filtering
-3. Project filtered sensory to hippocampal space
-4. Retrieve patterns from memory via attractor dynamics
-5. Infer abstract location by fusing memory and generative paths
-6. Update memory with Hebbian learning
-7. Visualize precision-weighted fusion and source contributions
-
-Data Flow:
-----------
-    x (observation)
-    → x_c (compressed/two-hot encoding)
-    → x_f (temporal filtering per frequency)
-    → ~x_t (sensory projected to p-space via W_tile)
-    → p_x (hippocampal retrieval from sensory: M^T @ ~x_t)
-    → g_inf (abstract location from p_x and g_gen fusion)
-
-Usage Examples:
----------------
-    # Default: 100 timesteps, memory enabled, save plots
-    python examples/inference_abstract.py
-
-    # Disable memory path, use only transition prediction
-    python examples/inference_abstract.py --use_p_inf false
-
-    # Different grid size and walk length
-    python examples/inference_abstract.py --grid_size 7 --walk_length 150
-
-    # Show plots interactively
-    python examples/inference_abstract.py --show_plots true --save_plots false
-
-    # Full help
-    python examples/inference_abstract.py --help
-
-Outputs:
---------
-When save_plots=true, generates visualizations in outputs/inference_abstract/:
-    1. 01_environment.png - Grid layout
-    2. 02_walk_trajectory.png - Agent trajectory
-    3. 03_source_contributions.png - Precision weights over time
-    4. 04_uncertainty_evolution.png - Uncertainty per source
-    5. 05_g_inf_evolution.png - Abstract location inference
-    6. 06_schedule_effect.png - p2g scheduling influence
-"""
+""" """
 
 from pathlib import Path
 from typing import List, Literal
@@ -105,7 +48,7 @@ class ExampleConfig(BaseSettings):
         return self.grid_size * self.grid_size
 
     # Source configuration
-    use_p_inf: bool = Field(default=True, description="Enable memory-based inference path")
+    use_p_inf: bool = Field(default=True, description="Generate observations to use on inference path")
 
     # Memory configuration
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
@@ -145,7 +88,6 @@ if __name__ == "__main__":
         f_initial=config.f_initial,
         eta=config.eta,
         kappa=config.kappa,
-        use_p_inf=config.use_p_inf,
         p2g_scale_offset=config.p2g_schedule_start,  # Will be updated per timestep
         p2g_sig_val=10000.0,  # Standard value for memory uncertainty magnitude
     )
@@ -223,8 +165,10 @@ if __name__ == "__main__":
         # Project p back to compressed sensory space: x_c_approx = p @ W_tile.T
         x_c_approx = torch.matmul(p_highest_freq, W_tile[0].t())  # [B, n_x_c]
 
-        # Apply sensory transformation
-        x_c_scaled = processor.w_x * x_c_approx + processor.b_x  # [B, n_x_c]
+        # Apply sensory transformation (using default identity/zero for this example)
+        w_x = torch.ones(1, model_config.n_x_c)
+        b_x = torch.zeros(1, model_config.n_x_c)
+        x_c_scaled = w_x * x_c_approx + b_x  # [B, n_x_c]
 
         # Expand from compressed space to full observation space
         # Simple approach: create one-hot-like distribution from two-hot code

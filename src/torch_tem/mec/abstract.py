@@ -44,7 +44,7 @@ from torch import Tensor
 from torch_tem.core.mlp import MLP
 from torch_tem.core.projection import ProjectionHead
 from torch_tem.generation import ObservationDecoder
-from torch_tem.types import AbstractLocation, GroundedLocation, SensoryObservation, Transition
+from torch_tem.types import AbstractLocation, GroundedLocation, Observation, Transition
 from torch_tem.utils.fusion import fuse_transitions, sample_transition
 
 
@@ -121,7 +121,7 @@ class AbstractLocInference(nn.Module):
         self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
         self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
 
-    def forward(self, p_x: Optional[GroundedLocation], g_gen: Transition, x: SensoryObservation, locations: List[Dict[str, Any]]) -> AbstractLocation:
+    def forward(self, p_x: Optional[GroundedLocation], g_gen: Transition, x: Observation, locations: List[Dict[str, Any]]) -> AbstractLocation:
         """Infer abstract location via multi-source Bayesian fusion.
 
         Fusion Pipeline:
@@ -169,7 +169,7 @@ class AbstractLocInference(nn.Module):
         # Return sampled or mean location
         return sample_transition(fused) if self.do_sample else fused.mean
 
-    def _compute_memory_estimate(self, p_x: Optional[GroundedLocation], x: SensoryObservation) -> Optional[Transition]:
+    def _compute_memory_estimate(self, p_x: Optional[GroundedLocation], x: Observation) -> Optional[Transition]:
         """Compute memory-based location estimate with quality-dependent uncertainty.
 
         Maps retrieved grounded location p_x to abstract location g via:
@@ -217,7 +217,7 @@ class AbstractLocInference(nn.Module):
 
         return Transition(mean=mu_g_mem, uncertainty=sigma_g_mem)
 
-    def _compute_memory_uncertainty(self, mu_g_mem: AbstractLocation, x: SensoryObservation, p_x: GroundedLocation) -> AbstractLocation:
+    def _compute_memory_uncertainty(self, mu_g_mem: AbstractLocation, x: Observation, p_x: GroundedLocation) -> AbstractLocation:
         """Compute memory uncertainty from retrieval quality indicators.
 
         Quality indicators (per frequency):

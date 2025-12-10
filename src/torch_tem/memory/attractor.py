@@ -15,100 +15,60 @@ from typing import List, Protocol
 
 import torch
 
+from .. import utils
 from ..types import Matrix, MultiScaleCode
 
 
 class ModelParams(Protocol):
     """Architecture parameters needed by AttractorDynamics."""
 
-    i_attractor: int
-    kappa: float
-    n_p: List[int]
+    i_attractor: int  # Number of attractor iterations
+    kappa: float  # Decay factor for attractor updates
+    n_p: List[int]  # Dimensions of grounded location per frequency
 
 
 class AttractorDynamics:
-    """Attractor-based memory retrieval with hierarchical early-stopping.
+    """Iterative memory retrieval via attractor dynamics.
 
-    In the TEM architecture, attractor dynamics implement content-addressable memory
-    retrieval by iteratively refining a query pattern through matrix multiplication
-    with the learned Hebbian memory matrix. This process converges toward stored
-    patterns, enabling the model to recall spatial relationships and predict locations.
+    Refines grounded location representations by iteratively querying the Hebbian
+    memory matrix. Implements hierarchical coarse-to-fine refinement where low-frequency
+    (coarse spatial) components converge first, followed by high-frequency (fine detail)
+    components.
 
-    The hierarchical masking mechanism implements early-stopping for low-frequency
-    modules first, ensuring coarse spatial representations stabilize before fine-grained
-    details are refined. This mirrors the hierarchical organization of grid cells in
-    the entorhinal cortex, where low-frequency modules have larger spatial scales.
+    The attractor update rule is:
+        p_new = mask * activation(κ * p_old + M @ p_old) + (1-mask) * p_old
 
-    Mathematical formulation:
-        p[t+1] = κ * p[t] + (M^T @ p[t]) * mask[t]
-
-    Where:
-        - p[t]: Current grounded location pattern at iteration t
-        - κ (kappa): Decay term controlling stability (0 < κ < 1)
-        - M: Hebbian memory matrix [sum(n_p), sum(n_p)]
-        - mask[t]: Hierarchical mask enabling progressive refinement
-
-    Attributes:
-        kappa: Decay factor for attractor update (controls stability)
-        i_attractor: Number of attractor iterations (typically equals n_f_g)
-        mask_inf: Hierarchical masks for inference mode retrieval
-        mask_gen: Hierarchical masks for generative mode retrieval
+    where mask progressively enables higher frequencies across iterations.
     """
 
-    def __init__(self, model_params: ModelParams, mask_inf: List[Matrix], mask_gen: List[Matrix]):
+    def __init__(self, params: ModelParams, mask_inf: List[Matrix], mask_gen: List[Matrix]):
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:
-            model_params: Architecture configuration (i_attractor, kappa, n_p)
-            mask_inf: Hierarchical masks for inference retrieval
-            mask_gen: Hierarchical masks for generative retrieval
+            params: Model configuration with kappa, i_attractor, and n_p
+            mask_inf: Hierarchical masks for inference retrieval [i_attractor x sum(n_p)]
+            mask_gen: Hierarchical masks for generative retrieval [i_attractor x sum(n_p)]
         """
-        self.kappa = model_params.kappa
-        self.i_attractor = model_params.i_attractor
-        self.n_p = model_params.n_p
+        self.kappa = params.kappa
+        self.i_attractor = params.i_attractor
+        self.n_p = params.n_p
         self.p_retrieve_mask_inf = mask_inf
         self.p_retrieve_mask_gen = mask_gen
 
     def __call__(self, p_query: MultiScaleCode, M: Matrix, for_inference: bool = False) -> MultiScaleCode:
-        """Retrieve grounded location from memory via iterative attractor dynamics.
-
-        Implements content-addressable memory recall by iteratively refining the query
-        pattern through multiplication with the Hebbian memory matrix. Each iteration
-        applies a hierarchical mask that progressively enables refinement of higher
-        frequency modules, ensuring coarse-to-fine convergence.
-
-        This process is central to TEM's ability to:
-        1. Infer current location from sensory input (inference mode)
-        2. Predict next location from abstract transitions (generative mode)
-        3. Recall stored spatial relationships via associative memory
+        """Retrieve refined grounded location from memory via attractor dynamics.
 
         Args:
-            p_query: Initial query pattern representing grounded location per frequency
-                    List of [B, n_p[f]] tensors (one per frequency module)
-            M: Hebbian memory matrix storing location associations [sum(n_p), sum(n_p)]
-               learned via outer product updates: M = λ*M + η*outer(p_inf, p_gen)
-            for_inference: If True, use inference masks; if False, use generative masks
-                          (inference typically requires more iterations for stable convergence)
+            p_query: Initial query pattern as list of per-frequency tensors [B, n_p_f]
+            M: Hebbian memory matrix [B, sum(n_p), sum(n_p)]
+            for_inference: If True, use inference masks (more conservative early-stopping)
 
         Returns:
-            p_retrieved: Refined grounded location pattern per frequency module.
-                        **Format**: List of [B, n_p[f]] tensors (one per frequency).
-                        Ready for direct use by downstream TEM components.
+            Refined grounded location as list of per-frequency tensors [B, n_p_f]
 
         Note:
-            The hierarchical masking implements the following schedule:
-            - Early iterations: Only low-frequency modules updated (coarse spatial scale)
-            - Middle iterations: Mid-frequency modules gradually enabled
-            - Late iterations: All frequencies active (fine spatial detail)
-
-            This prevents high-frequency noise from destabilizing the coarse spatial
-            representation during early retrieval.
-
-        Example:
-            >>> # Memory retrieval with per-frequency list format
-            >>> p_retrieved = attractor(p_query_list, M_inf, for_inference=True)
-            >>> # Ready for AbstractLocInference
-            >>> g_inf = abstract(g_gen, sigma_gen, p_retrieved, ...)
+            The retrieval is hierarchical: low-frequency (coarse) components stabilize
+            first, providing a stable foundation for high-frequency (fine) refinement.
         """
         # Select appropriate hierarchical masks based on retrieval mode
         retrieve_mask = self.p_retrieve_mask_inf if for_inference else self.p_retrieve_mask_gen
@@ -152,31 +112,36 @@ if __name__ == "__main__":
     """Simple example demonstrating attractor dynamics retrieval.
 
     This example shows how attractor dynamics refine a noisy query pattern
-    by iteratively pulling it toward stored patterns in the memory matrix.
+    by iteratively pulling it toward stored patterns in the memory matrix,
+    using hierarchical coarse-to-fine refinement.
     """
-    import types
+    from torch_tem.config.architecture import ModelConfig
+    from torch_tem.utils.masks import create_p_retrieve_mask
 
-    # Create simple params with required fields
-    params = types.SimpleNamespace(
-        kappa=0.8,
-        i_attractor=3,
-        n_p=[15, 12, 10],  # 3 frequency modules with different dimensions
+    # Create configuration
+    params = ModelConfig(
+        n_g_subsampled=[5, 4, 3],  # 3 frequency modules (coarse to fine)
+        n_x_c=3,  # Compressed sensory dimensions
+        kappa=0.8,  # Attractor decay factor
     )
 
-    # Create simple masks (all ones for this demo)
-    n_p_total = sum(params.n_p)
-    mask_inf = [torch.ones(n_p_total) for _ in range(params.i_attractor)]
-    mask_gen = [torch.ones(n_p_total) for _ in range(params.i_attractor)]
+    # Create hierarchical retrieval masks
+    # Inference: conservative early-stopping (more stable)
+    # Generative: less early-stopping (all frequencies active)
+    mask_inf = create_p_retrieve_mask(params.n_p, params.i_attractor, params.max_freq_inf)
+    mask_gen = create_p_retrieve_mask(params.n_p, params.i_attractor, params.max_freq_gen)
 
     # Initialize attractor dynamics
     attractor = AttractorDynamics(params, mask_inf=mask_inf, mask_gen=mask_gen)
 
     # Create a simple memory matrix (normally learned via Hebbian updates)
     batch_size = 4
+    n_p_total = sum(params.n_p)
 
-    # Random memory matrix (in practice, this is learned during training)
-    M = torch.randn(n_p_total, n_p_total) * 0.01
-    M = M + M.T  # Make symmetric for stable dynamics
+    # Batched memory matrix (in practice, learned during training)
+    M = torch.randn(batch_size, n_p_total, n_p_total) * 0.01
+    # Make approximately symmetric for stable dynamics
+    M = (M + M.transpose(1, 2)) / 2
 
     # Noisy query pattern representing uncertain grounded location (per-frequency list)
     p_query = [torch.randn(batch_size, n_p) * 0.5 for n_p in params.n_p]

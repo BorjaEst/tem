@@ -14,6 +14,8 @@ from ..types import AbstractLocation, Matrix, MultiScaleCode
 class ProjectionParams(Protocol):
     n_f: int  # Total number of frequency modules (grid + optional OVC)
     n_g: List[int]  # Entorhinal abstract location neurons per frequency
+    n_g_subsampled: List[int]  # Subsampled abstract location dimensions per frequency
+    n_x_f: List[int]  # Sensory dimensions per frequency (for hippocampal expansion)
     f_extended: List[float]  # Extended frequency list including OVC modules when they are separate
 
 
@@ -24,12 +26,12 @@ class Projection(nn.Module):
         self.n_g = params.n_g
 
         # Register downsampling matrices as buffers for automatic device management
-        W_down = utils.create_g_downsample(params.n_g)
+        W_down = utils.create_g_downsample(params.n_g, params.n_g_subsampled)
         for i, matrix in enumerate(W_down):
             self.register_buffer(f"W_down_{i}", matrix)
 
         # Register expansion matrices as buffer for automatic device management
-        W_repeat = utils.create_W_repeat(params.n_g, params.f_extended)
+        W_repeat = utils.create_W_repeat(params.n_g_subsampled, params.n_x_f)
         for i, matrix in enumerate(W_repeat):
             self.register_buffer(f"W_repeat_{i}", matrix)
 

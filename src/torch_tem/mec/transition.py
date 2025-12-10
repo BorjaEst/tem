@@ -107,12 +107,12 @@ class TransitionModel(nn.Module):
             Transition: (g_gen, sigma_g) tuple
         """
         if a is not None:
-            mu_g, sigma_g = self.transition_with_action(g_prev, a, valid_mask)
+            transition_result = self.transition_with_action(g_prev, a, valid_mask)
         else:
-            mu_g, sigma_g = self.transition_no_action(g_prev)
+            transition_result = self.transition_no_action(g_prev)
 
-        g_gen = self.sample(mu_g, sigma_g)
-        return g_gen, sigma_g
+        g_gen = self.sample(transition_result)
+        return Transition(mean=g_gen, uncertainty=transition_result.uncertainty)
 
     def transition_with_action(self, g_prev: AbstractLocation, a: Tensor, valid_mask: Optional[Tensor] = None) -> Transition:
         """Compute transition using action: g_t+1 = g_t + D(a) * g_connections.
@@ -182,7 +182,7 @@ class TransitionModel(nn.Module):
         else:
             sigma_g = from_g
 
-        return mu_g, sigma_g
+        return Transition(mean=mu_g, uncertainty=sigma_g)
 
     def transition_no_action(self, g_prev: AbstractLocation) -> Transition:
         """Compute transition without action (for shiny environments).
@@ -209,7 +209,7 @@ class TransitionModel(nn.Module):
 
         return Transition(mean=mu_g, uncertainty=sigma_g)
 
-    def sample(self, mu_g: AbstractLocation, sigma_g: AbstractLocation) -> AbstractLocation:
+    def sample(self, g_gen: Transition) -> AbstractLocation:
         """Sample from transition distribution if do_sample=True.
 
         Args:
@@ -219,6 +219,7 @@ class TransitionModel(nn.Module):
         Returns:
             g: Sampled (or mean) abstract location
         """
+        mu_g, sigma_g = g_gen.mean, g_gen.uncertainty
         if self.do_sample:
             return [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
         return mu_g

@@ -186,8 +186,14 @@ if __name__ == "__main__":
     # Each frequency channel has its own alpha parameter (decay rate)
     processor = lec.processor.Processor(model_config)
 
+    # LEC Projection: Projects filtered sensory to hippocampus (not used in this example)
+    # Parameters the frequency weights and non-linear activation for hippocampal
+    # Tiling of filtered and weighted sensory into hippocampal place cell-like
+    projection = lec.projection.Projection(model_config)
+
     print(f"  ✓ Encoder: {model_config.n_x} → {model_config.n_x_c} (two-hot compression)")
     print(f"  ✓ Processor: {model_config.n_f} frequency channels (f = {model_config.f_initial})")
+    print(f"  ✓ Projection: {model_config.n_x_f} → {model_config.n_p} (projection to hippocampus)")
     print()
 
     # =========================================================================
@@ -198,6 +204,7 @@ if __name__ == "__main__":
     # Initialize history storage for visualization
     x_c_history = []  # Compressed sensory over time
     x_f_history = []  # Multi-frequency filtered sensory over time
+    x__history = []  # Tiled projection to the hippocampus
 
     # Initialize previous filtered state (zero for first timestep)
     x_prev = [torch.zeros(1, model_config.n_x_c) for _ in range(model_config.n_f)]
@@ -207,15 +214,17 @@ if __name__ == "__main__":
         # Encoder maps one-hot observation to two-hot compressed representation
         x_t = observations[t].unsqueeze(0)  # Add batch dimension: [n_x] → [1, n_x]
         x_c = encoder(x_t)  # Two-hot lookup: [1, n_x] → [1, n_x_c]
+        x_c_history.append(x_c[0])  # [1, n_x_c] → [n_x_c]
 
         # Step 2: Temporal filtering → multi-frequency representation
         # Processor applies exponential smoothing at each frequency, then normalizes
         # x_f[f] = normalize(alpha[f] * x_c + (1 - alpha[f]) * x_prev[f])
         x_f = processor(x_c, x_prev)  # [1, n_x_c] → List[n_f] of [1, n_x_c]
-
-        # Store history (remove batch dimension for single-trajectory storage)
-        x_c_history.append(x_c[0])  # [1, n_x_c] → [n_x_c]
         x_f_history.append([x[0] for x in x_f])  # List[n_f] of [1, n_x_c] → List[n_f] of [n_x_c]
+
+        # Step 3: Projection to hippocampus (not used in this example)
+        x_ = projection(x_f)  # List[n_f] of [1, n_x_f] → [1, sum(n_p)]
+        x__history.append(x_[0])  # [1, sum(n_p)] → List[n_f] of [sum(n_p)]
 
         # Update previous state for next timestep
         x_prev = x_f
@@ -261,6 +270,8 @@ if __name__ == "__main__":
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_normalization_effects.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 04_normalization_effects.png")
+
+    # TODO Add some visualization for the projection to the hippocampus
 
     print()
     print("=" * 80)

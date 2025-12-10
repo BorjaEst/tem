@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import core, data, figures, lec, mec, memory, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.core.projection import ProjectionHead
+from torch_tem.mec.projection import Projection
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -117,7 +117,7 @@ if __name__ == "__main__":
     print()
 
     # Projection to p-space
-    projection = core.ProjectionHead(model_config)
+    mec_projection = core.Projection(model_config)
     print(f"  ✓ Projection: x_f → x_ (W_tile expansion + w_p gating)")
 
     # Memory system
@@ -153,7 +153,7 @@ if __name__ == "__main__":
         g_history.append([g[0] for g in g])
 
         # Step 2 (Manuscript): Entorhinal input to hippocampus ~g = W_repeat·f_down(g_t)
-        g_ = projection(g_gen.mean)  # [B, sum(n_p)]
+        g_ = mec_projection(g_gen.mean)  # [B, sum(n_p)]
 
         # Step 3 (Manuscript): Retrieve memory p_x = attractor(~g ⊙ ~x, M_{t-1})
         M_gen = storage.get_memory(for_inference=False)
@@ -173,76 +173,3 @@ if __name__ == "__main__":
     # PHASE 5: Generate Visualizations
     # =========================================================================
     print("Phase 5: Generating visualizations...")
-
-    # Plot 1 & 2: Environment and walk trajectory
-    fig1 = figures.plot_environment_layout(env, title=f"Environment: {config.grid_size}×{config.grid_size} Grid")
-    fig2 = figures.plot_walks(env, [walk], title=f"Walk Trajectory ({config.walk_length} steps)")
-    if config.save_plots:
-        fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
-        fig2.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 01_environment.png, 02_walk_trajectory.png")
-
-    # Plot 3: Sensory processing (temporal filtering)
-    fig3 = figures.plot_temporal_filtering(x_c_history, x_f_history, model_config.f_extended)
-    if config.save_plots:
-        fig3.savefig(config.output_dir / "03_sensory_processing.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 03_sensory_processing.png")
-
-    # Plot 4: Grounded location activity (place cells)
-    fig4 = figures.plot_grounded_location_activity(p_history, observations, locations, model_config.f_extended, model_config.n_p)
-    if config.save_plots:
-        fig4.savefig(config.output_dir / "04_place_cell_activity.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 04_place_cell_activity.png")
-
-    # Plot 5: Outer product structure (mid-point)
-    mid_point = config.walk_length // 2
-    g_mid = g_history[mid_point]  # List[n_f] of [1, n_g[f]] - inferred entorhinal
-    gilde_mid = g__history[mid_point]  # Already downsampled
-    g_sample = [gilde_mid[f][0] for f in range(model_config.n_f)]
-    fig5 = figures.plot_outer_product_structure(g_sample, x_f_history[mid_point], p_history[mid_point], model_config.f_extended)
-    if config.save_plots:
-        fig5.savefig(config.output_dir / "05_outer_product_structure.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 05_outer_product_structure.png")
-
-    # Plot 6: Abstract location evolution
-    fig6 = figures.plot_g_inf_evolution(g_history, model_config.n_f, config.walk_length)
-    if config.save_plots:
-        fig6.savefig(config.output_dir / "06_abstract_location.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 06_abstract_location.png")
-
-    # Plot 7: Memory matrices
-    fig7 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=False), model_config.n_p, config.walk_length)
-    if config.save_plots:
-        fig7.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 07_memory_matrices.png")
-
-    print()
-    print("=" * 80)
-    print("Pipeline Summary (Manuscript Steps):")
-    print("=" * 80)
-    print(f"Input:  x - {model_config.n_x}-dim observations ({config.observation_mode} mode)")
-    print(f"  ↓ Step 1: f_c(x) - Compress sensory")
-    print(f"Stage 1: x_c - {model_config.n_x_c}-dim compressed sensory")
-    print(f"  ↓ Step 2: (1-α_f)·x_f_{{t-1}} + α_f·x_c_t - Temporal filter")
-    print(f"Stage 2: x_f - Multi-frequency filtered sensory ({model_config.n_f} frequencies)")
-    print(f"  ↓ Step 3: W_tile·w_p·f_n(x_f) - Project to hippocampus")
-    print(f"Stage 3: ~x - Sensory input to hippocampus - {model_config.n_p}")
-    print(f"  ↓ Step 4: attractor(~x, M_{{t-1}}) - Retrieve memory")
-    print(f"Stage 4: p_x - Retrieved hippocampal patterns - {model_config.n_p}")
-    print(f"  ↓ Step 5: q_φ(g | p_x, g_{{t-1}}, a_t) - Infer entorhinal")
-    print(f"Stage 5: g - Inferred entorhinal (abstract location) - {model_config.n_g}")
-    print(f"  ↓ Step 6: W_repeat·f_down(g) - Project to hippocampus")
-    print(f"Stage 6: ~g - Entorhinal input to hippocampus - {model_config.n_g_subsampled_combined}")
-    print(f"  ↓ Step 7: N(μ=f_p(~g⊗~x), σ=f(~x,~g)) - Infer hippocampus")
-    print(f"Stage 7: p - Inferred hippocampus (grounded location) - {model_config.n_p}")
-    print(f"  ↓ Step 8: hebbian(M_{{t-1}}, p) - Form memory")
-    print(f"Output: M_t - Updated memory for next timestep")
-    print("=" * 80)
-    print()
-    print(f"All outputs saved to: {config.output_dir}")
-
-    # Show or close plots
-    if config.show_plots:
-        plt.show()
-    else:
-        plt.close("all")

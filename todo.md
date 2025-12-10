@@ -34,7 +34,7 @@ g_ = [g[f] @ W_random[f] for f in range(n_f)]
 **Implementation Status:**
 
 - [x] Utility function added: `create_W_random_projection()` in `src/torch_tem/utils/matrices.py`
-- [ ] Update `ProjectionHead` in `src/torch_tem/core/projection.py`
+- [ ] Update `Projection` in `src/torch_tem/core/projection.py`
 - [ ] Update inverse projection in `AbstractLocInference._compute_memory_estimate()`
 - [ ] Add configuration flag: `use_random_projection: bool` (default: False for compatibility)
 - [ ] Ablation study: Compare structured vs random projections on standard benchmarks

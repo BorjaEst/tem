@@ -19,7 +19,7 @@ TEMModel
 ├── AbstractLocInference: Precision-weighted fusion
 ├── MemoryStorage: Hebbian associative memory
 ├── AttractorDynamics: Iterative pattern completion
-├── ProjectionHead: Abstract location transformations
+├── Projection: Abstract location transformations
 └── ObservationDecoder: Place cells → sensory predictions
 ```
 
@@ -76,7 +76,7 @@ TEM operates on **multi-scale frequency modules** (typically 5: 4 grid cell modu
 - Hierarchical operations (low→high frequency dependencies)
 - Frequency-specific transformations (scaling, downsampling)
 - Loss computation per module
-- Component inputs/outputs (GroundedLocInference, ProjectionHead)
+- Component inputs/outputs (GroundedLocInference, Projection)
 
 **Example**:
 
@@ -553,7 +553,7 @@ Removed 16 legacy method stubs (f_mu_g_path, f_sigma_g_path, f_mu_g_mem, f_sigma
 | f_mu_g_shiny, f_sigma_g_shiny | AbstractLocInference  | Integrates object-vector signals         |
 | f_c, f_c_star                 | SensoryEncoder        | Two-hot encoding/decoding                |
 | f_n                           | SensoryProcessor      | Normalization and temporal filtering     |
-| f_g, f_g_clamp                | ProjectionHead        | Downsampling and normalization           |
+| f_g, f_g_clamp                | Projection            | Downsampling and normalization           |
 | f_p                           | GroundedLocInference  | Sparse activation in outer product       |
 | attractor                     | AttractorDynamics     | Iterative pattern completion             |
 | hebbian                       | MemoryStorage         | Hebbian learning with hierarchical masks |

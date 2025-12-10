@@ -41,9 +41,9 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.core.mlp import MLP
-from torch_tem.types import AbstractLocation, Observation, Transition
-from torch_tem.utils.fusion import fuse_transitions, sample_transition
+from ..core.mlp import MLP
+from ..types import AbstractLocation, GroundedLocation, Transition
+from ..utils.fusion import fuse_transitions, sample_transition
 
 
 class AbstractLocParams(Protocol):
@@ -67,15 +67,17 @@ class AbstractLocInference(nn.Module):
 
     Sources:
     1. g_gen - Transition prediction (path integration)
-    2. p_x -> g - Memory-based inference (only if p_x is provided)
-    3. shiny objects - Direct inference from environment cues
+    2. p_x -> g_mem - Memory-corrected estimate (inference mode only)
+       p_x is the hippocampal pattern retrieved from SENSORY input.
+       The quality of p_x (retrieval confidence) determines precision.
+    3. shiny objects - Direct inference from environment cues (landmarks)
 
-    Combines via precision-weighted mean.
+    Combines via precision-weighted mean (Bayesian fusion).
 
-    Note:
-        Memory-based inference is controlled by whether p_x is None or not,
-        not by a configuration flag. This simplifies the logic and delegates
-        the decision to the caller.
+    Theory:
+        In GENERATIVE mode: p_x = None, only path integration is used
+        In INFERENCE mode: p_x is retrieved from memory via sensory input,
+        allowing correction of path integration drift via loop closure.
     """
 
     def __init__(self, params: AbstractLocParams):
@@ -96,10 +98,13 @@ class AbstractLocInference(nn.Module):
         self.n_f_ovc = params.n_f_ovc
 
         # MLPs for memory-based g inference
-        self.mlp_mu_g_mem = MLP(in_dim=self.n_g_subsampled, out_dim=self.n_g, hidden_dim=[2 * g for g in self.n_g])
+        # Project p_x (grounded location from sensory retrieval) to g_mem
+        n_p_per_freq = [sum(params.n_g_subsampled)] * self.n_f  # Each frequency gets full p_x
+        self.mlp_mu_g_mem = MLP(in_dim=n_p_per_freq, out_dim=self.n_g, hidden_dim=[2 * g for g in self.n_g])
 
         # Initialize with small random weights
         self.mlp_mu_g_mem.set_weights(-1, [torch.randn_like(w) * params.g_mem_std for w in self.mlp_mu_g_mem.get_weights(-1)])
+        # Uncertainty based on p_x quality (retrieval confidence)
         self.mlp_sigma_g_mem = MLP(in_dim=[1] * self.n_f, out_dim=self.n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in self.n_g])
 
         # MLPs for shiny object inference (object vector cells)
@@ -113,107 +118,99 @@ class AbstractLocInference(nn.Module):
         self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
         self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
 
-    def forward(self, g_downsampled: Optional[AbstractLocation], g_gen: Transition, locations: List[Dict[str, Any]]) -> AbstractLocation:
-        """Infer abstract location via multi-source Bayesian fusion.
-
-        Fusion Pipeline:
-            1. Path integration (g_gen) - always present
-            2. Memory-based (g_downsampled → g) - if memory available
-            3. Shiny objects - if present in environment
-
-        Each source contributes proportional to its precision (1/σ²).
+    def forward(self, g_gen: Transition, p_x: Optional[GroundedLocation], locations: List[Dict[str, Any]]) -> AbstractLocation:
+        """Infer abstract location by fusing path integration with memory.
 
         Args:
-            g_downsampled: Downsampled abstract location from memory (p_x → g_downsampled).
-                          This projection is performed externally by the caller.
-                          If None, memory-based inference is skipped.
-            g_gen: Path integration estimate from transition model.
-                   Contains mean and uncertainty from previous location + action.
-            locations: Environment descriptors containing shiny object information
+            g_gen: Path integration prediction (always available)
+            p_x: Hippocampal pattern retrieved from SENSORY input (inference only)
+            locations: Environment descriptors for landmark cues
 
         Returns:
-            Inferred abstract location (sampled or mean depending on do_sample flag)
-
-        Theory:
-            Precision-weighted fusion combines multiple probabilistic estimates:
-                precision_i = 1 / σ²_i
-                g_fused = Σ(precision_i * g_i) / Σ(precision_i)
-            Sources with higher uncertainty (larger σ) receive lower weight.
-            Memory influence is controlled via uncertainty scheduling to enable
-            gradual integration during learning.
+            Fused abstract location estimate
         """
         # Collect all available estimates
-        estimates = [g_gen]  # Always have path integration
+        estimates = [g_gen]  # Source 1: Path integration (always available)
 
-        # Add memory estimate (if available)
-        if memory_estimate := self._compute_memory_estimate(g_downsampled):
-            estimates.append(memory_estimate)
+        # Source 2: Memory-corrected estimate (inference mode only)
+        if p_x is not None:
+            memory_estimate = self._compute_memory_estimate(p_x)
+            if memory_estimate is not None:
+                estimates.append(memory_estimate)
 
-        # Add shiny object cues (if any)
+        # Source 3: Landmark cues (if any)
         if shiny_estimate := self._compute_shiny_estimate(locations):
             estimates.append(shiny_estimate)
 
-        # Fuse all estimates
+        # Fuse all estimates with precision weighting
         fused = fuse_transitions(estimates)
 
         # Return sampled or mean location
         return sample_transition(fused) if self.do_sample else fused.mean
 
-    def _compute_memory_estimate(self, g_downsampled: Optional[AbstractLocation]) -> Optional[Transition]:
-        """Compute memory-based location estimate with quality-dependent uncertainty.
+    def _compute_memory_estimate(self, p_x: GroundedLocation) -> Optional[Transition]:
+        """Compute memory-based location estimate from sensory retrieval.
 
-        Maps downsampled abstract location to full abstract location via:
-            1. Upsample: g_downsampled → mu_g_mem (via MLP)
-            2. Quality: ||g||² → sigma_g_mem (norm-based uncertainty)
+        Process:
+            1. Extract: p_x → g_mem (project hippocampal pattern to abstract location)
+            2. Assess: ||p_x|| → sigma_g_mem (retrieval confidence)
             3. Schedule: sigma_g_mem += memory_offset (controls influence)
 
         Args:
-            g_downsampled: Downsampled abstract location from memory.
-                          The p_x → g_downsampled projection is performed by the caller.
-                          If None, memory-based inference is skipped.
+            p_x: Hippocampal pattern retrieved from SENSORY input via attractor.
+                 High ||p_x|| indicates confident retrieval (familiar pattern).
+                 Low ||p_x|| indicates uncertain retrieval (novel pattern).
 
         Returns:
-            Memory estimate with quality-dependent uncertainty, or None if g_downsampled unavailable
+            Memory estimate with retrieval-dependent uncertainty
 
         Theory:
-            Memory influence is controlled by uncertainty scheduling:
-                σ_mem_effective = σ_base + scheduling_offset
-            Higher offset → lower precision → less influence on fusion.
-            This enables gradual memory integration during training.
+            p_x encodes "which memories were activated by this sensory input".
+            Those memories have associated abstract locations g_mem.
+            The quality of p_x determines how much to trust g_mem for
+            correcting path integration drift (loop closure).
+
+            Precision weighting:
+                High ||p_x|| → low σ_mem → high precision → strong correction
+                Low ||p_x|| → high σ_mem → low precision → weak correction
         """
-        # Early return if memory retrieval unavailable
-        if g_downsampled is None:
-            return None
+        # Step 1: Project p_x to abstract location via learned MLP
+        # Concatenate all frequency modules of p_x for projection
+        p_x_concat = torch.cat(p_x, dim=-1)  # [B, sum(n_p)]
+        mu_g_mem = self.mlp_mu_g_mem([p_x_concat] * self.n_f)  # Replicate for each frequency
 
-        # Step 1: Upsample to full abstract location via learned MLP
-        mu_g_mem = self.mlp_mu_g_mem(g_downsampled)
+        # Step 2: Assess retrieval quality from p_x strength
+        sigma_g_mem = self._compute_memory_uncertainty(p_x)
 
-        # Step 2: Assess memory quality via norm-based uncertainty
-        sigma_g_mem = self._compute_memory_uncertainty(mu_g_mem)
-
-        # Step 3: Clamp to valid range (legacy stability)
+        # Step 3: Clamp to valid range (stability)
         mu_g_mem = [torch.clamp(g, -1, 1) for g in mu_g_mem]
 
         return Transition(mean=mu_g_mem, uncertainty=sigma_g_mem)
 
-    def _compute_memory_uncertainty(self, mu_g_mem: AbstractLocation) -> AbstractLocation:
-        """Compute memory uncertainty from retrieval quality indicators.
+    def _compute_memory_uncertainty(self, p_x: GroundedLocation) -> AbstractLocation:
+        """Compute memory uncertainty from retrieval quality.
 
         Quality indicator (per frequency):
-            Norm: ||g||² (energy in retrieved code)
+            Retrieval confidence: ||p_x||² (strength of memory activation)
 
-        Lower norm → higher uncertainty (less confident retrieval)
+        Theory:
+            High ||p_x|| → familiar pattern → confident retrieval → LOW uncertainty
+            Low ||p_x|| → novel pattern → uncertain retrieval → HIGH uncertainty
+
+            This implements the precision term in Bayesian fusion:
+                precision_mem = 1 / (σ_mem² + ε)
 
         Args:
-            mu_g_mem: Memory-derived abstract location estimate
+            p_x: Hippocampal pattern from sensory retrieval
 
         Returns:
-            Memory uncertainty with scheduling offset applied
+            Memory uncertainty per frequency module
         """
-        # Compute norm-based quality indicator: [||g||²]
-        quality_features = [torch.sum(g**2, dim=1, keepdim=True) for g in mu_g_mem]
+        # Compute retrieval confidence indicator: [||p_x||²] per frequency
+        quality_features = [torch.sum(p_f**2, dim=1, keepdim=True) for p_f in p_x]
 
-        # Predict base uncertainty from quality via MLP
+        # Predict base uncertainty from retrieval quality via MLP
+        # High quality → low sigma, Low quality → high sigma
         sigma_base = self.mlp_sigma_g_mem(quality_features)
 
         # Apply scheduling offset to control memory influence

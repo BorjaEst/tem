@@ -17,7 +17,7 @@ classDiagram
         +AbstractLocInference abstract
         +MemoryStorage storage
         +AttractorDynamics attractor
-        +ProjectionHead projection
+        +Projection projection
         +ObservationDecoder decoder
         +forward(walk) steps
         +iteration(...) tuple
@@ -74,7 +74,7 @@ classDiagram
         +retrieve(p_query, M, for_inference) p
     }
     
-    class ProjectionHead {
+    class Projection {
         +Parameter frequencies
         +Tensor g_downsample
         +downsample(g) g_downsampled
@@ -96,7 +96,7 @@ classDiagram
     TEMModel --> AbstractLocInference : uses
     TEMModel --> MemoryStorage : uses
     TEMModel --> AttractorDynamics : uses
-    TEMModel --> ProjectionHead : uses
+    TEMModel --> Projection : uses
     TEMModel --> ObservationDecoder : uses
     
     SensoryEncoder ..> SensoryProcessor : x_c
@@ -107,4 +107,4 @@ classDiagram
     GroundedLocInference ..> MemoryStorage : p_inf
     AttractorDynamics ..> ObservationDecoder : p
     MemoryStorage ..> AttractorDynamics : M
-    ProjectionHead ..> AttractorDynamics : g_
+    Projection ..> AttractorDynamics : g_

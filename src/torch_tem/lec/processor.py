@@ -1,4 +1,4 @@
-"""LEC Sensory Processor: Multi-frequency temporal filtering and normalization.
+"""LEC Sensory Processor: Multi-frequency temporal filtering.
 
 The Processor implements the second stage of the Lateral Entorhinal Cortex (LEC)
 sensory processing pathway. It applies frequency-specific exponential smoothing
@@ -13,13 +13,15 @@ Multi-frequency filtering provides:
 
 Architecture:
     Input: Compressed sensory [B, n_x_c]
-    Processing: Per-frequency exponential moving average + L2 normalization
+    Processing: Per-frequency exponential moving average
     Output: Multi-frequency filtered sensory List[n_f] of [B, n_x_c]
 
     For each frequency f:
-        x_f[f] = normalize(alpha[f] * x_c + (1 - alpha[f]) * x_prev[f])
+        x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
     where alpha[f] is a learnable decay rate in (0, 1).
+
+    Note: Normalization (f_n) is applied later in the Projection module.
 """
 
 from typing import List, Protocol
@@ -55,8 +57,7 @@ class Processor(nn.Module):
     The filtering operation for each frequency f is:
         x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
-    Followed by normalization:
-        x_norm[f] = normalize(relu(x_f[f] - mean(x_f[f])))
+    Normalization is applied later in the Projection module via f_n().
 
     Args:
         params: Configuration object implementing ProcessorParams protocol.
@@ -108,36 +109,18 @@ class Processor(nn.Module):
         alpha = [torch.sigmoid(self.alpha_logit[f]) for f in range(self.n_f)]
         return [alpha[f] * x_c + (1 - alpha[f]) * x_prev[f] for f in range(self.n_f)]
 
-    def normalize(self, x_f: MultiScaleCode) -> MultiScaleCode:
-        """Apply mean-centering and L2 normalization to each frequency channel.
-
-        For each frequency f, computes:
-            x_norm[f] = normalize(relu(x_f[f] - mean(x_f[f])))
-
-        where normalize() applies L2 normalization along the feature dimension.
-
-        Args:
-            x_f: Filtered sensory List[n_f] of [B, n_x_c]
-
-        Returns:
-            Normalized sensory List[n_f] of [B, n_x_c]
-        """
-        return [torch.nn.functional.normalize(torch.relu(x - x.mean(dim=-1, keepdim=True)), p=2, dim=-1) for x in x_f]
-
     def forward(self, x_c: Tensor, x_prev: MultiScaleCode) -> MultiScaleCode:
-        """Process compressed sensory through temporal filtering and normalization.
+        """Process compressed sensory through temporal filtering.
 
-        Full pipeline:
-        1. Exponential smoothing at each frequency: x_f = filter_temporal(x_c, x_prev)
-        2. Mean-centering and L2 normalization: x_norm = normalize(x_f)
+        Applies exponential smoothing at each frequency:
+            x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
         Args:
             x_c: Compressed sensory input [B, n_x_c]
             x_prev: Previous filtered state List[n_f] of [B, n_x_c]
 
         Returns:
-            Normalized multi-frequency filtered sensory List[n_f] of [B, n_x_c]
+            Multi-frequency filtered sensory List[n_f] of [B, n_x_c]
+            (Normalization applied later in Projection module)
         """
-        x_f = self.filter_temporal(x_c, x_prev)  # Exponential smoothing for each frequency channel
-        x_normalized = self.normalize(x_f)  # Per-channel L2 normalization
-        return x_normalized
+        return self.filter_temporal(x_c, x_prev)

@@ -59,15 +59,13 @@ class TEMState:
 
 
 class TEMModel(nn.Module):
-    def __init__(self, params: TEMParams, W_repeat: List[Matrix], W_down: List[Matrix], W_tile: List[Tensor]):
+    def __init__(self, params: TEMParams):
         """ """
         super().__init__()
         self.batch_size = params.batch_size
         self.eta = params.eta
-
-        self.projection = core.ProjectionHead(params, W_repeat, W_down)  # Shared projection module
         self.grounded = core.GroundedLocInference(params)  # Hippocampal inference module
-        self.decoder = core.Decoder(params, W_tile)  # Observation decoder module
+        self.decoder = core.Decoder(params)  # Observation decoder module
         self.storage = memory_.MemoryStorage(params)  # Memory storage module
         self.attractor = memory_.AttractorDynamics(params)  # Memory attractor module
         self.lec = lec_.LECModel(params)  # LEC pathway module
@@ -83,7 +81,7 @@ class TEMModel(nn.Module):
         # LEC Pathway steps; We process sensory input to prepare for memory retrieval
         if x is not None:
             state_lec: lec_.LECState = self.lec(x, state.lec)  # Process observation: x → x_f
-            x_ = self.projection(state_lec.filtered_observation)  # Sensory input to hippocampus: x_f → x_
+            x_ = self.lec.projection(state_lec.filtered_observation)  # Sensory input to hippocampus: x_f → x_
             p_x = self.attractor(x_, memory_x, for_inference=True)  # Retrieve memory
         else:
             state_lec: lec_.LECState = state.lec
@@ -91,7 +89,7 @@ class TEMModel(nn.Module):
 
         # MEC Pathway steps; We infer abstract location from action and previous location
         state_mec: mec_.MECState = self.mec(p_x, locations, a, state.mec)  # Update abstract location: g → g
-        g_ = self.projection(state_mec.abstract_location)  # Entorhinal input to hippocampus: g → g_
+        g_ = self.mec.projection(state_mec.abstract_location)  # Entorhinal input to hippocampus: g → g_
         p_g = self.attractor(g_, memory_g, for_inference=False)  # Retrieve memory
 
         # Infer predictions from LEC and MEC pathways

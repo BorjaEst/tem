@@ -177,6 +177,11 @@ if __name__ == "__main__":
     # Implements Bayesian fusion: g_inf = Σ(precision_i × g_i) / Σ(precision_i)
     abstract = mec.abstract.AbstractLocInference(model_config)
 
+    # MEC Projection: Projects abstract location to hippocampus (not used in this example)
+    # Downsamples grid cell patterns for memory retrieval and hippocampal binding
+    # Repeats to match hippocampal dimensions for conjunctive coding to improve performance
+    projection = mec.projection.Projection(model_config)
+
     print(f"  ✓ TransitionModel: Action-based dynamics with hierarchical g_connections")
     print(f"  ✓ AbstractLocInference: Precision-weighted fusion ({model_config.n_f} frequencies)")
     print()

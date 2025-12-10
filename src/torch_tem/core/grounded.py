@@ -8,7 +8,7 @@ context, analogous to how hippocampal place cells encode location-specific patte
 
 Theory:
     The outer product g ⊗ x is implemented via Kronecker product matrices:
-    - g_expanded = g @ W_repeat (done by ProjectionHead.forward())
+    - g_expanded = g @ W_repeat (done by Projection.forward())
     - x_expanded = x @ W_tile (done by SensoryProjection)
     - p = (g_expanded ⊙ x_expanded) weighted and activated
 
@@ -34,7 +34,7 @@ class GroundedLocParams(Protocol):
     Complexity: Low (2 parameters)
 
     Note: W_repeat and W_tile are no longer needed here as expansion
-          is handled by ProjectionHead and SensoryProjection respectively.
+          is handled by Projection and SensoryProjection respectively.
     """
 
     n_f: int
@@ -50,7 +50,7 @@ class GroundedLocInference(nn.Module):
 
     Architecture Flow:
         Upstream:
-            1. ProjectionHead.forward(g) → g_ [B, n_p[f]] (downsample + W_repeat expansion)
+            1. Projection.forward(g) → g_ [B, n_p[f]] (downsample + W_repeat expansion)
             2. SensoryProjection(x_f) → x_ [B, n_p[f]] (W_tile expansion + w_p gating)
         This module:
             3. p = activation(g_ ⊙ x_) [B, n_p[f]] (element-wise product only)
@@ -81,7 +81,7 @@ class GroundedLocInference(nn.Module):
 
         Args:
             g_expanded: ALREADY expanded abstract location [n_f] of [B, n_p[f]]
-                       (via ProjectionHead.forward() which does downsample + W_repeat expansion)
+                       (via Projection.forward() which does downsample + W_repeat expansion)
             x_expanded: ALREADY expanded AND gated sensory [n_f] of [B, n_p[f]]
                        (via SensoryProjection which applies W_tile expansion + w_p gating)
 
@@ -142,7 +142,7 @@ if __name__ == "__main__":
     print(f"\nModule initialized with {n_f} frequency modules")
     print(f"Note: w_p gating is handled by SensoryProjection upstream")
 
-    # Simulate ALREADY EXPANDED inputs (from ProjectionHead and SensoryProjection)
+    # Simulate ALREADY EXPANDED inputs (from Projection and SensoryProjection)
     g_expanded = [torch.randn(batch_size, n_p[f]) for f in range(n_f)]
     x_expanded = [torch.randn(batch_size, n_p[f]) for f in range(n_f)]
 
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     print("  2. SensoryEncoder: x → x_c (compress to two-hot)")
     print("  3. SensoryProcessor: x_c → x_f (temporal filtering)")
     print("  4. SensoryProjection: x_f → x_ (W_tile expansion to n_p)")
-    print("  5. ProjectionHead: g → g_ (downsample + W_repeat expansion to n_p)")
+    print("  5. Projection: g → g_ (downsample + W_repeat expansion to n_p)")
     print("  6. GroundedLocInference: (g_, x_) → p (element-wise product)")
     print("  7. MemoryStorage: Store p via Hebbian M = λM + η·outer(p,p)")
     print("  8. AttractorDynamics: Retrieve p_gen = M^T @ p (memory recall)")

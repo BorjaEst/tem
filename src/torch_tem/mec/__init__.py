@@ -5,7 +5,7 @@ import torch
 from torch import Tensor, nn
 
 from ..types import AbstractLocation, GroundedLocation
-from . import abstract, transition
+from . import abstract, projection, transition
 
 
 class MECParams(abstract.AbstractLocParams, transition.TransitionParams):
@@ -33,6 +33,7 @@ class MECModel(nn.Module):
         self.transition = transition.TransitionModel(params)  # Transition model module
         self.abstract = abstract.AbstractLocInference(params)  # Abstract location inference module
         self.batch_size = params.batch_size
+        self.projection = projection.Projection(params)  # Projection head for MEC pathway
 
     @property
     def n_g(self) -> List[int]:
@@ -44,10 +45,20 @@ class MECModel(nn.Module):
         """ """
         return self.transition.n_f
 
-    def forward(self, p: GroundedLocation, locations: List[Dict], a: Optional[Tensor], state: MECState) -> MECState:
-        """ """
+    def forward(self, p_x: Optional[GroundedLocation], locations: List[Dict], a: Optional[Tensor], state: MECState) -> MECState:
+        """Forward pass through MEC pathway.
+
+        Args:
+            p_x: Hippocampal pattern from sensory retrieval (inference mode) or None (generative mode)
+            locations: Environment descriptors for landmark cues
+            a: Action taken
+            state: Previous MEC state
+
+        Returns:
+            Updated MEC state with new abstract location
+        """
         g_gen = self.transition(a, state.abstract_location)  # State transition: g → g (predict next abstract location)
-        g = self.abstract(g_gen, p, locations)  # Infer entorhinal (abstract location)
+        g = self.abstract(g_gen, p_x, locations)  # Infer entorhinal (abstract location)
         return MECState(transition_stats=g_gen, abstract_location=g)
 
     def init_state(self, device: torch.device) -> MECState:

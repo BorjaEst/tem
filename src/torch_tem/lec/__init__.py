@@ -5,7 +5,7 @@ import torch
 from torch import Tensor, nn
 
 from ..types import MultiScaleCode, Observation
-from . import processor, sensory
+from . import processor, projection, sensory
 
 
 class LECParams(sensory.EncoderParams, processor.ProcessorParams):
@@ -33,6 +33,7 @@ class LECModel(nn.Module):
         self.encoder = sensory.Encoder(params)  # Sensory encoder module: x → x_c
         self.processor = processor.Processor(params)  # Sensory processor module: x
         self.batch_size = params.batch_size
+        self.projection = projection.Tiling(params)  # Tiling module for location inference
 
     @property
     def n_x_c(self) -> List[int]:

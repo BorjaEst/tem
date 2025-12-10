@@ -208,7 +208,7 @@ def _copy_weights(legacy: LegacyModel, refactored: TEMModel, params: dict):
 
         # Copy downsamplers
         # Note: Legacy model uses fixed g_downsample matrix (identity + zeros), not learnable weights.
-        # Refactored model also uses fixed g_downsample matrix in ProjectionHead.
+        # Refactored model also uses fixed g_downsample matrix in Projection.
         # So no weights to copy here.
 
         # 4. Grounded Inference (w_p)

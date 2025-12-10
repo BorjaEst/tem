@@ -70,7 +70,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import core, data, figures, lec, mec, memory, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.core.projection import ProjectionHead
+from torch_tem.mec.projection import Projection
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -179,19 +179,20 @@ if __name__ == "__main__":
     # Sensory processing
     encoder = lec.sensory.Encoder(model_config)
     processor = lec.processor.Processor(model_config)
+    lec_projection = lec.projection.Projection(model_config)
     print(f"  ✓ Encoder: {model_config.n_x} → {model_config.n_x_c} (two-hot)")
     print(f"  ✓ Processor: {model_config.n_f} frequency channels")
+    print(f"  ✓ Projection: x_f → x_ (W_tile expansion + w_p gating)")
+    print()
 
     # Abstract location transition model
     transition = mec.transition.TransitionModel(model_config)
     abstract = mec.abstract.AbstractLocInference(model_config)
+    mec_projection = mec.projection.Projection(model_config)
     print(f"  ✓ TransitionModel: Action-based dynamics with hierarchical g_connections")
     print(f"  ✓ AbstractLocInference: precision-weighted fusion")
+    print(f"  ✓ Projection: g → g_ (W_down subsampling + W_repeat expansion)")
     print()
-
-    # Projection to p-space
-    projection = core.ProjectionHead(model_config)
-    print(f"  ✓ Projection: x_f → x_ (W_tile expansion + w_p gating)")
 
     # Grounded location inference
     grounded = core.GroundedLocInference(model_config)
@@ -239,7 +240,7 @@ if __name__ == "__main__":
         x_f_history.append([x[0] for x in x_f])
 
         # Step 3 (Manuscript): Sensory input to hippocampus ~x = W_tile·w_p·f_n(x_f)
-        x_ = projection(x_f)  # [B, sum(n_p)]
+        x_ = lec_projection(x_f)  # [B, sum(n_p)]
         x__history.append([x[0] for x in x_])
 
         # Step 4 (Manuscript): Retrieve memory p_x = attractor(~x, M_{t-1})
@@ -252,7 +253,7 @@ if __name__ == "__main__":
         g_history.append([g[0] for g in g])
 
         # Step 6 (Manuscript): Entorhinal input to hippocampus ~g = W_repeat·f_down(g)
-        g_x = projection(g)  # [B, sum(n_p)]
+        g_x = mec_projection(g)  # [B, sum(n_p)]
 
         # Step 7 (Manuscript): Infer hippocampus p ~ N(μ = f_p(g_ ⊙ x_), σ = f(x_, g_))
         p = grounded(g_x, x_)  # [B, sum(n_p)]

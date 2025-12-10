@@ -427,7 +427,7 @@ def plot_transition_uncertainty(
     """Visualize Transition objects showing both mean (g) and uncertainty (sigma).
 
     Args:
-        transitions: List of T Transition tuples (g, sigma)
+        transitions: List of T Transition objects with .mean and .uncertainty attributes
         frequencies: List of frequency values
         title: Plot title
         n_cells_display: Number of cells to display per frequency
@@ -436,15 +436,15 @@ def plot_transition_uncertainty(
         Figure showing mean and uncertainty evolution
     """
     n_steps = len(transitions)
-    n_f = len(transitions[0][0])
+    n_f = len(transitions[0].mean)
     batch_idx = 0
 
     # Extract mean and sigma traces per frequency
     g_traces = []
     sigma_traces = []
     for f in range(n_f):
-        g_f = torch.stack([transitions[t][0][f] for t in range(n_steps)])[:, batch_idx, :]  # [T, n_g[f]]
-        sigma_f = torch.stack([transitions[t][1][f] for t in range(n_steps)])[:, batch_idx, :]  # [T, n_g[f]]
+        g_f = torch.stack([transitions[t].mean[f] for t in range(n_steps)])[:, batch_idx, :]  # [T, n_g[f]]
+        sigma_f = torch.stack([transitions[t].uncertainty[f] for t in range(n_steps)])[:, batch_idx, :]  # [T, n_g[f]]
         g_traces.append(g_f.detach().cpu().numpy())
         sigma_traces.append(sigma_f.detach().cpu().numpy())
 

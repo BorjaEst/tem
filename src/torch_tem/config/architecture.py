@@ -98,6 +98,13 @@ class ModelConfig(BaseModel):
     def n_p(self) -> List[int]:
         return [g * x for g, x in zip(self.n_g_subsampled_combined, self.n_x_f)]
 
+    @computed_field(description="Two-hot encoding lookup table for sensory compression")
+    @property
+    def two_hot_table(self) -> List[Tensor]:
+        from torch_tem import utils
+
+        return utils.create_two_hot_table(self.n_x, self.n_x_c)
+
     @computed_field(description="Number of attractor iterations for memory retrieval (equals n_f_g)")
     @property
     def i_attractor(self) -> int:

@@ -30,7 +30,7 @@ class MECModel(nn.Module):
     def __init__(self, params: MECParams):
         """ """
         super().__init__()
-        self.transition = transition.TransitionModel(params, g_connections, W_tile)  # Transition model module
+        self.transition = transition.TransitionModel(params)  # Transition model module
         self.abstract = abstract.AbstractLocInference(params)  # Abstract location inference module
         self.batch_size = params.batch_size
 

@@ -7,6 +7,7 @@ import torch.nn as nn
 from scipy.stats import truncnorm
 from torch import Tensor
 
+from torch_tem import utils
 from torch_tem.core.mlp import MLP
 from torch_tem.types import AbstractLocation, Transition
 
@@ -14,18 +15,33 @@ from torch_tem.types import AbstractLocation, Transition
 class TransitionParams(Protocol):
     """Minimal interface for TransitionModel.
 
-    Dependencies: n_f, n_g, n_actions, g_connections,
-                  do_sample, g_init_std, g_mem_std, d_hidden_dim
-    Complexity: Medium (7 parameters)
+    The TransitionModel requires architectural parameters to:
+    - Initialize action-based transition MLPs (MLP_D_a) with proper dimensions
+    - Create hierarchical g_connections between frequency modules
+    - Initialize uncertainty estimation networks (MLP_sigma_g_path)
+    - Set up prior distributions for abstract location initialization
+
+    Required attributes:
+        n_f: Total number of frequency modules
+        n_f_g: Number of grid cell frequency modules
+        n_f_ovc: Number of object-vector cell frequency modules
+        n_g: List of abstract location neurons per frequency [n_f]
+        n_actions: Number of possible actions
+        f_initial: Base frequency values for hierarchical connections [n_f_g]
+        d_hidden_dim: Hidden layer width for transition MLP
+        g_init_std: Standard deviation for initializing g prior distribution
+        do_sample: Whether to sample from transition distribution (vs using mean)
     """
 
-    n_actions: int
-    do_sample: bool
-    g_init_std: float
-    g_mem_std: float
-    d_hidden_dim: int
     n_f: int
+    n_f_g: int
+    n_f_ovc: int
     n_g: List[int]
+    n_actions: int
+    f_initial: List[float]
+    d_hidden_dim: int
+    g_init_std: float
+    do_sample: bool
 
 
 class TransitionModel(nn.Module):
@@ -38,13 +54,13 @@ class TransitionModel(nn.Module):
     - Uncertainty estimation (sigma_g)
     """
 
-    def __init__(self, params: TransitionParams, g_connections: List[List[bool]]):
+    def __init__(self, params: TransitionParams):
         super().__init__()
-        self.n_f = params.n_f
+        self.n_f = n_f = params.n_f
         self.n_g = params.n_g
         self.n_actions = params.n_actions
         self.do_sample = params.do_sample
-        self.g_connections = g_connections
+        self.g_connections = utils.create_g_connections(n_f, params.n_f_g, params.n_f_ovc, params.f_initial)
 
         # MLP for action-based transitions
         self.MLP_D_a = MLP(
@@ -77,6 +93,26 @@ class TransitionModel(nn.Module):
         self.logsig_g_init = nn.ParameterList(
             [nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=self.n_g[f], loc=0, scale=params.g_init_std), dtype=torch.float)) for f in range(self.n_f)]
         )
+
+    def forward(self, g_prev: AbstractLocation, a: Optional[Tensor] = None, valid_mask: Optional[Tensor] = None) -> Transition:
+        """Main forward pass.
+
+        Args:
+            g_prev: Previous abstract location
+            a: Action tensor (optional). If provided, uses action-based transition.
+               If None, uses no-action transition (for shiny environments).
+            valid_mask: Boolean tensor [B] indicating valid steps (True) vs new walks (False)
+
+        Returns:
+            Transition: (g_gen, sigma_g) tuple
+        """
+        if a is not None:
+            mu_g, sigma_g = self.transition_with_action(g_prev, a, valid_mask)
+        else:
+            mu_g, sigma_g = self.transition_no_action(g_prev)
+
+        g_gen = self.sample(mu_g, sigma_g)
+        return g_gen, sigma_g
 
     def transition_with_action(self, g_prev: AbstractLocation, a: Tensor, valid_mask: Optional[Tensor] = None) -> Transition:
         """Compute transition using action: g_t+1 = g_t + D(a) * g_connections.
@@ -186,23 +222,3 @@ class TransitionModel(nn.Module):
         if self.do_sample:
             return [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
         return mu_g
-
-    def forward(self, g_prev: AbstractLocation, a: Optional[Tensor] = None, valid_mask: Optional[Tensor] = None) -> Transition:
-        """Main forward pass.
-
-        Args:
-            g_prev: Previous abstract location
-            a: Action tensor (optional). If provided, uses action-based transition.
-               If None, uses no-action transition (for shiny environments).
-            valid_mask: Boolean tensor [B] indicating valid steps (True) vs new walks (False)
-
-        Returns:
-            Transition: (g_gen, sigma_g) tuple
-        """
-        if a is not None:
-            mu_g, sigma_g = self.transition_with_action(g_prev, a, valid_mask)
-        else:
-            mu_g, sigma_g = self.transition_no_action(g_prev)
-
-        g_gen = self.sample(mu_g, sigma_g)
-        return g_gen, sigma_g

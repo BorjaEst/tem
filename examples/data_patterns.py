@@ -166,8 +166,8 @@ if __name__ == "__main__":
     transition_history = oscillatory_gen.generate()
 
     # Extract abstract locations (g) and uncertainties (sigma) from Transition objects
-    g_history = [t[0] for t in transition_history]
-    sigma_history = [t[1] for t in transition_history]
+    g_history = [t.mean for t in transition_history]
+    sigma_history = [t.uncertainty for t in transition_history]
 
     print(f"  Generated: {len(transition_history)} Transition objects")
     print(f"  Each Transition contains (g, sigma) tuple")

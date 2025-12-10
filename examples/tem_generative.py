@@ -1,64 +1,5 @@
 #!/usr/bin/env python3
-"""Complete TEM inference pipeline example combining all inference components.
-
-This example demonstrates the full torch_tem inference pipeline, integrating components
-from inference_sensory.py, inference_grounded.py, inference_abstract.py, memory_storage.py,
-and memory_attractor.py into a single comprehensive demonstration.
-
-Pipeline Stages (TEM Manuscript):
-----------------------------------
-Following the exact inference steps from the TEM manuscript:
-
-1. Compress sensory observation: x_c = f_c(x)
-2. Temporally filter sensorium: x_f = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
-3. Sensory input to hippocampus: ~x = W_tile·w_p·f_n(x_f)
-4. Retrieve memory: p_x = attractor(~x, M_{t-1})
-5. Infer entorhinal: g ~ q_φ(g | p_x, g_{t-1}, a_t)
-6. Entorhinal input to hippocampus: ~g = W_repeat·f_down(g)
-7. Infer hippocampus: p ~ N(μ = f_p(~g ⊗ ~x), σ = f(~x, ~g))
-8. Form memory: M_t = hebbian(M_{t-1}, p)
-9. Repeat process for next observation
-
-Data Flow (Manuscript Notation):
---------------------------------
-    x (observation)
-    → x_c (compressed sensory via f_c)
-    → x_f (temporally filtered per frequency)
-    → ~x (sensory input to hippocampus via W_tile)
-    → p_x (memory retrieval via attractor dynamics)
-    → g (inferred entorhinal from p_x, g_{t-1}, a_t)
-    → ~g (entorhinal input to hippocampus via W_repeat)
-    → p (inferred hippocampus from ~g ⊗ ~x)
-    → M_t (Hebbian memory update)
-
-Usage Examples:
----------------
-    # Default: 50 timesteps, memory enabled, save plots
-    python examples/inference.py
-
-    # Longer walk with different architecture
-    python examples/inference.py --walk_length 100 --n_f 4
-
-    # Different grid size and observation mode
-    python examples/inference.py --grid_size 7 --observation_mode tiled
-
-    # Show plots interactively
-    python examples/inference.py --show_plots true --save_plots false
-
-    # Full help
-    python examples/inference.py --help
-
-Outputs:
---------
-When save_plots=true, generates 7 visualizations in outputs/inference/:
-    1. 01_environment.png - Grid layout
-    2. 02_walk_trajectory.png - Agent trajectory
-    3. 03_sensory_processing.png - Temporal filtering heatmaps
-    4. 04_place_cell_activity.png - Place field evolution
-    5. 05_outer_product_structure.png - Decomposition at mid-point
-    6. 06_abstract_location.png - Abstract location over time
-    7. 07_memory_matrices.png - Hebbian associations
-"""
+""" """
 
 from pathlib import Path
 from typing import List, Literal
@@ -68,12 +9,9 @@ import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import data, figures, utils
+from torch_tem import core, data, figures, lec, mec, memory, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
 from torch_tem.core.projection import ProjectionHead
-from torch_tem.inference.abstract import AbstractLocInference
-from torch_tem.inference.grounded import GroundedLocInference
-from torch_tem.inference.sensory import SensoryEncoder, SensoryProcessor, SensoryProjection
 from torch_tem.memory.attractor import AttractorDynamics
 from torch_tem.memory.storage import MemoryStorage
 
@@ -82,16 +20,8 @@ from torch_tem.memory.storage import MemoryStorage
 # Configuration
 # ==============================================================================
 class ExampleConfig(BaseSettings):
-    """Configuration for complete TEM inference pipeline example.
 
-    This config implements all inference-related protocols:
-    - EncoderParams, ProcessorParams
-    - GroundedLocParams, ProjectionParams
-    - AbstractInferenceParams
-    - MemoryStorageParams, AttractorParams
-    """
-
-    model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="inference")
+    model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="tem_generative")
 
     # Environment configuration
     grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for synthetic environment")
@@ -127,7 +57,7 @@ class ExampleConfig(BaseSettings):
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
-    """Run the complete TEM inference pipeline with visualizations."""
+    """Run the complete TEM generative pipeline with visualizations."""
     config = ExampleConfig()
 
     # Create config objects with proper field mapping
@@ -146,7 +76,7 @@ if __name__ == "__main__":
     W_tile = utils.create_W_tile(model_config.n_g_subsampled_combined, model_config.n_x_f)
 
     print("=" * 80)
-    print("Complete TEM Inference Pipeline")
+    print("Complete TEM Generative Pipeline")
     print("=" * 80)
     print(f"Configuration:")
     print(f"  Environment: {config.grid_size}×{config.grid_size} grid ({config.observation_mode} observations)")
@@ -177,34 +107,24 @@ if __name__ == "__main__":
     # =========================================================================
     # PHASE 2: Initialize All Components
     # =========================================================================
-    print("Phase 2: Initializing inference components...")
+    print("Phase 2: Initializing generative components...")
 
-    # Sensory processing
-    encoder = SensoryEncoder(model_config, two_hot_table)
-    processor = SensoryProcessor(model_config)
-    print(f"  ✓ SensoryEncoder: {model_config.n_x} → {model_config.n_x_c} (two-hot)")
-    print(f"  ✓ SensoryProcessor: {model_config.n_f} frequency channels")
+    # Abstract location transition model
+    transition = mec.transition.TransitionModel(model_config)
+    abstract = mec.abstract.AbstractLocInference(model_config)
+    print(f"  ✓ TransitionModel: Action-based dynamics with hierarchical g_connections")
+    print(f"  ✓ AbstractLocGenerative: precision-weighted fusion")
+    print()
 
-    # Sensory projection to p-space
-    sensory_projection = SensoryProjection(model_config, W_tile)
-    print(f"  ✓ SensoryProjection: x_f → x_ (W_tile expansion + w_p gating)")
-
-    # Grounded location inference
-    projection = ProjectionHead(model_config, g_downsample, W_repeat)
-    grounded = GroundedLocInference(model_config)
-    print(f"  ✓ ProjectionHead: Laplacian transform + downsampling + expansion")
-    print(f"  ✓ GroundedLocInference: g_ ⊙ x_ → p (element-wise product)")
+    # Projection to p-space
+    projection = core.ProjectionHead(model_config)
+    print(f"  ✓ Projection: x_f → x_ (W_tile expansion + w_p gating)")
 
     # Memory system
     storage = MemoryStorage(model_config, p_update_mask)
-    attractor = AttractorDynamics(model_config, mask_inf, mask_gen)
+    attractor = AttractorDynamics(model_config)
     print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
-
-    # Abstract location inference
-    abstract = AbstractLocInference(model_config)
-    print(f"  ✓ AbstractLocInference: precision-weighted fusion")
-    print()
 
     # =========================================================================
     # PHASE 3: Initialize Grid Cell State
@@ -217,80 +137,34 @@ if __name__ == "__main__":
     print()
 
     # =========================================================================
-    # PHASE 4: Run Complete Inference Pipeline
+    # PHASE 4: Run Complete Generative Pipeline
     # =========================================================================
-    print("Phase 4: Running complete inference pipeline...")
+    print("Phase 4: Running complete generative pipeline...")
 
-    x_c_history = []  # x_c: compressed sensory observations
-    x_f_history = []  # x_f: temporally filtered sensory
-    x__history = []  # ~x: sensory input to hippocampus
-    p_x_history = []  # p_x: retrieved hippocampal patterns from sensory
     g_history = []  # g: inferred entorhinal (abstract location)
-    g__history = []  # ~g: entorhinal input to hippocampus
-    p_history = []  # p: inferred hippocampus (grounded location)
+    x_history = []  # ~x: sensory input to hippocampus
 
     x_prev = [torch.zeros(1, model_config.n_x_c) for _ in range(model_config.n_f)]
     g_prev, sigma_prev = initial_transition  # Unpack initial Transition (g, sigma)
     for t in range(config.walk_length):
-        # Step 1 (Manuscript): Compress sensory observation x_c = f_c(x)
-        x = observations[t].unsqueeze(0)  # [n_x] → [1, n_x]
-        x_c = encoder(x)  # [1, n_x_c]
-        x_c_history.append(x_c[0])
+        # Step 1 (Manuscript): State transition g_t = N(·| g_{t-1}, a_t), σ_{t-1})
+        g_gen = transition(a, g_prev)  # [B, n_g]
+        g = abstract(g_gen, None, locations)  # List[n_f] of [B, n_g_sub[f]]
+        g_history.append([g[0] for g in g])
 
-        # Step 2 (Manuscript): Temporally filter sensorium x_f = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
-        x_f = x_prev = processor(x_c, x_prev)  # List[n_f] of [1, n_x_c]
-        x_f_history.append([x[0] for x in x_f])
+        # Step 2 (Manuscript): Entorhinal input to hippocampus ~g = W_repeat·f_down(g_t)
+        g_ = projection(g_gen.mean)  # [B, sum(n_p)]
 
-        # Step 3 (Manuscript): Sensory input to hippocampus ~x = W_tile·w_p·f_n(x_f)
-        x_ = sensory_projection(x_f)  # List[n_f] of [1, n_p[f]]
-        x_ = torch.cat(x_, dim=1)  # [1, sum(n_p)]
-        x__history.append([x[0] for x in x_])
+        # Step 3 (Manuscript): Retrieve memory p_x = attractor(~g ⊙ ~x, M_{t-1})
+        M_gen = storage.get_memory(for_inference=False)
+        p_g = attractor(g_, M_gen, for_inference=False)  # [B, sum(n_p)]
 
-        # Step 4 (Manuscript): Retrieve memory p_x = attractor(~x, M_{t-1})
-        M_inf = storage.get_memory(for_inference=True)
-        p_x = attractor.retrieve(x_, M_inf, for_inference=True)  # [1, sum(n_p)]
+        # Step 4 (Manuscript): Sensory prediction x_hat = decoder(p_g)
+        x_hat = core.Decoder(model_config)(p_g)  # [B, n_x]
+        x_history.append(x_hat[0])
 
-        # Split retrieved patterns back to per-frequency lists for hierarchical processing
-        p_x = utils.split_to_frequencies(p_x, model_config.n_p)  # List[n_f] of [1, n_p[f]]
-        p_x_history.append([p[0] for p in p_x])
-
-        # Step 5: Infer entorhinal g ~ q_φ(g | p_x, g_{t-1}, a_t)
-        # Precision-weighted fusion of generative and memory paths
-        # Theory: g is inferred by combining:
-        #   - g_gen (from transition/generative model: path integration + action)
-        #   - g_mem (from p_x via learned MLP projection p→g)
-
-        # Project p_x to downsampled grid cell space using inverse projection
-        # This "sums over sensory preferences" to collapse place cells to grid cells
-        g_downsampled = projection.inverse_project(p_x)  # List[n_f] of [1, n_g_sub[f]]
-
-        # AbstractLocInference performs:
-        # 1. Apply learned MLP: g_mem = f_mu_g_mem(g_downsampled)
-        # 2. Compute uncertainty based on memory quality
-        # 3. Fuse with g_gen via precision-weighted mean
-
-        # Use previous g and current uncertainty for transition
-        transition = (g_prev, sigma_prev)
-
-        # Infer entorhinal location g from generative and memory paths
-        g = g_prev = abstract(transition, g_downsampled, shiny_signals=None, p2g_scale_offset=0.5)
-        g_history.append(g)
-
-        # Step 6 (Manuscript): Entorhinal input to hippocampus g_ = projection(g)
-        # This performs downsample + W_repeat expansion to place cell dimensions
-        g_ = projection(g)  # List[n_f] of [1, n_p[f]]
-        g__history.append([g[0] for g in g_])
-
-        # Step 7 (Manuscript): Infer hippocampus p ~ N(μ = f_p(g_ ⊙ x_), σ = f(x_, g_))
-        # The element-wise product g_ ⊙ x_ forms the conjunctive representation
-        # Note: x_ was already expanded to place dimensions in Step 3
-        x_expanded = utils.split_to_frequencies(x_, model_config.n_p)  # Split back to list
-        p = grounded(g_, x_expanded)  # List[n_f] of [1, n_p[f]]
-        p_history.append([p[0] for p in p])
-        p = utils.concatenate_frequencies(p)  # [1, sum(n_p)]
-
-        # Step 8 (Manuscript): Form memory M_t = hebbian(M_{t-1}, p)
-        storage.update(p, p, eta=config.eta, lamb=config.lambda_)
+        # Step 5 (Manuscript): Repeat process for next timestep
+        g_prev = g  # Update previous abstract location
 
     print(f"  ✓ Processed {config.walk_length} timesteps through complete pipeline")
     print()
@@ -337,7 +211,7 @@ if __name__ == "__main__":
         print(f"  Saved: 06_abstract_location.png")
 
     # Plot 7: Memory matrices
-    fig7 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), model_config.n_p, config.walk_length)
+    fig7 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=False), model_config.n_p, config.walk_length)
     if config.save_plots:
         fig7.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 07_memory_matrices.png")

@@ -35,7 +35,7 @@ This implementation follows the style/patterns of other TEM modules and
 is designed to be testable with simple parameter stubs.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol
 
 import torch
 import torch.nn as nn
@@ -43,7 +43,8 @@ from torch import Tensor
 
 from torch_tem.core.mlp import MLP
 from torch_tem.core.projection import ProjectionHead
-from torch_tem.types import AbstractLocation, GroundedLocation, Matrix, SensoryObservation, Transition
+from torch_tem.generation import ObservationDecoder
+from torch_tem.types import AbstractLocation, GroundedLocation, SensoryObservation, Transition
 from torch_tem.utils.fusion import fuse_transitions, sample_transition
 
 
@@ -79,13 +80,13 @@ class AbstractLocInference(nn.Module):
         the decision to the caller.
     """
 
-    def __init__(self, params: AbstractLocParams, projection: ProjectionHead, decoder: Callable):
+    def __init__(self, params: AbstractLocParams, projection: ProjectionHead, decoder: ObservationDecoder):
         """Initialize abstract location inference.
 
         Args:
             params: Architecture configuration (n_f, n_g, n_g_subsampled, g_init_std, g_mem_std, p2g_scale_offset, p2g_sig_val)
             projection: Projection module for p_x -> g_downsampled transformation
-            decoder: Decoder function (p -> x) for reconstruction error computation
+            decoder: Decoder module (p -> x) for reconstruction error computation.
         """
         super().__init__()
         self.n_f = params.n_f

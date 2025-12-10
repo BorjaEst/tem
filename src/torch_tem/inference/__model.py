@@ -1,14 +1,15 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional
 
 import torch
-from torch import Tensor, nn
+from torch import nn
 
 from .. import utils
 from ..core.projection import ProjectionHead
+from ..generation import ObservationDecoder
 from ..memory.attractor import AttractorDynamics
-from ..types import AbstractLocation, GroundedLocation, LocationInference, Matrix, MultiScaleCode, SensoryObservation, TransitionParams
-from . import abstract, grounded, precission, sensory
+from ..types import GroundedLocation, LocationInference, Matrix, MultiScaleCode, SensoryObservation, SensoryPrediction, TransitionParams
+from . import abstract, grounded, sensory
 from .abstract import AbstractLocParams
 from .grounded import GroundedLocParams
 from .sensory import EncoderParams, ProcessorParams, ProjectionParams
@@ -58,60 +59,24 @@ class InferenceState:
 class InferenceModel(nn.Module):
     """Inference TEM model"""
 
-    def __init__(self, params: Parameters, projection: ProjectionHead, attractor: AttractorDynamics):
+    def __init__(self, params: Parameters, projection: ProjectionHead, attractor: AttractorDynamics, decoder: ObservationDecoder):
         super().__init__()
         self.config = params  # Store configuration
 
         # Compute configuration-derived matrices
         two_hot_table = utils.create_two_hot_table(params.n_x, params.n_x_c)
-        W_repeat = utils.create_W_repeat(params.n_g_subsampled_combined, params.n_x_f)
         W_tile = utils.create_W_tile(params.n_g_subsampled_combined, params.n_x_f)
 
-        # Initialize sub-modules (encoder, processor, tiling, grounded, abstract, projection, attractor)
+        # Initialize sub-modules (encoder, processor, tiling, projection, attractor, grounded)
         self.encoder = sensory.SensoryEncoder(params, two_hot_table)  # Sensory encoder module
         self.processor = sensory.SensoryProcessor(params)  # Temporal processor module
         self.tiling = sensory.SensoryProjection(params, W_tile)  # Sensory tilling module
-        self.grounded = grounded.GroundedLocInference(params, W_repeat, W_tile)  # Grounded location inference module
-        self.abstract = abstract.AbstractLocInference(params)  # Abstract location inference module
-        self.projection = projection  # Projection module for g to p
         self.attractor = attractor  # Attractor dynamics for memory retrieval
+        self.abstract = abstract.AbstractLocInference(params, projection, decoder)  # Abstract location inference module
+        self.projection = projection  # Projection module for g to p (downsample + expand)
+        self.grounded = grounded.GroundedLocInference(params)  # Grounded location inference (element-wise product)
 
-    def init_state(self, batch_size: int, device: torch.device) -> InferenceState:
-        """Initialize inference state with zeros and default values.
-
-        Parameters
-        ----------
-        batch_size:
-            Number of samples in the batch.
-        device:
-            Device to place the tensors on.
-
-        Returns
-        -------
-        InferenceState
-            Initialized inference state with zeroed latent predictions
-            and filtered observations.
-
-        Theory:
-            The inference state is initialized to provide a starting point
-            for temporal filtering and memory retrieval. Latent predictions
-            are set to zero, indicating no prior knowledge, while filtered
-            observations are also zeroed to avoid biasing the initial state.
-        """
-        return InferenceState(
-            memory_inf=None,  # No initial inference memory
-            latent_prediction=LocationInference(
-                # Initialize abstract location g_inf with zeros
-                abstract=[torch.zeros((batch_size, self.config.n_g[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
-                # Initialize grounded location p_inf with zeros
-                grounded=[torch.zeros((batch_size, self.config.n_p[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)],
-            ),
-            # Initialize filtered observation x_f with zeros
-            filtered_observation=[torch.zeros((batch_size, self.config.n_x_f), dtype=torch.float, device=device) for _ in range(self.config.n_f)],
-            retrieved_grounded=None,  # No initial retrieved grounded location
-        )
-
-    def inference(self, x: SensoryObservation, locations: List[Dict[str, Any]], state: InferenceState, g_gen: TransitionParams) -> InferenceState:
+    def forward(self, x: SensoryObservation, locations: List[Dict[str, Any]], state: InferenceState, g_gen: TransitionParams) -> InferenceState:
         """Run the inference path to obtain abstract and grounded locations.
 
         The inference path compresses and temporally filters sensory input,
@@ -143,164 +108,52 @@ class InferenceModel(nn.Module):
             grounded (place-like) representations. Precision weighting balances
             path integration and sensory evidence.
         """
+        if state.memory_inf is None:
+            raise ValueError("InferenceModel.forward requires state.memory_inf to be set.")
 
-        # 1. Encode: x → x_c (one-hot to two-hot)
-        x_c = self.encoder(x)
+        # Inference pathway steps (see publication.Inference architecture for details)
+        x_c = self.encoder(x)  # 1. Compress sensory observation: x → x_c (one-hot to two-hot)
+        x_f = self.processor(x_c, state.filtered_observation)  # 2. Temporally filter sensorium: x_c → x_f
+        x_ = self.tiling(x_f)  # 3. Sensory input to hippocampus: x_f → x_ (prepare for memory indexing)
+        p_x = self.attractor(x_, state.memory_inf, for_inference=True) if self.config.use_p_inf else None  # 4. Retrieve memory
+        g = self.abstract(p_x, g_gen, x, locations)  # 5. Infer entorhinal (abstract location)
+        g_ = self.projection(g)  # 6. Entorhinal input to hippocampus: g → g_ (project to grounded space)
+        p = self.grounded(g_, x_)  # 7. Infer hippocampus (grounded location)
 
-        # 2. Filter: x_c → x_f (temporal filtering)
-        x_f = self.processor(x_c, state.filtered_observation)
+        # Return updated inference state with new latent predictions and filtered observation
+        prediction = LocationInference(abstract=g, grounded=p)
+        return InferenceState(latent_prediction=prediction, filtered_observation=x_f, retrieved_grounded=p_x)
 
-        # 3. Tile: x_f → x_ (prepare for memory indexing)
-        x_ = self.tiling(x_f)
-
-        # 4. Retrieve from memory (if using inference memory)
-        p_x = None
-        g_downsampled = None
-        if self.config.use_p_inf:
-            x_flat = utils.concatenate_frequencies(x_)
-            # Note: storage is accessed from parent TEMModel, not available here
-            # This will be handled by the parent model's memory system
-            # For now, skip memory retrieval in inference-only mode
-            pass
-
-        # 5. Infer abstract location (precision-weighted fusion)
-        # Handle shiny signals if present
-        shiny_signals = None
-        # TODO: Implement shiny object processing when needed
-        # shiny_envs = [loc.get('shiny') is not None for loc in locations]
-        # if any(shiny_envs): ...
-
-        g = self.abstract(
-            g_gen,
-            g_downsampled,
-            shiny_signals=shiny_signals,
-            p2g_scale_offset=0.0,
-        )
-
-        # 6. Downsample and normalize g for inference
-        g_ = self.projection.downsample(self.projection.normalize_g(g))
-
-        # 7. Infer grounded location: g ⊗ x (outer product)
-        p = self.grounded(g_, x_f)
-
-        return InferenceState(
-            memory_inf=state.memory_inf,  # Copy from previous state, will be updated by Hebbian plasticity
-            latent_prediction=LocationInference(abstract=g, grounded=p),
-            filtered_observation=x_f,
-            retrieved_grounded=p_x,
-        )
-
-    def inf_g(
-        self,
-        p_x: Optional[GroundedLocation],
-        g_gen: TransitionParams,
-        x: SensoryObservation,
-        locations: List[Dict[str, Any]],
-    ) -> AbstractLocation:
-        """Infer abstract locations from memory retrieval and path integration.
+    def init_state(self, batch_size: int, device: torch.device) -> InferenceState:
+        """Initialize inference state with zeros and default values.
 
         Parameters
         ----------
-        p_x:
-            Grounded locations retrieved from memory using sensory input.
-        g_gen:
-            Abstract location statistics from the transition model
-            (path-integration prior).
-        x:
-            Current sensory observations, used e.g. for estimating memory
-            quality.
-        locations:
-            Environment descriptors, including shiny object metadata.
+        batch_size:
+            Number of samples in the batch.
+        device:
+            Device to place the tensors on.
 
         Returns
         -------
-        AbstractLocation
-            Inferred abstract locations (per frequency module), optionally
-            including object-vector contributions for shiny environments.
+        InferenceState
+            Initialized inference state with zeroed latent predictions
+            and filtered observations.
+
+        Theory:
+            The inference state is initialized to provide a starting point
+            for temporal filtering and memory retrieval. Latent predictions
+            are set to zero, indicating no prior knowledge, while filtered
+            observations are also zeroed to avoid biasing the initial state.
         """
-        # Delegate to AbstractLocInference
-        g_gen_mu, sigma_gen = g_gen
 
-        # Handle shiny signals if present
-        shiny_signals = None
-        # TODO: Implement shiny object processing when needed
+        # Initialize filtered observation x_f with zeros
+        x_f = [torch.zeros((batch_size, self.config.n_x_f[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)]
+        # Initialize abstract location g_inf with g_init (learned prior)
+        g = [self.abstract.g_init[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.config.n_f)]
+        # Initialize grounded location p_inf with zeros
+        p = [torch.zeros((batch_size, self.config.n_p[f]), dtype=torch.float, device=device) for f in range(self.config.n_f)]
 
-        g = self.abstract(g_gen_mu, sigma_gen, p_x, shiny_signals, p2g_scale_offset=0.0)
-
-        return g
-
-    def inf_p(self, x_: MultiScaleCode, g_: MultiScaleCode) -> GroundedLocation:
-        """Infer grounded locations from filtered sensory input and abstract codes.
-
-        Parameters
-        ----------
-        x_:
-            Sensory features prepared for memory interaction (e.g. weighted
-            and tiled representations).
-        g_:
-            Downsampled and repeated abstract location codes aligned with the
-            sensory tiling.
-
-        Returns
-        -------
-        GroundedLocation
-            Inferred grounded locations per frequency module, typically after
-            applying a sparsity-inducing nonlinearity.
-        """
-        # Delegate to GroundedLocInference (outer product g ⊗ x)
-        p = self.grounded(g_, x_)
-        return p
-
-    def x_prev2x(self, x_prev: MultiScaleCode, x_c: Tensor) -> MultiScaleCode:
-        """Temporally filter sensory observations across time steps.
-
-        Parameters
-        ----------
-        x_prev:
-            Previous temporally filtered sensory representations.
-        x_c:
-            Current compressed sensory observation.
-
-        Returns
-        -------
-        MultiScaleCode
-            Updated filtered sensory representations for each frequency
-            module, using a learned exponential smoothing factor.
-        """
-        return self.processor.filter_temporal(x_c, x_prev)
-
-    def x2x_(self, x: MultiScaleCode) -> MultiScaleCode:
-        """Prepare sensory input for Hebbian memory interaction.
-
-        This includes normalisation and re-weighting for each frequency
-        module, followed by tiling into the shape required for outer-product
-        interactions with abstract codes.
-
-        Parameters
-        ----------
-        x:
-            Temporally filtered sensory representations.
-
-        Returns
-        -------
-        MultiScaleCode
-            Memory-ready sensory representations ``x_`` per frequency module.
-        """
-        return self.processor.normalize(x)
-
-    def g2g_(self, g: AbstractLocation) -> MultiScaleCode:
-        """Prepare abstract locations for Hebbian memory interaction.
-
-        Parameters
-        ----------
-        g:
-            Abstract location codes per frequency module.
-
-        Returns
-        -------
-        MultiScaleCode
-            Downsampled and repeated abstract codes ``g_`` compatible with the
-            sensory tiling used in the Hebbian memory.
-        """
-        g_normalized = self.projection.normalize_g(g)
-        return self.projection.downsample(g_normalized)
+        # Return initialized inference state with zeroed latent predictions and filtered observation
+        prediction = LocationInference(abstract=g, grounded=p)
+        return InferenceState(latent_prediction=prediction, filtered_observation=x_f)

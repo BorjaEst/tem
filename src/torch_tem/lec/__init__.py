@@ -67,11 +67,13 @@ class LECModel(nn.Module):
             device: Device for tensor allocation
 
         Returns:
-            Initial LECState with zero-initialized compressed and filtered observations
+            Initial LECState with zero-initialized compressed, filtered, and projected observations
         """
-        x_c = [torch.zeros((self.batch_size, self.n_x_c[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
-        x_f = [torch.zeros((self.batch_size, self.n_x_c[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
-        return LECState(compressed_observation=x_c, filtered_observation=x_f)
+        n_x_c_val = self.n_x_c[0] if isinstance(self.n_x_c, list) else self.n_x_c
+        x_c = [torch.zeros((self.batch_size, n_x_c_val), dtype=torch.float, device=device) for f in range(self.n_f)]
+        x_f = [torch.zeros((self.batch_size, n_x_c_val), dtype=torch.float, device=device) for f in range(self.n_f)]
+        x_ = [torch.zeros((self.batch_size, self.projection.n_p[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
+        return LECState(compressed_observation=x_c, filtered_observation=x_f, projection=x_)
 
     def forward(self, x: Observation, state: LECState) -> LECState:
         """ """

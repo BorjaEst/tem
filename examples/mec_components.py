@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""MEC components example demonstrating grid cell dynamics and spatial inference.
+"""MEC components example demonstrating spatial processing and inference.
 
-This example demonstrates the complete Medial Entorhinal Cortex (MEC) pipeline:
+This example demonstrates the Medial Entorhinal Cortex (MEC) components:
 - TransitionModel: Predicts next abstract location from current state + action
 - AbstractLocInference: Fuses path integration estimates with precision weighting
 - Projection: Downsamples and repeats grid cells for hippocampal binding
 
 The MEC pipeline:
-  g_t + action → TransitionModel → g_gen (prediction with σ)
-  g_gen → AbstractLocInference → g_inf (fused estimate)
-  g_inf → Projection → g_downsampled (for memory) + g_repeated (for hippocampus)
+  Transition: (g_t, a) → g_gen (with σ)
+  Inference: g_gen → g_inf
+  Projection: g_inf → g_downsampled (memory) + g_repeated (hippocampus)
 
 Note: This example uses synthetic data and random actions. For LEC sensory
 processing, see lec_components.py.
@@ -77,7 +77,7 @@ from torch_tem.types import Transition
 # Configuration
 # ==============================================================================
 class ExampleConfig(BaseSettings):
-    """Configuration for MEC abstract location inference example.
+    """Configuration for MEC spatial processing example.
 
     Defines architecture parameters for demonstrating MEC components
     in isolation using entirely synthetic data (no sensory processing).
@@ -124,13 +124,13 @@ class ExampleConfig(BaseSettings):
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
-    """Run the MEC abstract location inference pipeline experiment with visualizations.
+    """Run the MEC spatial processing pipeline experiment with visualizations.
 
-    This script demonstrates the complete abstract location inference pathway:
-      1. Generate synthetic grid cell patterns (g_gen with uncertainty)
-      2. Initialize MEC TransitionModel and AbstractLocInference components
-      3. Process patterns through the abstract inference pipeline
-      4. Generate visualizations of fusion and precision weighting effects
+    This script demonstrates the spatial processing pathway:
+      1. Generate synthetic action sequences
+      2. Initialize MEC components (TransitionModel, AbstractLocInference, Projection)
+      3. Process through the pipeline
+      4. Generate visualizations of the complete MEC pathway
     """
     config = ExampleConfig()
 
@@ -189,7 +189,7 @@ if __name__ == "__main__":
     # =========================================================================
     # PHASE 3: Run MEC Pipeline
     # =========================================================================
-    print("Phase 3: Running MEC pipeline (transition → inference → projection)...")
+    print("Phase 3: Running MEC pipeline (transition → abstract inference → projection)...")
 
     # Initialize history storage for visualization
     g_inf_history = []  # Fused abstract location over time
@@ -309,7 +309,10 @@ if __name__ == "__main__":
     print("  • Projection: prepares for memory storage and hippocampal conjunction")
     print("=" * 80)
     print()
-    print(f"All {5 if config.save_plots else 0} visualizations saved to: {config.output_dir}")
+    if config.save_plots:
+        print(f"All 5 visualizations saved to: {config.output_dir}")
+    else:
+        print("Plots not saved (use --save_plots true to save)")
 
     # Show or close plots
     if config.show_plots:

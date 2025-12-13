@@ -137,9 +137,6 @@ if __name__ == "__main__":
         batch_size=1,  # Single walk trajectory
     )
 
-    # Compute connectivity matrices from model config
-    W_tile_decoder = [torch.randn(model_config.n_x_c, model_config.n_p[f]) / np.sqrt(model_config.n_p[f]) for f in range(model_config.n_f)]
-
     print("=" * 80)
     print("Complete TEM Generative Pipeline")
     print("=" * 80)
@@ -183,7 +180,9 @@ if __name__ == "__main__":
     print()
 
     # Decoder: Hippocampus to sensory space
-    decoder = core.decoder.Decoder(model_config, W_tile_decoder)
+    decoder = lec.decoder.Decoder(model_config)
+    # Create W_tile for decoder (only needs first frequency matrix)
+    W_tile_0 = torch.randn(model_config.n_x_c, model_config.n_p[0]) / np.sqrt(model_config.n_p[0])
     print(f"  ✓ Decoder: p → x̂ (place cells to sensory prediction)")
     print()
 
@@ -273,9 +272,9 @@ if __name__ == "__main__":
 
         # ============================================================
         # Step 4 (Manuscript): Generate sensory prediction
-        # x̂ = decoder(p_g)
+        # x̂ = decoder(p_g, W_tile_0)
         # ============================================================
-        x_pred_result = decoder(p_g)  # Returns SensoryPrediction
+        x_pred_result = decoder(p_g, W_tile_0)  # Returns SensoryPrediction
         x_pred = x_pred_result.values[0]  # First frequency: [B, n_x]
         x_pred_history.append(x_pred[0].detach())
 

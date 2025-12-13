@@ -11,18 +11,16 @@ components for maintainability and testability.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-import torch
-from torch import Tensor, nn
+from torch import nn
 
 from . import config, core
 from . import hpc as hpc_
 from . import lec as lec_
 from . import losses
 from . import mec as mec_
-from . import utils
-from .types import AbstractLocation, GroundedLocation, LocationInference, Matrix, MemoryState, MultiScaleCode, Observation, SensoryPrediction
+from .types import AbstractLocation, GroundedLocation, LocationInference, MemoryState, MultiScaleCode, Observation, SensoryPrediction
 
 
 class TEMParams(config.ModelConfig):
@@ -88,11 +86,8 @@ class TEMModel(nn.Module):
         x_hat = self.lec.decode(p_g)  # Decode observation: p → x (generate sensory prediction)
         p = self.grounded(g_, x_) if x is not None else None  # Infer hippocampus (grounded location)
 
-        # Update memory with Hebbian plasticity and return new state
-        if p_x is not None and p_g is not None:
-            p_x_flat = torch.cat(p_x, dim=1)  # [B, sum(n_p)]
-            p_g_flat = torch.cat(p_g, dim=1)  # [B, sum(n_p)]
-            self.memory.update(p_x_flat, p_g_flat, self.eta)
+        if p is not None:  # Only when we have direct inference from both pathways
+            self.memory.update(p, p_g, self.eta)
 
         return TEMState(grounded_location=p, prediction=x_hat, lec=state_lec, mec=state_mec)
 

@@ -113,20 +113,25 @@ class Memory:
         M = self.storage.get_memory(for_inference=for_inference)
         return self.attractor(query, M, for_inference=for_inference)
 
-    def update(self, p_inferred: Matrix, p_generated: Matrix, eta: float) -> None:
+    def update(self, p_inferred: MultiScaleCode, p_generated: MultiScaleCode, eta: float) -> None:
         """Update memory matrices using Hebbian plasticity.
 
         Implements the Hebbian update rule:
         M_gen = λ*M + η*(p_inf + p_gen) ⊗ (p_inf - p_gen)
 
         Args:
-            p_inferred: Inferred grounded locations [B, sum(n_p)]
-                       Typically from direct inference (g ⊗ x)
-            p_generated: Generated grounded locations [B, sum(n_p)]
-                        Typically from pattern completion on grid cells
+            p_inferred: Inferred grounded locations as List[n_f] of [B, n_p[f]]
+                       Typically from memory retrieval on sensory input
+            p_generated: Generated grounded locations as List[n_f] of [B, n_p[f]]
+                        Typically from memory retrieval on grid cells
             eta: Learning rate (remembering strength), typically 0.1-0.5
         """
-        self.storage.update(p_inferred, p_generated, eta)
+        import torch
+
+        # Transform multi-scale code to flat vectors for storage
+        p_inferred_flat = torch.cat(p_inferred, dim=1)  # [B, sum(n_p)]
+        p_generated_flat = torch.cat(p_generated, dim=1)  # [B, sum(n_p)]
+        self.storage.update(p_inferred_flat, p_generated_flat, eta)
 
     def get_memory(self, for_inference: bool) -> Matrix:
         """Get the appropriate memory matrix for inference or generation.

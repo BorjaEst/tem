@@ -244,7 +244,7 @@ if __name__ == "__main__":
         x_f_history.append([x[0] for x in x_f])
 
         # Step 3 (Manuscript): Sensory input to hippocampus ~x = W_tile·w_p·f_n(x_f)
-        x_ = lec_projection(x_f)  # List[n_f] of [B, n_p[f]]
+        x_ = lec_projection(x_f, W_tile)  # List[n_f] of [B, n_p[f]]
         x__history.append([x[0] for x in x_])
 
         # Step 4 (Manuscript): Retrieve memory p_x = attractor(~x, M_{t-1})

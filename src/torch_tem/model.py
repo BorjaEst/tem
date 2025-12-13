@@ -15,11 +15,7 @@ from typing import Dict, List, Optional
 
 from torch import nn
 
-from . import config, core
-from . import hpc as hpc_
-from . import lec as lec_
-from . import losses
-from . import mec as mec_
+from . import config, core, hpc, lec, losses, mec
 from .types import AbstractLocation, GroundedLocation, LocationInference, MemoryState, MultiScaleCode, Observation, SensoryPrediction
 
 
@@ -36,8 +32,8 @@ class TEMParams(config.ModelConfig):
 class TEMState:
     grounded_location: Optional[GroundedLocation]
     prediction: Optional[SensoryPrediction]
-    lec: lec_.LECState
-    mec: mec_.MECState
+    lec: lec.LECState
+    mec: mec.MECState
 
     @property
     def compressed_observation(self) -> MultiScaleCode:
@@ -65,9 +61,9 @@ class TEMModel(nn.Module):
 
         # Initialize components
         self.grounded = core.GroundedLocInference(params)  # Hippocampal inference module
-        self.memory = hpc_.Memory(params)  # Unified memory system (masks computed internally)
-        self.lec = lec_.LECModel(params)  # LEC pathway module
-        self.mec = mec_.MECModel(params)  # MEC pathway module
+        self.memory = hpc.Memory(params)  # Unified memory system (masks computed internally)
+        self.lec = lec.LECModel(params)  # LEC pathway module
+        self.mec = mec.MECModel(params)  # MEC pathway module
 
     def forward(self, x: Optional[Observation], locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
         """ """

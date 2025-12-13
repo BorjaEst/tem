@@ -30,10 +30,11 @@ class Decoder(nn.Module):
         super().__init__()
 
         # Validate W_tile shape
+        # W_tile[0] should be [n_x_c, n_p[0]] since we do p[0] @ W_tile[0].t() to get [B, n_p[0]] @ [n_p[0], n_x_c] = [B, n_x_c]
         if len(W_tile) == 0:
             raise ValueError("W_tile must contain at least one matrix")
-        if (actual_cols := W_tile[0].shape[1]) != (expected_cols := params.n_x_c):
-            raise ValueError(f"W_tile[0] has incorrect shape: expected {W_tile[0].shape[0]}x{expected_cols}, got {W_tile[0].shape[0]}x{actual_cols}")
+        if (actual_rows := W_tile[0].shape[0]) != (expected_rows := params.n_x_c):
+            raise ValueError(f"W_tile[0] has incorrect shape: expected {expected_rows}x{W_tile[0].shape[1]}, got {actual_rows}x{W_tile[0].shape[1]}")
 
         self.w_x = nn.Parameter(torch.ones(1, params.n_x_c))
         self.b_x = nn.Parameter(torch.zeros(1, params.n_x_c))

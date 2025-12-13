@@ -52,6 +52,7 @@ class AbstractLocParams(Protocol):
     n_f: int
     n_g: List[int]
     n_g_subsampled: List[int]
+    n_p: List[int]  # Grounded location dimensions per frequency
     g_init_std: float
     g_mem_std: float
     p2g_scale_offset: float
@@ -99,7 +100,7 @@ class AbstractLocInference(nn.Module):
 
         # MLPs for memory-based g inference
         # Project p_x (grounded location from sensory retrieval) to g_mem
-        n_p_per_freq = [sum(params.n_g_subsampled)] * self.n_f  # Each frequency gets full p_x
+        n_p_per_freq = [sum(params.n_p)] * self.n_f  # Each frequency gets full concatenated p_x
         self.mlp_mu_g_mem = MLP(in_dim=n_p_per_freq, out_dim=self.n_g, hidden_dim=[2 * g for g in self.n_g])
 
         # Initialize with small random weights

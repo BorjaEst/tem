@@ -6,6 +6,7 @@ from torch import Tensor, nn
 
 from ..types import AbstractLocation, GroundedLocation, MultiScaleCode
 from . import abstract, projection, transition
+from .transition import Transition
 
 
 class MECParams(abstract.AbstractLocParams, transition.TransitionParams):
@@ -34,7 +35,7 @@ class MECState:
         projection: Projected abstract location to hippocampal input space.
     """
 
-    transition_stats: transition
+    transition_stats: Transition
     abstract_location: AbstractLocation
     projection: MultiScaleCode
 

@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 from torch import nn
 
 from . import config, core, hpc, lec, losses, mec
-from .types import AbstractLocation, GroundedLocation, LocationInference, MemoryState, MultiScaleCode, Observation, SensoryPrediction
+from .types import AbstractLocation, GroundedLocation, LocationInference, MultiScaleCode, Observation, SensoryPrediction
 
 
 class TEMParams(config.ModelConfig):
@@ -178,8 +178,73 @@ class TEMModel(nn.Module):
         mec_state = self.mec.init_state(x[0].device)  # Initialize MEC state
         return TEMState(grounded_location=None, prediction=None, lec=lec_state, mec=mec_state)
 
-    def loss(self, x: Observation, g_gen: AbstractLocation, state: TEMState) -> losses.LossOutput:
-        raise NotImplementedError("TEMModel.loss is not yet implemented.")
+    def loss(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> losses.LossOutput:
+        """Compute ELBO loss for TEM training.
+
+        Implements the evidence lower bound (ELBO) following Gemici et al. (2017),
+        training both the generative model q(g,p,x|a) and inference network f(g,p|x,a)
+        jointly with pathway consistency constraints (teacher forcing).
+
+        The ELBO decomposes into:
+        - Reconstruction losses: p(x|p), p(x|g), p(x|g_prev,a)
+        - Consistency losses: q(p|g_inf) ≈ f(p|x), q(g|a,g_prev) ≈ f(g|x)
+        - Regularization: Priors on g (L2) and p (L1)
+
+        Args:
+            x: Sensory observation (ground truth).
+            locations: Environment descriptors for landmark cues.
+            a: Action taken.
+            state: Previous TEM state.
+
+        Returns:
+            LossOutput with total ELBO loss and individual components.
+
+        Example:
+            >>> output = model.loss(x, locations, a, state)
+            >>> output.total.backward()
+        """
+        # Process through both pathways to get all outputs
+        state_updated = self.forward(x, locations, a, state)
+
+        # Extract pathway outputs for ELBO computation
+        # Generative pathway: q(g,p,x|a,g_prev) via transition → memory → decoder
+        gen_outputs = _GenerativeOutputs(
+            g=state_updated.mec.transition_stats.mean,  # q(g|a,g_prev): Generated abstract location
+            p=state_updated.mec.projection,  # q(p|g): Retrieved grounded location (multi-scale)
+            x=state_updated.prediction,  # q(x|p): Generated sensory prediction
+        )
+
+        # Inference pathway: f(g,p|x,a) via encoder → memory → grounded inference
+        inf_outputs = _InferenceOutputs(
+            g=state_updated.mec.abstract_location,  # f(g|x,p_x): Inferred abstract location
+            p=state_updated.lec.projection,  # f(p_x|x): Sensory-retrieved grounded location (multi-scale)
+            x=state_updated.prediction,  # Reconstructed observation (shared decoder)
+            p_x=state_updated.grounded_location,  # f(p|g,x): Final grounded location inference
+        )
+
+        # Compute ELBO using TEMLoss (teacher forcing between pathways)
+        loss_fn = losses.TEMLoss()
+        return loss_fn(gen_outputs, inf_outputs, x)
+
+
+# Internal helper classes for protocol compliance
+@dataclass
+class _GenerativeOutputs:
+    """Internal implementation of GenerativeOutputs protocol."""
+
+    g: List
+    p: List
+    x: SensoryPrediction
+
+
+@dataclass
+class _InferenceOutputs:
+    """Internal implementation of InferenceOutputs protocol."""
+
+    g: List
+    p: Optional[List]
+    x: SensoryPrediction
+    p_x: Optional[List] = None
 
 
 class Simulation(Iterator[TEMState]):

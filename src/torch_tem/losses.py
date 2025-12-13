@@ -378,12 +378,7 @@ class TEMLoss(nn.Module):
         self.w_reg_g = config.w_reg_g
         self.w_reg_p = config.w_reg_p
 
-    def forward(
-        self,
-        gen_outputs: GenerativeOutputs,
-        inf_outputs: InferenceOutputs,
-        x_target: Tensor,
-    ) -> LossOutput:
+    def forward(self, gen_outputs: GenerativeOutputs, inf_outputs: InferenceOutputs, x_target: Tensor) -> LossOutput:
         """Compute full TEM loss with pathway consistency.
 
         Args:

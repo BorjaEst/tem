@@ -6,6 +6,7 @@ from torch import Tensor
 
 from .attractor import AttractorDynamics
 from .storage import MemoryStorage
+from .system import Memory
 
 Matrix = Tensor
 """A 2D tensor representing connection weights or transformations."""
@@ -35,6 +36,7 @@ memory state between iterations.
 """
 
 __all__ = [
+    "Memory",
     "MemoryStorage",
     "AttractorDynamics",
     "MemoryState",

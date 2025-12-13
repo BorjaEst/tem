@@ -82,7 +82,7 @@ class MECModel(nn.Module):
         Returns:
             Updated MEC state with new abstract location
         """
-        g_gen = self.transition(a, state.abstract_location)  # State transition: g → g (predict next abstract location)
+        g_gen = self.transition(state.abstract_location, a)  # State transition: g → g (predict next abstract location)
         g = self.abstract(g_gen, p_x, locations)  # Infer entorhinal (abstract location)
         g_ = self.projection(g)  # Project to hippocampal input: g → g_
         return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
@@ -98,7 +98,8 @@ class MECModel(nn.Module):
         """
         g_gen = [torch.zeros((self.batch_size, self.n_g[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
         g = [torch.zeros((self.batch_size, self.n_g[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
-        return MECState(transition_stats=g_gen, abstract_location=g)
+        g_ = self.projection(g)  # Project to hippocampal input
+        return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
 
 
 __all__ = ["MECParams", "MECState", "MECModel"]

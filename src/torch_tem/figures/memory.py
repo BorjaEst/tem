@@ -343,62 +343,117 @@ def plot_learning_curve(
 
 
 def plot_hierarchical_masks(
-    masks: List[Vector],
+    masks_inf: List[Vector],
+    masks_gen: Optional[List[Vector]] = None,
     n_p_per_freq: Optional[List[int]] = None,
-    title: str = "Hierarchical Mask Schedule (Coarse-to-Fine Convergence)",
-    figsize: Optional[tuple] = None,
-    ylim: tuple = (0, 1.2),
+    f_initial: Optional[List[float]] = None,
+    title: str = "Hierarchical Mask Schedule",
+    figsize: tuple = (14, 8),
 ) -> plt.Figure:
-    """Visualize hierarchical mask schedule for attractor iterations.
+    """Visualize hierarchical mask schedules comparing inference vs generative modes.
 
     Shows how different frequency modules are progressively enabled during
-    attractor dynamics. Early iterations update only low-frequency (coarse)
-    components, with higher frequencies enabled in later iterations.
+    attractor dynamics. Compares two retrieval strategies:
+    - Inference: All frequencies always active (conservative, stable)
+    - Generative: Coarse-to-fine early-stopping (hierarchical refinement)
 
     Args:
-        masks: List of mask tensors [n_p_total], one per attractor iteration
+        masks_inf: Inference mode masks [n_p_total], one per attractor iteration
+        masks_gen: Optional generative mode masks [n_p_total]
+                   If None, only inference mode is plotted
         n_p_per_freq: Place cell counts per frequency for boundary visualization
                      If None, no boundaries are drawn
+        f_initial: Initial frequency values for annotation
+                   If None, frequencies are not labeled
         title: Figure title
-        figsize: Figure size (width, height). If None, auto-sized based on n_masks
-        ylim: Y-axis limits for all subplots
+        figsize: Figure size (width, height)
 
     Returns:
-        matplotlib Figure with mask schedule visualization
+        matplotlib Figure with dual-mode mask schedule visualization
 
     Example:
         >>> attractor = AttractorDynamics(params)
         >>> fig = plot_hierarchical_masks(
         ...     attractor.p_retrieve_mask_inf,
-        ...     n_p_per_freq=params.n_p
+        ...     attractor.p_retrieve_mask_gen,
+        ...     n_p_per_freq=params.n_p,
+        ...     f_initial=params.f_initial
         ... )
         >>> fig.savefig('hierarchical_masks.png')
     """
-    n_masks = len(masks)
-
-    # Auto-size figure based on number of masks
-    if figsize is None:
-        figsize = (4 * n_masks, 4)
-
-    fig, axes = plt.subplots(1, n_masks, figsize=figsize)
-    if n_masks == 1:
+    # Determine layout based on whether generative masks are provided
+    n_plots = 2 if masks_gen is not None else 1
+    fig, axes = plt.subplots(n_plots, 1, figsize=figsize)
+    if n_plots == 1:
         axes = [axes]
 
-    for it, mask in enumerate(masks):
-        axes[it].bar(range(len(mask)), mask.cpu().numpy(), alpha=0.7, color=f"C{it}")
-        axes[it].set_title(f"Iteration {it+1}")
-        axes[it].set_xlabel("Place Cell Index")
-        axes[it].set_ylabel("Mask Value (0=Frozen, 1=Active)")
-        axes[it].set_ylim(ylim)
+    def plot_mask_schedule(ax, masks, mode_title, n_p_per_freq, f_initial):
+        """Helper to plot a single mask schedule as heatmap."""
+        n_masks = len(masks)
+        n_p_total = sum(n_p_per_freq) if n_p_per_freq else len(masks[0])
 
-        # Add frequency boundaries if provided
+        # Create matrix: rows = iterations, cols = neurons
+        mask_matrix = torch.stack([m for m in masks]).cpu().numpy()  # [i_attractor, n_p_total]
+
+        # Plot heatmap
+        im = ax.imshow(mask_matrix, aspect="auto", cmap="RdYlGn", vmin=0, vmax=1, interpolation="nearest")
+
+        # Add frequency boundaries and labels
         if n_p_per_freq is not None:
-            boundaries = [sum(n_p_per_freq[:i]) for i in range(1, len(n_p_per_freq))]
-            for boundary in boundaries:
-                axes[it].axvline(boundary, color="black", linestyle="--", alpha=0.5)
+            n_p_cumsum = [0] + torch.cumsum(torch.tensor(n_p_per_freq), dim=0).tolist()
 
-    fig.suptitle(title)
-    plt.tight_layout()
+            # Draw vertical boundaries between frequencies
+            for i, boundary in enumerate(n_p_cumsum[1:-1], 1):
+                ax.axvline(boundary - 0.5, color="black", linewidth=2, linestyle="--", alpha=0.5)
+
+            # Add frequency labels at top
+            for f, n_p in enumerate(n_p_per_freq):
+                center = n_p_cumsum[f] + n_p / 2
+                if f_initial is not None and f < len(f_initial):
+                    freq_val = f_initial[f]
+                    label = f"f{f}\n(α={freq_val:.1f})\n{n_p} cells"
+                else:
+                    label = f"f{f}\n{n_p} cells"
+                ax.text(center, -0.5, label, ha="center", va="top", fontsize=9, fontweight="bold")
+
+        ax.set_xlabel("Place Cell Index (grouped by frequency)", fontsize=11)
+        ax.set_ylabel("Attractor Iteration (τ)", fontsize=11)
+        ax.set_title(mode_title, fontsize=12, fontweight="bold", pad=20)
+        ax.set_yticks(range(n_masks))
+        ax.set_yticklabels([f"τ={i}" for i in range(n_masks)])
+
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax, label="Active (1.0) / Frozen (0.0)")
+
+        # Add summary: active neurons per iteration
+        active_per_iter = mask_matrix.sum(axis=1)
+        for i in range(n_masks):
+            ax.text(n_p_total + 5, i, f"{int(active_per_iter[i])}/{n_p_total}", va="center", fontsize=9, color="navy", fontweight="bold")
+
+    # Plot inference mode
+    inf_title = f"Inference Mode: All {len(n_p_per_freq) if n_p_per_freq else 'N'} frequencies always active (stable)"
+    plot_mask_schedule(axes[0], masks_inf, inf_title, n_p_per_freq, f_initial)
+
+    # Plot generative mode if provided
+    if masks_gen is not None:
+        gen_title = "Generative Mode: Hierarchical early-stopping (coarse→fine refinement)"
+        plot_mask_schedule(axes[1], masks_gen, gen_title, n_p_per_freq, f_initial)
+
+        # Add explanation text for dual-mode comparison
+        fig.text(
+            0.5,
+            0.02,
+            "Hierarchical masking: Coarse frequencies (low f) converge first, providing stable foundation for fine details (high f)",
+            ha="center",
+            fontsize=10,
+            style="italic",
+            wrap=True,
+        )
+        fig.tight_layout(rect=[0, 0.03, 1, 1])
+    else:
+        fig.tight_layout()
+
+    fig.suptitle(title, fontsize=14, fontweight="bold", y=0.98)
     return fig
 
 

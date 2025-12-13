@@ -347,11 +347,14 @@ if __name__ == "__main__":
         fig2.savefig(config.output_dir / "02_learning_dynamics.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 02_learning_dynamics.png")
 
-    # Plot 3: Hierarchical retrieval masks (inference mode)
+    # Plot 3: Hierarchical retrieval masks
+    # Compare inference vs generative modes to show hierarchical early-stopping
     fig3 = figures.plot_hierarchical_masks(
         mem_attractor.p_retrieve_mask_inf,
+        mem_attractor.p_retrieve_mask_gen,
         n_p_per_freq=model_config.n_p,
-        title="Hierarchical Mask Schedule (Inference Mode)",
+        f_initial=model_config.f_initial,
+        title="Hierarchical Mask Schedule: Inference vs Generative Modes",
     )
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_hierarchical_masks.png", dpi=150, bbox_inches="tight")

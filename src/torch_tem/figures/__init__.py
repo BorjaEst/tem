@@ -35,6 +35,7 @@ from torch_tem.figures.sensory import (
     plot_sensory_projection,
     plot_temporal_filtering,
 )
+from torch_tem.figures.simulation import plot_abstract_location_heatmap, plot_memory_formation_timeline, plot_prediction_accuracy
 
 __all__ = [
     # Data generation
@@ -75,4 +76,8 @@ __all__ = [
     "plot_uncertainty_evolution",
     "plot_g_inf_evolution",
     "plot_schedule_effect",
+    # Simulation state evolution
+    "plot_abstract_location_heatmap",
+    "plot_memory_formation_timeline",
+    "plot_prediction_accuracy",
 ]

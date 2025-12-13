@@ -166,20 +166,25 @@ Structure:
     - Dual memory: [M_gen, M_inf]
     
 Where:
-    - M_gen: Generative memory (p → x pathway)
-    - M_inf: Inference memory (x → p pathway, optional)
+    - M_gen: Generative memory (g → p pathway for generation)
+    - M_inf: Inference memory (x → p pathway for inference, optional)
+
+Shape:
+    Each matrix: [batch_size, sum(n_p), sum(n_p)]
 
 Theory:
-    Hebbian learning (η·p·g^T - κ·M) creates associative connections
-    between abstract and grounded representations, enabling both
-    memory-guided generation and inference.
+    Hebbian plasticity M = λ·M + η·(p_inf + p_gen) ⊗ (p_inf - p_gen)
+    creates associative connections between abstract and grounded
+    representations, enabling both memory-guided generation and inference.
+    The dual-memory architecture allows separate optimization of the
+    inference and generative pathways.
 """
 
 MemoryState = HebbianMemory
 """Complete memory state at a given timestep.
 
 Alias for HebbianMemory to clarify temporal context when passing
-memory state between iterations.
+memory state between iterations or for serialization/checkpointing.
 """
 
 

@@ -68,11 +68,8 @@ import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import core, data, figures, lec, mec, memory, utils
+from torch_tem import core, data, figures, hpc, lec, mec, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.mec.projection import Projection
-from torch_tem.memory.attractor import AttractorDynamics
-from torch_tem.memory.storage import MemoryStorage
 
 
 # ==============================================================================
@@ -205,8 +202,8 @@ if __name__ == "__main__":
     print(f"  ✓ GroundedLocInference: g_ ⊙ x_ → p (element-wise product)")
 
     # Memory system
-    storage = MemoryStorage(model_config, p_update_mask)
-    attractor = AttractorDynamics(model_config, mask_inf, mask_gen)
+    storage = hpc.memory.Storage(model_config, p_update_mask)
+    attractor = hpc.memory.Attractor(model_config, mask_inf, mask_gen)
     print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 

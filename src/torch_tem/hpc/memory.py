@@ -13,44 +13,59 @@ from . import attractor, storage
 
 
 class MemoryParams(Protocol):
-    """Combined parameters for memory system."""
+    """Protocol defining parameters required for memory system initialization."""
 
-    n_p: List[int]  # Dimensions of grounded location per frequency
-    n_f: int  # Total number of frequency modules
-    n_f_g: int  # Number of grid cell frequency modules
-    n_f_ovc: int  # Number of OVC frequency modules
-    f_extended: List[float]  # Extended frequency list including OVC modules
-    lambda_: float  # Memory retention factor
-    kappa: float  # Attractor stability parameter
-    common_memory: bool  # Whether to use a common memory for inference and generation
-    batch_size: int  # Number of parallel environments / memory instances
-    i_attractor: int  # Number of attractor iterations
-    max_freq_inf: List[int]  # Max iterations per frequency for inference
-    max_freq_gen: List[int]  # Max iterations per frequency for generation
+    n_p: List[int]
+    n_f: int
+    n_f_g: int
+    n_f_ovc: int
+    f_extended: List[float]
+    lambda_: float
+    kappa: float
+    common_memory: bool
+    batch_size: int
+    i_attractor: int
+    max_freq_inf: List[int]
+    max_freq_gen: List[int]
 
 
 class Memory:
-    """Unified memory system combining storage and retrieval.
+    """Unified hippocampal memory system combining Hebbian storage and attractor retrieval.
 
-    Handles both Hebbian memory storage and attractor-based retrieval,
-    managing dual-memory architecture (M_gen/M_inf) internally. This class
-    provides a clean, high-level API for memory operations in TEM.
+    Manages the dual-memory architecture (M_gen/M_inf) for bidirectional inference
+    between abstract and grounded location representations. Connectivity masks for
+    hierarchical learning and retrieval are computed internally from model parameters.
 
-    The memory system bridges inference and generation:
-    - Inference: Retrieving grounded locations from sensory input (x → p)
-    - Generation: Predicting grounded locations from grid cells (g → p)
+    Architecture:
+        - MemoryStorage: Hebbian plasticity with hierarchical update masks
+        - AttractorDynamics: Iterative pattern completion with early-stopping
+        - Dual Memory: Separate M_gen (generation) and M_inf (inference) matrices
 
-    Connectivity masks are computed internally from the model configuration,
-    simplifying the initialization and ensuring consistency.
+    Data Flow:
+        Inference pathway:  x → x_ → M_inf → p_x  (sensory to grounded)
+        Generative pathway: g → g_ → M_gen → p_g  (abstract to grounded)
+        Memory update:      M ← λ·M + η·(p_inf + p_gen) ⊗ (p_inf - p_gen)
+
+    Attributes:
+        storage: MemoryStorage instance managing Hebbian matrices
+        attractor: AttractorDynamics instance for pattern completion
 
     Example:
-        >>> memory = Memory(params)
-        >>> # Retrieve from sensory input
+        >>> from torch_tem.hpc import Memory
+        >>> memory = Memory(model_config)
+        >>>
+        >>> # Retrieve grounded location from sensory input (inference)
         >>> p_x = memory.retrieve(x_, for_inference=True)
-        >>> # Retrieve from grid cells
+        >>>
+        >>> # Retrieve grounded location from grid cells (generation)
         >>> p_g = memory.retrieve(g_, for_inference=False)
-        >>> # Update memory
+        >>>
+        >>> # Update memory with Hebbian plasticity
         >>> memory.update(p_inferred, p_generated, eta=0.3)
+        >>>
+        >>> # Access underlying storage for advanced operations
+        >>> M_gen = memory.storage.M_gen
+        >>> all_memories = memory.get_all_memories()
     """
 
     def __init__(self, params: MemoryParams):

@@ -16,9 +16,10 @@ from typing import Dict, List, Optional
 from torch import nn
 
 from . import config, hpc, lec, losses, mec
-from .types import AbstractLocation, GroundedLocation, LocationInference
-from .types import Observation, SensoryPrediction, MultiScaleCode
-from .types import InferencePathwayOutputs, GenerativePathwayOutputs
+
+from .types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
+from .types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
+from .types import InferencePathwayOutputs, GenerativePathwayOutputs  # isort: skip
 
 
 class TEMParams(config.ModelConfig):

@@ -20,7 +20,14 @@ from .types import AbstractLocation, GroundedLocation, LocationInference, Memory
 
 
 class TEMParams(config.ModelConfig):
-    """ """
+    """Protocol for TEM model initialization parameters.
+
+    Extends ModelConfig with TEM-specific training parameters.
+
+    Attributes:
+        batch_size: Batch size for parallel environments.
+        eta: Learning rate for Hebbian memory update.
+    """
 
     batch_size: int  # Batch size for parallel environments
     eta: float  # Learning rate for Hebbian memory update
@@ -30,6 +37,17 @@ class TEMParams(config.ModelConfig):
 
 @dataclass
 class TEMState:
+    """State container for the TEM model.
+
+    Maintains the complete state across all TEM pathways (LEC, MEC, HPC).
+
+    Attributes:
+        grounded_location: Inferred hippocampal place cells (inference mode).
+        prediction: Predicted sensory observation (generative mode).
+        lec: Lateral entorhinal cortex state.
+        mec: Medial entorhinal cortex state.
+    """
+
     grounded_location: Optional[GroundedLocation]
     prediction: Optional[SensoryPrediction]
     lec: lec.LECState
@@ -53,8 +71,22 @@ class TEMState:
 
 
 class TEMModel(nn.Module):
+    """Tolman-Eichenbaum Machine (TEM) for spatial navigation and memory.
+
+    TEM combines two pathways:
+    - LEC pathway: Sensory processing (x → x_f → x_ → p_x)
+    - MEC pathway: Abstract location processing (g → g_ → p_g)
+
+    These converge in the hippocampus to form conjunctive place cells (p = g ⊗ x).
+    Memory updates via Hebbian learning strengthen associations between co-active patterns.
+    """
+
     def __init__(self, params: TEMParams):
-        """ """
+        """Initialize TEM model.
+
+        Args:
+            params: Configuration with all component parameters and training settings.
+        """
         super().__init__()
         self.batch_size = params.batch_size
         self.eta = params.eta
@@ -66,7 +98,20 @@ class TEMModel(nn.Module):
         self.mec = mec.MECModel(params)  # MEC pathway module
 
     def forward(self, x: Optional[Observation], locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
-        """ """
+        """Forward pass through TEM model.
+
+        Processes sensory input and actions to update abstract and grounded locations,
+        generate predictions, and update memory via Hebbian learning.
+
+        Args:
+            x: Sensory observation (None for generative mode).
+            locations: Environment descriptors for landmark cues.
+            a: Action taken (None for initial state).
+            state: Previous TEM state.
+
+        Returns:
+            Updated TEM state with new locations and predictions.
+        """
 
         # LEC Pathway steps; We process sensory input to prepare for memory retrieval
         state_lec = state.lec(x, state.lec) if x else state.lec  # Process observation: x → x_f
@@ -88,17 +133,43 @@ class TEMModel(nn.Module):
         return TEMState(grounded_location=p, prediction=x_hat, lec=state_lec, mec=state_mec)
 
     def inference(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
-        """ """
+        """Infer current location from sensory observation.
+
+        Args:
+            x: Sensory observation.
+            locations: Environment descriptors.
+            a: Action taken.
+            state: Previous TEM state.
+
+        Returns:
+            Location inference with abstract and grounded locations.
+        """
         state = self.forward(x, locations, a, state)  # What we expect to see after action
         return LocationInference(abstract=state.abstract_location, grounded=state.grounded_location)
 
     def generative(self, locations: List[Dict], a: int, state: TEMState) -> SensoryPrediction:
-        """ """
+        """Generate sensory prediction from action.
+
+        Args:
+            locations: Environment descriptors.
+            a: Action to take.
+            state: Current TEM state.
+
+        Returns:
+            Predicted sensory observation.
+        """
         state = self.forward(None, locations, a, state)  # Where do I expect to be
         return state.prediction
 
     def init_state(self, x: Observation) -> TEMState:
-        """ """
+        """Initialize TEM state from first observation.
+
+        Args:
+            x: Initial sensory observation (for device placement).
+
+        Returns:
+            Initial TEM state with zero-initialized locations.
+        """
         lec_state = self.lec.init_state(x[0].device)  # Initialize LEC state
         mec_state = self.mec.init_state(x[0].device)  # Initialize MEC state
         return TEMState(grounded_location=None, prediction=None, lec=lec_state, mec=mec_state)

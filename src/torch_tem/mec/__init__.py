@@ -9,7 +9,15 @@ from . import abstract, projection, transition
 
 
 class MECParams(abstract.AbstractLocParams, transition.TransitionParams):
-    """ """
+    """Protocol for MEC model initialization parameters.
+
+    Combines parameters needed for abstract location inference and transitions.
+
+    Attributes:
+        n_g: Abstract location dimensions per frequency module.
+        n_f: Number of frequency modules.
+        batch_size: Batch size for state initialization.
+    """
 
     n_g: List[int]
     n_f: int
@@ -18,7 +26,13 @@ class MECParams(abstract.AbstractLocParams, transition.TransitionParams):
 
 @dataclass
 class MECState:
-    """ """
+    """State container for MEC pathway.
+
+    Attributes:
+        transition_stats: Predicted abstract location from transition model.
+        abstract_location: Fused abstract location after inference.
+        projection: Projected abstract location to hippocampal input space.
+    """
 
     transition_stats: transition
     abstract_location: AbstractLocation
@@ -26,10 +40,20 @@ class MECState:
 
 
 class MECModel(nn.Module):
-    """ """
+    """Medial Entorhinal Cortex (MEC) pathway for spatial navigation.
+
+    Implements abstract location processing through:
+    - Transition prediction (path integration)
+    - Abstract location inference (fusion with memory and landmarks)
+    - Projection to hippocampal input space
+    """
 
     def __init__(self, params: MECParams):
-        """ """
+        """Initialize MEC model.
+
+        Args:
+            params: Configuration with n_g, n_f, and all submodule parameters.
+        """
         super().__init__()
         self.transition = transition.TransitionModel(params)  # Transition model module
         self.abstract = abstract.AbstractLocInference(params)  # Abstract location inference module
@@ -38,12 +62,12 @@ class MECModel(nn.Module):
 
     @property
     def n_g(self) -> List[int]:
-        """ """
+        """Abstract location dimensions per frequency module."""
         return self.transition.n_g
 
     @property
     def n_f(self) -> int:
-        """ """
+        """Number of frequency modules."""
         return self.transition.n_f
 
     def forward(self, p_x: Optional[GroundedLocation], locations: List[Dict], a: Optional[Tensor], state: MECState) -> MECState:
@@ -64,7 +88,14 @@ class MECModel(nn.Module):
         return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
 
     def init_state(self, device: torch.device) -> MECState:
-        """ """
+        """Initialize MEC state with zeros.
+
+        Args:
+            device: Device for tensor allocation.
+
+        Returns:
+            Initial MECState with zero-initialized abstract locations.
+        """
         g_gen = [torch.zeros((self.batch_size, self.n_g[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
         g = [torch.zeros((self.batch_size, self.n_g[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
         return MECState(transition_stats=g_gen, abstract_location=g)

@@ -5,8 +5,8 @@ This example demonstrates the full torch_tem inference pipeline, integrating com
 from inference_sensory.py, inference_grounded.py, inference_abstract.py, memory_storage.py,
 and memory_attractor.py into a single comprehensive demonstration.
 
-Pipeline Stages (TEM Manuscript):
-----------------------------------
+Pipeline Stages (TEM Manuscript - Inference):
+----------------------------------------------
 Following the exact inference steps from the TEM manuscript:
 
 1. Compress sensory observation: x_c = f_c(x)
@@ -33,20 +33,20 @@ Data Flow (Manuscript Notation):
 
 Usage Examples:
 ---------------
-    # Default: 50 timesteps, memory enabled, save plots
-    python examples/inference.py
+    # Default: 100 timesteps, save plots
+    python examples/tem_inference.py
 
     # Longer walk with different architecture
-    python examples/inference.py --walk_length 100 --n_f 4
+    python examples/tem_inference.py --walk_length 200 --n_x_c 12
 
     # Different grid size and observation mode
-    python examples/inference.py --grid_size 7 --observation_mode tiled
+    python examples/tem_inference.py --grid_size 7 --observation_mode tiled
 
     # Show plots interactively
-    python examples/inference.py --show_plots true --save_plots false
+    python examples/tem_inference.py --show_plots true --save_plots false
 
     # Full help
-    python examples/inference.py --help
+    python examples/tem_inference.py --help
 
 Outputs:
 --------
@@ -208,9 +208,9 @@ if __name__ == "__main__":
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 
     # =========================================================================
-    # PHASE 3: Initialize Grid Cell State
+    # PHASE 3: Initialize Component States
     # =========================================================================
-    print("Phase 3: Initializing abstract location state...")
+    print("Phase 3: Initializing component states...")
     # Generate a single synthetic transition for initial uncertainty estimate
     grid_generator = data.OscillatoryGridGenerator(model_config, 1, batch_size=1)
     initial_transition = grid_generator.generate()[0]  # Single Transition (g_init, sigma_init)
@@ -331,7 +331,17 @@ if __name__ == "__main__":
 
     print()
     print("=" * 80)
-    print("Pipeline Summary (Manuscript Steps):")
+    print("INFERENCE PIPELINE SUMMARY")
+    print("=" * 80)
+    print(f"Environment:        {config.grid_size}×{config.grid_size} grid")
+    print(f"Walk Length:        {config.walk_length} steps")
+    print(f"Frequencies:        {model_config.n_f} scales")
+    print(f"Grid Cells:         {sum(model_config.n_g)} total")
+    print(f"Conjunctive Codes:  {sum(model_config.n_p)} total")
+    print(f"Memory Size:        {sum(model_config.n_p)}×{sum(model_config.n_p)}")
+    print("=" * 80)
+    print()
+    print("Pipeline Flow (Manuscript Steps):")
     print("=" * 80)
     print(f"Input:  x - {model_config.n_x}-dim observations ({config.observation_mode} mode)")
     print(f"  ↓ Step 1: f_c(x) - Compress sensory")
@@ -359,3 +369,5 @@ if __name__ == "__main__":
         plt.show()
     else:
         plt.close("all")
+
+    print("\n✓ Inference pipeline demonstration complete!")

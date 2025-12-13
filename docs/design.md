@@ -12,15 +12,15 @@ The `TEMModel` class orchestrates multiple specialized submodules, each responsi
 
 ```
 TEMModel
-├── SensoryEncoder: One-hot → two-hot compression
-├── SensoryProcessor: Temporal filtering and normalization
+├── Encoder: One-hot → two-hot compression (lec.encoder)
+├── Processor: Temporal filtering and normalization (lec.processor)
 ├── TransitionModel: Action-conditioned abstract location dynamics
 ├── GroundedLocInference: Conjunctive coding (g ⊗ x → p)
 ├── AbstractLocInference: Precision-weighted fusion
 ├── MemoryStorage: Hebbian associative memory
 ├── AttractorDynamics: Iterative pattern completion
 ├── Projection: Abstract location transformations
-└── ObservationDecoder: Place cells → sensory predictions
+└── Decoder: Place cells → sensory predictions (lec.decoder)
 ```
 
 ### Component Initialization Pattern
@@ -40,8 +40,8 @@ class TEMModel(nn.Module):
         # ... (g_downsample, g_connections, p_update_mask, p_retrieve_masks)
 
         # Component instantiation
-        self.encoder = SensoryEncoder(config, self.two_hot_table)
-        self.processor = SensoryProcessor(config)
+        self.encoder = lec.Encoder(config, self.two_hot_table)
+        self.processor = lec.Processor(config)
         self.transition = TransitionModel(config, self.g_connections)
         # ... (remaining components)
 ```
@@ -551,8 +551,8 @@ Removed 16 legacy method stubs (f_mu_g_path, f_sigma_g_path, f_mu_g_mem, f_sigma
 | f_mu_g_path, f_sigma_g_path   | TransitionModel       | Encapsulates action-conditioned dynamics |
 | f_mu_g_mem, f_sigma_g_mem     | AbstractLocInference  | Handles precision-weighted fusion        |
 | f_mu_g_shiny, f_sigma_g_shiny | AbstractLocInference  | Integrates object-vector signals         |
-| f_c, f_c_star                 | SensoryEncoder        | Two-hot encoding/decoding                |
-| f_n                           | SensoryProcessor      | Normalization and temporal filtering     |
+| f_c, f_c_star                 | lec.Encoder           | Two-hot encoding/decoding                |
+| f_n                           | lec.Processor         | Normalization and temporal filtering     |
 | f_g, f_g_clamp                | Projection            | Downsampling and normalization           |
 | f_p                           | GroundedLocInference  | Sparse activation in outer product       |
 | attractor                     | AttractorDynamics     | Iterative pattern completion             |

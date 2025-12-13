@@ -12,8 +12,8 @@ graph TB
     
     %% Core Components
     subgraph Core["Core Components (torch_tem.core)"]
-        Encoder["SensoryEncoder<br/>x → x_c<br/>(one-hot → two-hot)"]
-        Decoder["ObservationDecoder<br/>p → x<br/>(place → observation)"]
+        Encoder["Encoder<br/>x → x_c<br/>(one-hot → two-hot)"]
+        Decoder["Decoder<br/>p → x<br/>(place → observation)"]
         Projection["Projection<br/>g transformations<br/>(downsample, normalize, clamp)"]
         Tiling["SensoryProjection<br/>x_f → x_<br/>(tile + weight)"]
         Transition["TransitionModel<br/>a, g → g'<br/>(action-based dynamics)"]
@@ -21,7 +21,7 @@ graph TB
     
     %% Inference Components
     subgraph Inference["Inference Components (torch_tem.inference)"]
-        Sensory["SensoryProcessor<br/>temporal filtering<br/>& normalization"]
+        Sensory["Processor<br/>temporal filtering<br/>& normalization"]
         Grounded["GroundedLocInference<br/>g ⊗ x → p<br/>(outer product)"]
         Abstract["AbstractLocInference<br/>precision-weighted fusion<br/>(path + memory + shiny)"]
     end

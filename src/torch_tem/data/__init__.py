@@ -8,7 +8,7 @@ Replaces the legacy world.py with a modular, Protocol-based architecture.
 from torch_tem.data.abstract import MemorySignalGenerator, ShinySignalGenerator, TransitionPredictionGenerator
 from torch_tem.data.datamodule import InfiniteWalkDataset, TEMDataModule
 from torch_tem.data.environment import Action, Environment, Location
-from torch_tem.data.memory import MemoryMatrixGenerator, generate_block_diagonal_memory, generate_hebbian_memory, generate_memory_from_walk, generate_random_memory
+from torch_tem.data.memory import MemoryMatrixGenerator
 from torch_tem.data.patterns import GridCellPatternGenerator, OscillatoryGridGenerator, PairedPatternGenerator, PlaceCellPatternGenerator
 from torch_tem.data.policies import PolicyGenerator
 from torch_tem.data.shiny import ShinyConfig, ShinyEnvironmentBuilder
@@ -33,8 +33,4 @@ __all__ = [
     "MemorySignalGenerator",
     "ShinySignalGenerator",
     "MemoryMatrixGenerator",
-    "generate_hebbian_memory",
-    "generate_memory_from_walk",
-    "generate_random_memory",
-    "generate_block_diagonal_memory",
 ]

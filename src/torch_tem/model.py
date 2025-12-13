@@ -17,12 +17,12 @@ import torch
 from torch import Tensor, nn
 
 from . import config, core
+from . import hpc as hpc_
 from . import lec as lec_
 from . import losses
 from . import mec as mec_
-from . import memory as memory_
 from . import utils
-from .types import AbstractLocation, GroundedLocation, LocationInference, Matrix, MultiScaleCode, Observation, SensoryPrediction
+from .types import AbstractLocation, GroundedLocation, LocationInference, Matrix, MemoryState, MultiScaleCode, Observation, SensoryPrediction
 
 
 class TEMParams(config.ModelConfig):
@@ -64,14 +64,12 @@ class TEMModel(nn.Module):
         super().__init__()
         self.batch_size = params.batch_size
         self.eta = params.eta
-
-        # Compute W_tile for decoder
         W_tile = utils.create_W_tile(params.n_g_subsampled_combined, params.n_x_f)
 
         # Initialize components
         self.grounded = core.GroundedLocInference(params)  # Hippocampal inference module
         self.decoder = core.Decoder(params, W_tile)  # Observation decoder module
-        self.memory = memory_.Memory(params)  # Unified memory system (masks computed internally)
+        self.memory = hpc_.Memory(params)  # Unified memory system (masks computed internally)
         self.lec = lec_.LECModel(params)  # LEC pathway module
         self.mec = mec_.MECModel(params)  # MEC pathway module
 
@@ -125,7 +123,7 @@ class TEMModel(nn.Module):
 
 
 class Simulation(Iterator[TEMState]):
-    def __init__(self, model: TEMModel, walk, memory: memory_.MemoryState):
+    def __init__(self, model: TEMModel, walk, memory: MemoryState):
         self.__model = model
         self.__walk_iter = iter(walk)
 

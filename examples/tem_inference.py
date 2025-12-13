@@ -180,7 +180,7 @@ if __name__ == "__main__":
     print("Phase 2: Initializing inference components...")
 
     # Sensory processing
-    encoder = lec.sensory.Encoder(model_config)
+    encoder = lec.encoder.Encoder(model_config)
     processor = lec.processor.Processor(model_config)
     lec_projection = lec.projection.Projection(model_config)
     print(f"  ✓ Encoder: {model_config.n_x} → {model_config.n_x_c} (two-hot)")

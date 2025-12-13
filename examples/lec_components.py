@@ -180,7 +180,7 @@ if __name__ == "__main__":
     # LEC Encoder: Compresses observations using two-hot encoding
     # Maps one-hot observations [n_x] to compressed representation [n_x_c]
     # Uses a lookup table computed from model_config.two_hot_table property
-    encoder = lec.sensory.Encoder(model_config)
+    encoder = lec.encoder.Encoder(model_config)
 
     # LEC Processor: Applies multi-frequency temporal filtering
     # Maintains n_f parallel exponential moving averages with learnable decay rates

@@ -202,8 +202,8 @@ if __name__ == "__main__":
     print(f"  ✓ GroundedLocInference: g_ ⊙ x_ → p (element-wise product)")
 
     # Memory system
-    storage = hpc.memory.Storage(model_config, p_update_mask)
-    attractor = hpc.memory.Attractor(model_config, mask_inf, mask_gen)
+    storage = hpc.storage.MemoryStorage(model_config, p_update_mask)
+    attractor = hpc.attractor.AttractorDynamics(model_config, mask_inf, mask_gen)
     print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 

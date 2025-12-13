@@ -198,7 +198,7 @@ if __name__ == "__main__":
     print()
 
     # Grounded location inference
-    grounded = core.GroundedLocInference(model_config)
+    grounded = hpc.GroundedLocInference(model_config)
     print(f"  ✓ GroundedLocInference: g_ ⊙ x_ → p (element-wise product)")
 
     # Memory system

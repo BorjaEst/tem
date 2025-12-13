@@ -19,7 +19,7 @@ from .. import utils
 from ..types import Matrix, MultiScaleCode
 
 
-class ModelParams(Protocol):
+class AttractorParams(Protocol):
     """Architecture parameters needed by AttractorDynamics."""
 
     i_attractor: int  # Number of attractor iterations
@@ -41,7 +41,7 @@ class AttractorDynamics:
     where mask progressively enables higher frequencies across iterations.
     """
 
-    def __init__(self, params: ModelParams, mask_inf: List[Matrix], mask_gen: List[Matrix]):
+    def __init__(self, params: AttractorParams, mask_inf: List[Matrix], mask_gen: List[Matrix]):
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:

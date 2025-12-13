@@ -19,12 +19,18 @@ Theory:
     - M_inf: Sensory → Place mapping for inference pathway (optional)
 """
 
-from .attractor import AttractorDynamics
-from .memory import Memory
-from .storage import MemoryStorage
+from .attractor import AttractorDynamics, AttractorParams
+from .grounded import GroundedLocInference, GroundedLocParams
+from .memory import Memory, MemoryParams
+from .storage import MemoryStorage, StorageParams
 
 __all__ = [
+    "MemoryParams",
     "Memory",
     "MemoryStorage",
+    "StorageParams",
+    "AttractorParams",
     "AttractorDynamics",
+    "GroundedLocParams",
+    "GroundedLocInference",
 ]

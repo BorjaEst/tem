@@ -130,7 +130,13 @@ if __name__ == "__main__":
     # Create config objects with proper field mapping
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
     model_config = ModelConfig(
-        n_x=environment_config.n_locations, n_x_c=config.n_x_c, n_g_subsampled=config.n_g_subsampled, f_initial=config.f_initial, eta=config.eta, kappa=config.kappa
+        n_x=environment_config.n_locations,
+        n_x_c=config.n_x_c,
+        n_g_subsampled=config.n_g_subsampled,
+        f_initial=config.f_initial,
+        eta=config.eta,
+        kappa=config.kappa,
+        batch_size=1,  # Single walk inference
     )
 
     # Compute connectivity matrices from model config
@@ -200,7 +206,7 @@ if __name__ == "__main__":
 
     # Memory system
     storage = MemoryStorage(model_config, p_update_mask)
-    attractor = AttractorDynamics(model_config)
+    attractor = AttractorDynamics(model_config, mask_inf, mask_gen)
     print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 
@@ -224,11 +230,12 @@ if __name__ == "__main__":
     x__history = []  # ~x: sensory input to hippocampus
     p_x_history = []  # p_x: retrieved hippocampal patterns from sensory
     g_history = []  # g: inferred entorhinal (abstract location)
+    g_downsampled_history = []  # g_downsampled: downsampled grid cells for visualization
     g__history = []  # ~g: entorhinal input to hippocampus
     p_history = []  # p: inferred hippocampus (grounded location)
 
     x_prev = [torch.zeros(1, model_config.n_x_c) for _ in range(model_config.n_f)]
-    g_prev, sigma_prev = initial_transition  # Unpack initial Transition (g, sigma)
+    g_prev = initial_transition.mean  # Extract mean from Transition
     for t in range(config.walk_length):
         # Step 1 (Manuscript): Compress sensory observation x_c = f_c(x)
         x = observations[t].unsqueeze(0)  # [n_x] → [B, n_x]
@@ -240,27 +247,35 @@ if __name__ == "__main__":
         x_f_history.append([x[0] for x in x_f])
 
         # Step 3 (Manuscript): Sensory input to hippocampus ~x = W_tile·w_p·f_n(x_f)
-        x_ = lec_projection(x_f)  # [B, sum(n_p)]
+        x_ = lec_projection(x_f)  # List[n_f] of [B, n_p[f]]
         x__history.append([x[0] for x in x_])
 
         # Step 4 (Manuscript): Retrieve memory p_x = attractor(~x, M_{t-1})
-        M_inf = storage.get_memory(for_inference=True)
-        p_x = attractor(x_, M_inf, for_inference=True)  # [B, sum(n_p)]
+        p_x = attractor(x_, storage.M_inf, for_inference=True)  # List[n_f] of [B, n_p[f]]
+        p_x_history.append([p[0] for p in p_x])
 
         # Step 5 (Manuscript): Infer entorhinal g ~ q_φ(g | p_x, g_{t-1}, a_t)
-        g_gen = transition(g_prev, locations[t].unsqueeze(0))  # [B, n_g]
-        g = abstract(g_gen, p_x, locations)  # List[n_f] of [B, n_g_sub[f]]
-        g_history.append([g[0] for g in g])
+        action_t = walk.actions[t].unsqueeze(0)  # [B]
+        g_gen = transition(g_prev, action_t)  # Returns Transition(mean, uncertainty)
+        location_dict = [{"shiny": None}]  # No shiny objects in this example
+        g = abstract(g_gen, p_x, location_dict)  # List[n_f] of [B, n_g[f]]
+        g_history.append([g_f[0] for g_f in g])
 
         # Step 6 (Manuscript): Entorhinal input to hippocampus ~g = W_repeat·f_down(g)
-        g_x = mec_projection(g)  # [B, sum(n_p)]
+        g_downsampled = mec_projection.downsample(g)  # List[n_f] of [B, n_g_sub[f]]
+        g_downsampled_history.append([g_f[0] for g_f in g_downsampled])
+        g_ = mec_projection.repeat(g_downsampled)  # List[n_f] of [B, n_p[f]]
+        g__history.append([g_f[0] for g_f in g_])
 
         # Step 7 (Manuscript): Infer hippocampus p ~ N(μ = f_p(g_ ⊙ x_), σ = f(x_, g_))
-        p = grounded(g_x, x_)  # [B, sum(n_p)]
-        p_history.append([p[0] for p in p])
+        p = grounded(g_, x_)  # List[n_f] of [B, n_p[f]]
+        p_history.append([p_f[0] for p_f in p])
 
         # Step 8 (Manuscript): Form memory M_t = hebbian(M_{t-1}, p)
-        storage.update(p, p, eta=config.eta)
+        p_g = attractor(g_, storage.M_gen, for_inference=False)  # Retrieve memory
+        p_g = torch.cat(p_g, dim=1)  # [B, sum(n_p)]
+        p = torch.cat(p, dim=1)  # [B, sum(n_p)]
+        storage.update(p, p_g, eta=config.eta)
 
         # Step 9 (Manuscript): Repeat process for next observation
         g_prev = g  # Update previous abstract location
@@ -295,22 +310,24 @@ if __name__ == "__main__":
 
     # Plot 5: Outer product structure (mid-point)
     mid_point = config.walk_length // 2
-    g_mid = g_history[mid_point]  # List[n_f] of [1, n_g[f]] - inferred entorhinal
-    gilde_mid = g__history[mid_point]  # Already downsampled
-    g_sample = [gilde_mid[f][0] for f in range(model_config.n_f)]
-    fig5 = figures.plot_outer_product_structure(g_sample, x_f_history[mid_point], p_history[mid_point], model_config.f_extended)
+    g_downsampled_mid = g_downsampled_history[mid_point]  # List[n_f] of [n_g_sub[f]] - downsampled grid cells
+    fig5 = figures.plot_outer_product_structure(g_downsampled_mid, x_f_history[mid_point], p_history[mid_point], model_config.f_extended)
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_outer_product_structure.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 05_outer_product_structure.png")
 
     # Plot 6: Abstract location evolution
-    fig6 = figures.plot_g_inf_evolution(g_history, model_config.n_f, config.walk_length)
+    # Convert unbatched g_history back to batched format for plotting: List[T] of List[n_f] of [B=1, n_g[f]]
+    g_history_batched = [[g_f.unsqueeze(0) for g_f in g_t] for g_t in g_history]
+    fig6 = figures.plot_g_inf_evolution(g_history_batched, model_config.n_f, config.walk_length)
     if config.save_plots:
         fig6.savefig(config.output_dir / "06_abstract_location.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 06_abstract_location.png")
 
-    # Plot 7: Memory matrices
-    fig7 = figures.plot_memory_matrices(storage.M_gen, storage.get_memory(for_inference=True), model_config.n_p, config.walk_length)
+    # Plot 7: Memory matrices (extract first batch element for visualization)
+    M_gen_vis = storage.M_gen[0]  # [sum(n_p), sum(n_p)]
+    M_inf_vis = storage.get_memory(for_inference=True)[0] if storage.M_inf is not None else None
+    fig7 = figures.plot_memory_matrices(M_gen_vis, M_inf_vis, model_config.n_p, config.walk_length)
     if config.save_plots:
         fig7.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 07_memory_matrices.png")

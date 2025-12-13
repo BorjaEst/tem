@@ -24,12 +24,17 @@ from ..types import MultiScaleCode
 
 
 class ProjectionParams(Protocol):
-    """Architecture parameters needed by Projection."""
+    """Architecture parameters needed by Projection.
 
-    n_f: int  # Number of frequency modules
-    n_x_f: List[int]  # Filtered sensory dimensions per frequency (typically all equal to n_x_c)
-    n_g_subsampled_combined: List[int]  # Subsampled grid cell dimensions per frequency
-    n_p: List[int]  # Hippocampal dimensions per frequency (n_g_sub × n_x_f)
+    Attributes:
+        n_f: Number of frequency modules
+        n_x_f: Filtered sensory dimensions per frequency
+        n_p: Hippocampal dimensions per frequency
+    """
+
+    n_f: int
+    n_x_f: List[int]
+    n_p: List[int]
 
 
 class Projection(nn.Module):
@@ -53,16 +58,18 @@ class Projection(nn.Module):
     """
 
     def __init__(self, params: ProjectionParams):
+        """Initialize projection module.
+
+        Note: W_tile matrices are managed by the parent LECModel and passed
+        to forward() to ensure consistency and proper device management.
+
+        Args:
+            params: Configuration with n_f, n_x_f, n_p
+        """
         super().__init__()
         self.n_f = params.n_f
         self.n_x_f = params.n_x_f
         self.n_p = params.n_p
-
-        # Register tiling matrices as buffers for automatic device management
-        # W_tile matrices expand sensory from n_x_f to n_p (n_g_subsampled × n_x_f)
-        W_tile = utils.create_W_tile(params.n_g_subsampled_combined, params.n_x_f)
-        for i, matrix in enumerate(W_tile):
-            self.register_buffer(f"W_tile_{i}", matrix)
 
         # Learnable frequency-specific weights (initialized to 1.0)
         self.w_p = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_f)])
@@ -91,7 +98,7 @@ class Projection(nn.Module):
         """
         return [torch.nn.functional.normalize(torch.relu(x - x.mean(dim=-1, keepdim=True)), p=2, dim=-1) for x in x_f]
 
-    def tiling(self, x_f: MultiScaleCode) -> MultiScaleCode:
+    def tiling(self, x_f: MultiScaleCode, W_tile: List[Tensor]) -> MultiScaleCode:
         """Tile normalized sensory to hippocampal dimension with learned weighting.
 
         Expands the sensory representation from n_x_f to n_p dimensions using
@@ -114,43 +121,29 @@ class Projection(nn.Module):
             W_tile[f] ∈ ℝ^(n_x_f[f] × n_p[f]) created via Kronecker product
 
         Args:
-            x_f: Normalized sensory representations, List[n_f] of (batch, n_x_f[f]).
+            x_f: Normalized sensory representations, List[n_f] of (batch, n_x_f[f])
+            W_tile: Tiling matrices, List[n_f] of (n_x_f[f], n_p[f])
 
         Returns:
             Tiled sensory representations, List[n_f] of (batch, n_p[f]).
                 Ready for outer product with grid cells to form place cells.
         """
-        return [torch.sigmoid(self.w_p[f]) * x_f[f] @ self.get_tile_matrix(f) for f in range(self.n_f)]
+        return [torch.sigmoid(self.w_p[f]) * x_f[f] @ W_tile[f] for f in range(self.n_f)]
 
-    def forward(self, x_f: MultiScaleCode) -> MultiScaleCode:
+    def forward(self, x_f: MultiScaleCode, W_tile: List[Tensor]) -> MultiScaleCode:
         """Project filtered sensory to hippocampal space: x_f → x̃.
 
         Pipeline: normalize(x_f) → tile → weight → x̃
 
         Args:
             x_f: Filtered sensory List[n_f] of (batch, n_x_f[f])
+            W_tile: Tiling matrices List[n_f] of (n_x_f[f], n_p[f])
 
         Returns:
             Projected sensory List[n_f] of (batch, n_p[f])
         """
         x_norm = self.normalize(x_f)
-        return self.tiling(x_norm)
-
-    def get_tile_matrix(self, f: int) -> Tensor:
-        """Retrieve tiling matrix for a specific frequency module.
-
-        Tiling matrices are stored as buffers (W_tile_0, W_tile_1, ...) for
-        automatic device management and non-trainable parameters. Each matrix
-        expands sensory dimension n_x_f[f] to hippocampal dimension n_p[f].
-
-        Args:
-            f: Frequency module index (0 to n_f-1).
-
-        Returns:
-            Tiling matrix of shape (n_p[f], n_x_f[f]).
-                Used to expand sensory to hippocampal dimension via matrix multiplication.
-        """
-        return getattr(self, f"W_tile_{f}")
+        return self.tiling(x_norm, W_tile)
 
 
 __all__ = ["ProjectionParams", "Projection"]

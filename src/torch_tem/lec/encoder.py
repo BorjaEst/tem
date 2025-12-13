@@ -16,7 +16,7 @@ Architecture:
     Output: Two-hot compressed sensory [B, n_x_c]
 """
 
-from typing import List, Protocol
+from typing import List, Protocol, Union
 
 import torch
 import torch.nn as nn
@@ -31,13 +31,11 @@ class EncoderParams(Protocol):
     """Protocol defining required parameters for Encoder initialization.
 
     Attributes:
-        n_x: Number of sensory observation neurons (input dimension)
-        n_x_c: Number of compressed sensory neurons (output dimension)
         two_hot_table: Lookup table mapping observation indices to two-hot codes
+        n_x_c: Number of compressed sensory neurons (int or List[int])
     """
 
-    n_x: int
-    n_x_c: int
+    n_x_c: Union[int, List[int]]
 
     @property
     def two_hot_table(self) -> List[Tensor]:
@@ -82,6 +80,7 @@ class Encoder(nn.Module):
 
     def __init__(self, params: EncoderParams):
         super().__init__()
+        self.n_x_c = params.n_x_c if isinstance(params.n_x_c, list) else [params.n_x_c]
         self.register_buffer("two_hot_table", torch.stack(params.two_hot_table))
 
     def forward(self, x: Observation) -> Tensor:

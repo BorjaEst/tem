@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 import torch
 from torch import Tensor, nn
 
-from ..types import AbstractLocation, GroundedLocation
+from ..types import AbstractLocation, GroundedLocation, MultiScaleCode
 from . import abstract, projection, transition
 
 
@@ -20,8 +20,9 @@ class MECParams(abstract.AbstractLocParams, transition.TransitionParams):
 class MECState:
     """ """
 
-    transition_stats: AbstractLocation
+    transition_stats: transition
     abstract_location: AbstractLocation
+    projection: MultiScaleCode
 
 
 class MECModel(nn.Module):
@@ -32,8 +33,8 @@ class MECModel(nn.Module):
         super().__init__()
         self.transition = transition.TransitionModel(params)  # Transition model module
         self.abstract = abstract.AbstractLocInference(params)  # Abstract location inference module
-        self.batch_size = params.batch_size
         self.projection = projection.Projection(params)  # Projection head for MEC pathway
+        self.batch_size = params.batch_size
 
     @property
     def n_g(self) -> List[int]:
@@ -59,7 +60,8 @@ class MECModel(nn.Module):
         """
         g_gen = self.transition(a, state.abstract_location)  # State transition: g → g (predict next abstract location)
         g = self.abstract(g_gen, p_x, locations)  # Infer entorhinal (abstract location)
-        return MECState(transition_stats=g_gen, abstract_location=g)
+        g_ = self.projection(g)  # Project to hippocampal input: g → g_
+        return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
 
     def init_state(self, device: torch.device) -> MECState:
         """ """

@@ -64,11 +64,9 @@ class TEMModel(nn.Module):
         super().__init__()
         self.batch_size = params.batch_size
         self.eta = params.eta
-        W_tile = utils.create_W_tile(params.n_g_subsampled_combined, params.n_x_f)
 
         # Initialize components
         self.grounded = core.GroundedLocInference(params)  # Hippocampal inference module
-        self.decoder = core.Decoder(params, W_tile)  # Observation decoder module
         self.memory = hpc_.Memory(params)  # Unified memory system (masks computed internally)
         self.lec = lec_.LECModel(params)  # LEC pathway module
         self.mec = mec_.MECModel(params)  # MEC pathway module
@@ -77,21 +75,17 @@ class TEMModel(nn.Module):
         """ """
 
         # LEC Pathway steps; We process sensory input to prepare for memory retrieval
-        if x is not None:
-            state_lec: lec_.LECState = self.lec(x, state.lec)  # Process observation: x → x_f
-            x_ = self.lec.projection(state_lec.filtered_observation)  # Sensory input to hippocampus: x_f → x_
-            p_x = self.memory.retrieve(x_, for_inference=True)  # Retrieve memory from sensory
-        else:
-            state_lec: lec_.LECState = state.lec
-            p_x = x_ = None
+        state_lec = state.lec(x, state.lec) if x else state.lec  # Process observation: x → x_f
+        x_ = state_lec.projection  # Project to hippocampal input: x_f → x_
+        p_x = self.memory.retrieve(x_, for_inference=True) if x else None
 
         # MEC Pathway steps; We infer abstract location from action and previous location
-        state_mec: mec_.MECState = self.mec(p_x, locations, a, state.mec)  # Update abstract location: g → g
-        g_ = self.mec.projection(state_mec.abstract_location)  # Entorhinal input to hippocampus: g → g_
+        state_mec = self.mec(p_x, locations, a, state.mec)  # Update abstract location: g → g
+        g_ = state_mec.projection  # Project to hippocampal input: g → g_
         p_g = self.memory.retrieve(g_, for_inference=False)  # Retrieve memory from grid cells
 
         # Infer predictions from LEC and MEC pathways
-        x_hat = self.decoder(p_g)  # Decode observation: p → x (generate sensory prediction)
+        x_hat = self.lec.decode(p_g)  # Decode observation: p → x (generate sensory prediction)
         p = self.grounded(g_, x_) if x is not None else None  # Infer hippocampus (grounded location)
 
         # Update memory with Hebbian plasticity and return new state

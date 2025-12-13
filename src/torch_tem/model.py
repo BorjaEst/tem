@@ -15,8 +15,10 @@ from typing import Dict, List, Optional
 
 from torch import nn
 
-from . import config, core, hpc, lec, losses, mec
-from .types import AbstractLocation, GroundedLocation, LocationInference, MultiScaleCode, Observation, SensoryPrediction
+from . import config, hpc, lec, losses, mec
+from .types import AbstractLocation, GroundedLocation, LocationInference
+from .types import Observation, SensoryPrediction, MultiScaleCode
+from .types import InferencePathwayOutputs, GenerativePathwayOutputs
 
 
 class TEMParams(config.ModelConfig):
@@ -96,7 +98,7 @@ class TEMModel(nn.Module):
         self.eta = params.eta
 
         # Initialize components
-        self.grounded = core.GroundedLocInference(params)  # Hippocampal inference module
+        self.grounded = hpc.GroundedLocInference(params)  # Hippocampal inference module
         self.memory = hpc.Memory(params)  # Unified memory system (masks computed internally)
         self.lec = lec.LECModel(params)  # LEC pathway module
         self.mec = mec.MECModel(params)  # MEC pathway module
@@ -208,14 +210,14 @@ class TEMModel(nn.Module):
 
         # Extract pathway outputs for ELBO computation
         # Generative pathway: q(g,p,x|a,g_prev) via transition → memory → decoder
-        gen_outputs = _GenerativeOutputs(
+        gen_outputs = GenerativePathwayOutputs(
             g=state_updated.mec.transition_stats.mean,  # q(g|a,g_prev): Generated abstract location
             p=state_updated.mec.projection,  # q(p|g): Retrieved grounded location (multi-scale)
             x=state_updated.prediction,  # q(x|p): Generated sensory prediction
         )
 
         # Inference pathway: f(g,p|x,a) via encoder → memory → grounded inference
-        inf_outputs = _InferenceOutputs(
+        inf_outputs = InferencePathwayOutputs(
             g=state_updated.mec.abstract_location,  # f(g|x,p_x): Inferred abstract location
             p=state_updated.lec.projection,  # f(p_x|x): Sensory-retrieved grounded location (multi-scale)
             x=state_updated.prediction,  # Reconstructed observation (shared decoder)
@@ -225,26 +227,6 @@ class TEMModel(nn.Module):
         # Compute ELBO using TEMLoss (teacher forcing between pathways)
         loss_fn = losses.TEMLoss()
         return loss_fn(gen_outputs, inf_outputs, x)
-
-
-# Internal helper classes for protocol compliance
-@dataclass
-class _GenerativeOutputs:
-    """Internal implementation of GenerativeOutputs protocol."""
-
-    g: List
-    p: List
-    x: SensoryPrediction
-
-
-@dataclass
-class _InferenceOutputs:
-    """Internal implementation of InferenceOutputs protocol."""
-
-    g: List
-    p: Optional[List]
-    x: SensoryPrediction
-    p_x: Optional[List] = None
 
 
 class Simulation(Iterator[TEMState]):

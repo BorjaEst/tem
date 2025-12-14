@@ -11,7 +11,7 @@ components for maintainability and testability.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from torch import nn
 
@@ -45,16 +45,32 @@ class TEMState:
     Maintains the complete state across all TEM pathways (LEC, MEC, HPC).
 
     Attributes:
-        grounded_location: Inferred hippocampal place cells (inference mode).
-        prediction: Predicted sensory observation (generative mode).
+        grounded: Tuple of (p_x, p_g, p) grounded locations.
+            - p_x: Retrieved from sensory input (inference memory).
+            - p_g: Retrieved from abstract location (generative memory).
+            - p: Inferred from conjunction of sensory and abstract.
         lec: Lateral entorhinal cortex state.
         mec: Medial entorhinal cortex state.
     """
 
-    grounded_location: Optional[GroundedLocation]
-    prediction: Optional[SensoryPrediction]
-    lec: lec.LECState
-    mec: mec.MECState
+    grounded: Optional[Tuple[Optional[GroundedLocation], GroundedLocation, Optional[GroundedLocation]]]
+    lec: lec.LECState  # LEC pathway state with sensory codes
+    mec: mec.MECState  # MEC pathway state with abstract locations
+
+    @property
+    def grounded_sensory(self) -> Optional[GroundedLocation]:
+        """Return the retrieved sensory grounded location from TEM state."""
+        return self.grounded[0] if self.grounded is not None else None
+
+    @property
+    def grounded_abstract(self) -> Optional[GroundedLocation]:
+        """Return the retrieved abstract grounded location from TEM state."""
+        return self.grounded[1] if self.grounded is not None else None
+
+    @property
+    def grounded_location(self) -> Optional[GroundedLocation]:
+        """Return the inferred grounded location from TEM state."""
+        return self.grounded[2] if self.grounded is not None else None
 
     @property
     def compressed_observation(self) -> MultiScaleCode:
@@ -104,6 +120,25 @@ class TEMModel(nn.Module):
         self.lec = lec.LECModel(params)  # LEC pathway module
         self.mec = mec.MECModel(params)  # MEC pathway module
 
+        # Initialize loss components
+        self.loss_x_fn = losses.SensoryReconstructionLoss()
+        self.loss_p_fn = losses.GroundedLocationLoss()
+        self.loss_g_fn = losses.AbstractLocationLoss()
+        self.loss_total_fn = losses.TEMLoss()
+
+    def init_state(self, x: Observation) -> TEMState:
+        """Initialize TEM state from first observation.
+
+        Args:
+            x: Initial sensory observation (for device placement).
+
+        Returns:
+            Initial TEM state with zero-initialized locations.
+        """
+        lec_state = self.lec.init_state(x[0].device)  # Initialize LEC state
+        mec_state = self.mec.init_state(x[0].device)  # Initialize MEC state
+        return TEMState(grounded=None, lec=lec_state, mec=mec_state)
+
     def forward(self, x: Optional[Observation], locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
         """Forward pass through TEM model.
 
@@ -130,28 +165,26 @@ class TEMModel(nn.Module):
         g_ = state_mec.projection  # Project to hippocampal input: g → g_
         p_g = self.memory.retrieve(g_, for_inference=False)  # Retrieve memory from grid cells
 
-        # Infer predictions from LEC and MEC pathways
-        x_hat = self.lec.decode(p_g)  # Decode observation: p → x (generate sensory prediction)
+        # Infer grounded location and generate sensory prediction
         p = self.grounded(g_, x_) if x is not None else None  # Infer hippocampus (grounded location)
+        return TEMState(grounded=(p_x, p_g, p), lec=state_lec, mec=state_mec)
 
-        if p is not None:  # Only when we have direct inference from both pathways
-            self.memory.update(p, p_g, self.eta)
-
-        return TEMState(grounded_location=p, prediction=x_hat, lec=state_lec, mec=state_mec)
-
-    def inference(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
+    def inference(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> LocationInference:
         """Infer current location from sensory observation.
+
+        Performs inference by combining sensory input with path integration to
+        determine the current abstract and grounded locations.
 
         Args:
             x: Sensory observation.
-            locations: Environment descriptors.
-            a: Action taken.
+            locations: Environment descriptors for landmark cues.
+            a: Action taken (None for initial state).
             state: Previous TEM state.
 
         Returns:
-            Location inference with abstract and grounded locations.
+            LocationInference with abstract location (g) and grounded location (p).
         """
-        state = self.forward(x, locations, a, state)  # What we expect to see after action
+        state = self.forward(x, locations, a, state)
         return LocationInference(abstract=state.abstract_location, grounded=state.grounded_location)
 
     def generative(self, locations: List[Dict], a: int, state: TEMState) -> SensoryPrediction:
@@ -166,83 +199,49 @@ class TEMModel(nn.Module):
             Predicted sensory observation.
         """
         state = self.forward(None, locations, a, state)  # Where do I expect to be
-        return state.prediction
+        return self.lec.decode(state.grounded_abstract)  # What do I expect to see
 
-    def init_state(self, x: Observation) -> TEMState:
-        """Initialize TEM state from first observation.
+    def update_memory(self, state: TEMState) -> None:
+        """Update Hebbian memory using current TEM state.
 
-        Args:
-            x: Initial sensory observation (for device placement).
-
-        Returns:
-            Initial TEM state with zero-initialized locations.
-        """
-        lec_state = self.lec.init_state(x[0].device)  # Initialize LEC state
-        mec_state = self.mec.init_state(x[0].device)  # Initialize MEC state
-        return TEMState(grounded_location=None, prediction=None, lec=lec_state, mec=mec_state)
-
-    def loss(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> losses.LossOutput:
-        """Compute ELBO loss for TEM training.
-
-        Implements the evidence lower bound (ELBO) following Gemici et al. (2017),
-        training both the generative model q(g,p,x|a) and inference network f(g,p|x,a)
-        jointly with pathway consistency constraints (teacher forcing).
-
-        The ELBO decomposes into:
-        - Reconstruction losses: p(x|p), p(x|g), p(x|g_prev,a)
-        - Consistency losses: q(p|g_inf) ≈ f(p|x), q(g|a,g_prev) ≈ f(g|x)
-        - Regularization: Priors on g (L2) and p (L1)
+        Implements the Hebbian update rule to strengthen associations between
+        co-active patterns in the inference and generative pathways.
 
         Args:
-            x: Sensory observation (ground truth).
-            locations: Environment descriptors for landmark cues.
-            a: Action taken.
-            state: Previous TEM state.
+            state: Current TEM state containing inferred and generated locations.
+        """
+        p_inferred = state.grounded_location  # p: Inferred from conjunction (g ⊗ x)
+        p_generated = state.grounded_abstract  # p_g: Retrieved from abstract location (g)
+        self.memory.update(p_inferred, p_generated, self.eta)
+
+    def loss(self, x: Observation, state: TEMState) -> losses.LossOutput:
+        """Compute Evidence Lower Bound (ELBO) loss for TEM.
+
+        The total loss comprises three components following the TEM paper:
+        1. L_x: Sensory reconstruction loss (from three pathways)
+        2. L_p: Grounded location consistency loss
+        3. L_g: Abstract location KL divergence loss
+
+        Args:
+            x: Ground truth sensory observation.
+            state: Current TEM state with all pathway outputs.
 
         Returns:
-            LossOutput with total ELBO loss and individual components.
-
-        Example:
-            >>> output = model.loss(x, locations, a, state)
-            >>> output.total.backward()
+            LossOutput containing total loss and individual components.
         """
-        # Process through both pathways to get all outputs
-        state_updated = self.forward(x, locations, a, state)
+        p_x, p_g, p = state.grounded
 
-        # Compute all three decoder calls for ELBO reconstruction terms (matching legacy)
-        # L_x_gen: g_gen → p_gen → x (main generative reconstruction)
-        p_gen = state_updated.mec.projection  # Retrieved from g_gen
-        x_gen = state_updated.prediction  # Already computed in forward() from p_g
+        # L_x: Sensory reconstruction from three pathways (teacher forcing)
+        Lx_x = self.loss_x_fn(prediction=self.lec.decode(p_x), target=x)  # From sensory retrieval
+        Lx_g = self.loss_x_fn(prediction=self.lec.decode(p_g), target=x)  # From abstract retrieval
+        Lx_p = self.loss_x_fn(prediction=self.lec.decode(p), target=x)  # From inference
+        # L_p: Grounded location consistency (inference matches memory retrieval)
+        Lp = self.loss_p_fn(p=p, p_g=p_g)
+        # L_g: Abstract location KL divergence (posterior vs prior)
+        Lg = self.loss_g_fn(g=state.abstract_location, g_gen=state.transition_stats)
 
-        # L_x_g: g_inf → p → x (reconstruction from inferred abstract location)
-        g_inf = state_updated.mec.abstract_location
-        p_from_g_inf = self.memory.retrieve(g_inf, for_inference=False)
-        x_from_g = self.lec.decode(p_from_g_inf)
-
-        # L_x_p: p_inf → x (reconstruction from inferred grounded location)
-        p_inf = state_updated.grounded_location
-        x_from_inf_p = self.lec.decode(p_inf) if p_inf is not None else None
-
-        # Extract pathway outputs for ELBO computation
-        # Generative pathway: q(g,p,x|a,g_prev) - all decoder outputs here
-        gen_outputs = GenerativePathwayOutputs(
-            g=state_updated.mec.transition_stats.mean,  # q(g|a,g_prev): Generated abstract location
-            p=p_gen,  # q(p|g): Retrieved grounded location from g_gen
-            x=x_gen,  # q(x|p_gen): Primary reconstruction (L_x_gen)
-            x_from_g=x_from_g,  # q(x|p) where p from g_inf (L_x_g)
-            x_from_inf_p=x_from_inf_p,  # q(x|p_inf): Reconstruction from inference p (L_x_p)
-        )
-
-        # Inference pathway: f(g,p|x,a) - only location codes, NO decoder
-        inf_outputs = InferencePathwayOutputs(
-            g=g_inf,  # f(g|x,p_x): Inferred abstract location
-            p=state_updated.lec.projection,  # f(p_x|x): Sensory-retrieved grounded location
-            p_x=p_inf,  # f(p|g,x): Final grounded location inference (for L_p_x consistency)
-        )
-
-        # Compute ELBO using TEMLoss (teacher forcing between pathways)
-        loss_fn = losses.TEMLoss()
-        return loss_fn(gen_outputs, inf_outputs, x)
+        # Compute total ELBO
+        return self.loss_total_fn(Lx_x + Lx_g + Lx_p, Lp, Lg)
 
 
 class Simulation(Iterator[TEMState]):

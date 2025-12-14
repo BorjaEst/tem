@@ -71,6 +71,20 @@ class MECModel(nn.Module):
         """Number of frequency modules."""
         return self.transition.n_f
 
+    def init_state(self, device: torch.device) -> MECState:
+        """Initialize MEC state with zeros.
+
+        Args:
+            device: Device for tensor allocation.
+
+        Returns:
+            Initial MECState with zero-initialized abstract locations.
+        """
+        g_gen = [torch.zeros((self.batch_size, self.n_g[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
+        g = [torch.zeros((self.batch_size, self.n_g[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
+        g_ = self.projection(g)  # Project to hippocampal input
+        return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
+
     def forward(self, p_x: Optional[GroundedLocation], locations: List[Dict], a: Optional[Tensor], state: MECState) -> MECState:
         """Forward pass through MEC pathway.
 
@@ -86,20 +100,6 @@ class MECModel(nn.Module):
         g_gen = self.transition(state.abstract_location, a)  # State transition: g → g (predict next abstract location)
         g = self.abstract(g_gen, p_x, locations)  # Infer entorhinal (abstract location)
         g_ = self.projection(g)  # Project to hippocampal input: g → g_
-        return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
-
-    def init_state(self, device: torch.device) -> MECState:
-        """Initialize MEC state with zeros.
-
-        Args:
-            device: Device for tensor allocation.
-
-        Returns:
-            Initial MECState with zero-initialized abstract locations.
-        """
-        g_gen = [torch.zeros((self.batch_size, self.n_g[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
-        g = [torch.zeros((self.batch_size, self.n_g[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
-        g_ = self.projection(g)  # Project to hippocampal input
         return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
 
 

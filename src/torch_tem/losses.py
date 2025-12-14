@@ -58,25 +58,34 @@ class GenerativeOutputs(Protocol):
     """Protocol defining outputs from the generative pathway.
 
     The generative pathway produces abstract and grounded locations through
-    transition dynamics and memory retrieval, plus sensory predictions.
+    transition dynamics and memory retrieval, plus sensory predictions via decoder.
+
+    All x predictions come from the generative decoder, using different p sources:
+    - x: Main reconstruction from p_gen (g_gen → p_gen → x)
+    - x_from_g: Reconstruction from p via g_inf (g_inf → p → x) for L_x_g
+    - x_from_inf_p: Reconstruction from p_inf (p_inf → x) for L_x_p
     """
 
     g: List[Tensor]  # Abstract locations List[n_f] of [B, n_g[f]]
     p: List[Tensor]  # Grounded locations List[n_f] of [B, n_p[f]]
-    x: SensoryPrediction  # Sensory predictions
-    x_from_g: Optional[SensoryPrediction] = None  # Optional sensory predictions from g_inf
+    x: SensoryPrediction  # Primary sensory prediction from p_gen
+    x_from_g: Optional[SensoryPrediction] = None  # Reconstruction from g_inf → p → x
+    x_from_inf_p: Optional[SensoryPrediction] = None  # Reconstruction from p_inf → x
 
 
 class InferenceOutputs(Protocol):
     """Protocol defining outputs from the inference pathway.
 
     The inference pathway produces abstract and grounded locations through
-    sensory encoding and belief propagation, plus sensory reconstructions.
+    sensory encoding and belief propagation.
+
+    Note: The inference pathway does NOT generate observations. It only produces
+    location codes (g, p) from sensory input. All observation reconstruction happens
+    in the generative pathway via the decoder.
     """
 
-    g: List[Tensor]  # Abstract locations List[n_f] of [B, n_g[f]]
-    p: List[Tensor]  # Grounded locations List[n_f] of [B, n_p[f]]
-    x: SensoryPrediction  # Sensory reconstructions
+    g: List[Tensor]  # Inferred abstract locations List[n_f] of [B, n_g[f]]
+    p: List[Tensor]  # Inferred grounded locations List[n_f] of [B, n_p[f]]
     p_x: Optional[List[Tensor]] = None  # Optional sensory-retrieved locations
 
 
@@ -91,7 +100,6 @@ class GenerativeLossWeights(Protocol):
 class InferenceLossWeights(Protocol):
     """Protocol defining weight configuration for InferenceLoss."""
 
-    w_x_inf: float  # Weight for sensory reconstruction quality
     w_p_x: float  # Weight for sensory-grounded consistency
     w_reg_p: float  # Weight for grounded location regularization
 
@@ -99,11 +107,12 @@ class InferenceLossWeights(Protocol):
 class TEMLossWeights(Protocol):
     """Protocol defining weight configuration for TEMLoss."""
 
-    w_x_gen: float  # Weight for generative sensory loss
-    w_x_inf: float  # Weight for inference sensory loss
+    w_x_gen: float  # Weight for primary reconstruction (g_gen → p_gen → x)
+    w_x_g: float  # Weight for reconstruction from g_inf (g_inf → p → x)
+    w_x_p: float  # Weight for reconstruction from p_inf (p_inf → x)
     w_p_consistency: float  # Weight for grounded consistency
     w_g_consistency: float  # Weight for abstract consistency
-    w_p_x: float  # Weight for sensory-grounded consistency
+    w_p_x: float  # Weight for sensory-grounded consistency (optional)
     w_reg_g: float  # Weight for abstract regularization
     w_reg_p: float  # Weight for grounded regularization
 
@@ -126,7 +135,6 @@ class DefaultGenerativeWeights:
 class DefaultInferenceWeights:
     """Default weight configuration for InferenceLoss."""
 
-    w_x_inf: float = 1.0
     w_p_x: float = 1.0
     w_reg_p: float = 0.01
 
@@ -136,7 +144,8 @@ class DefaultTEMWeights:
     """Default weight configuration for TEMLoss."""
 
     w_x_gen: float = 1.0
-    w_x_inf: float = 1.0
+    w_x_g: float = 1.0
+    w_x_p: float = 1.0
     w_p_consistency: float = 1.0
     w_g_consistency: float = 1.0
     w_p_x: float = 1.0
@@ -360,10 +369,12 @@ class InferenceLoss(BaseTEMLoss):
     This pathway does NOT require the generative pathway, making it suitable
     for supervised learning from observations or behavioral cloning.
 
-    Loss Components (ELBO terms):
-        L_x_inf: -log p(x|p_inf) - Cross-entropy for sensory reconstruction from inferred p
+    Loss Components (ELBO KL terms only):
         L_p_x: MSE between f(p|g,x) and f(p_x|x) - Sensory-grounded consistency (optional)
         L_reg_p: ||p||₁ - L1 regularization on grounded location codes (sparsity)
+
+    Note: Reconstruction losses (L_x) are computed in GenerativeLoss, not here.
+    The inference pathway only computes KL divergence terms (consistency losses).
 
     Args:
         weights: Weight configuration (defaults to DefaultInferenceWeights if None)
@@ -387,30 +398,25 @@ class InferenceLoss(BaseTEMLoss):
     def __init__(self, weights: Optional[InferenceLossWeights] = None, annealing_factor: float = 1.0, compute_metrics: bool = False):
         super().__init__(annealing_factor, None, compute_metrics)
         config = weights or DefaultInferenceWeights()
-        self.w_x_inf = config.w_x_inf
         self.w_p_x = config.w_p_x
         self.w_reg_p = config.w_reg_p
 
-    def forward(self, outputs: InferenceOutputs, x_target: Tensor) -> LossOutput:
-        """Compute inference pathway loss.
+    def forward(self, outputs: InferenceOutputs) -> LossOutput:
+        """Compute inference pathway loss (KL divergences only).
 
         Args:
-            outputs: Inference pathway outputs (g, p, x, optional p_x)
-            x_target: Ground truth observation [B, n_x] (one-hot)
+            outputs: Inference pathway outputs (g, p, optional p_x)
 
         Returns:
             LossOutput with total loss and individual components
         """
-        # L_x_inf: Sensory reconstruction quality from inferred p (ELBO: -log p(x|p_inf))
-        L_x_inf = _compute_reconstruction_loss(outputs.x, x_target)
-
         # L_reg_p: Grounded location regularization (ELBO: approximate KL to prior)
         L_reg_p = _compute_l1_regularization(outputs.p)
 
-        components = {"L_x_inf": L_x_inf.detach(), "L_reg_p": L_reg_p.detach()}
+        components = {"L_reg_p": L_reg_p.detach()}
 
         # Base loss with annealing applied via base class method
-        total = self._get_effective_weight("L_x_inf", self.w_x_inf) * L_x_inf + self._get_effective_weight("L_reg_p", self.w_reg_p, is_regularization=True) * L_reg_p
+        total = self._get_effective_weight("L_reg_p", self.w_reg_p, is_regularization=True) * L_reg_p
 
         # Optional: L_p_x for sensory-grounded consistency
         if outputs.p_x is not None:
@@ -418,15 +424,7 @@ class InferenceLoss(BaseTEMLoss):
             components["L_p_x"] = L_p_x.detach()
             total = total + self._get_effective_weight("L_p_x", self.w_p_x) * L_p_x
 
-        # Compute metrics if requested
-        metrics = None
-        if self.compute_metrics:
-            labels = torch.argmax(x_target, dim=1)
-            inf_preds = torch.argmax(outputs.x.logits[0], dim=1)
-            inf_accuracy = (inf_preds == labels).float().mean().item()
-            metrics = {"inf_reconstruction_accuracy": inf_accuracy}
-
-        return LossOutput(total=total, components=components, metrics=metrics)
+        return LossOutput(total=total, components=components, metrics=None)
 
 
 # =============================================================================
@@ -451,12 +449,12 @@ class TEMLoss(BaseTEMLoss):
         - f(p|x): Grounded inference (sensory → grounded)
 
     Loss Components (ELBO terms):
-        L_x_gen: -log p(x|p_gen) - Generative reconstruction from p_gen
-        L_x_inf: -log p(x|p_inf) - Inference reconstruction from p_inf
-        L_x_g: -log p(x|p) where p from g_inf - Inference pathway quality
-        L_p_consistency: MSE between q(p|g_gen) and f(p|x) - Grounded alignment
-        L_g_consistency: MSE between q(g|a) and f(g|x) - Abstract alignment
-        L_p_x: MSE between f(p|x) and f(p|g_inf,x) - Sensory-grounded consistency
+        L_x_gen: -log p(x|p_gen) - Primary reconstruction (g_gen → p_gen → x)
+        L_x_g: -log p(x|p) where p from g_inf - Reconstruction from inferred g
+        L_x_p: -log p(x|p_inf) - Reconstruction from inferred p
+        L_p_consistency: MSE between q(p|g_gen) and f(p|x) - Grounded KL
+        L_g_consistency: MSE between q(g|a) and f(g|x) - Abstract KL
+        L_p_x: MSE between f(p|x) and f(p|g_inf,x) - Sensory-grounded consistency (optional)
         L_reg_g: ||g||² - Abstract location sparsity (approximate KL to prior)
         L_reg_p: ||p||₁ - Grounded location sparsity (approximate KL to prior)
 
@@ -486,28 +484,27 @@ class TEMLoss(BaseTEMLoss):
         super().__init__(annealing_factor, frozen_components, compute_metrics)
         config = weights or DefaultTEMWeights()
         self.w_x_gen = config.w_x_gen
-        self.w_x_inf = config.w_x_inf
+        self.w_x_g = config.w_x_g
+        self.w_x_p = config.w_x_p
         self.w_p_consistency = config.w_p_consistency
         self.w_g_consistency = config.w_g_consistency
         self.w_p_x = config.w_p_x
         self.w_reg_g = config.w_reg_g
         self.w_reg_p = config.w_reg_p
-        self.w_x_g = 1.0  # Weight for L_x_g (new component)
 
     def forward(self, gen_outputs: GenerativeOutputs, inf_outputs: InferenceOutputs, x_target: Tensor) -> LossOutput:
         """Compute full TEM loss with pathway consistency.
 
         Args:
-            gen_outputs: Generative pathway outputs (g, p, x, optional x_from_g)
-            outputs: Inference pathway outputs (g, p, x, optional p_x)
+            gen_outputs: Generative pathway outputs (g, p, x, x_from_g, x_from_inf_p)
+            inf_outputs: Inference pathway outputs (g, p, optional p_x)
             x_target: Ground truth observation [B, n_x] (one-hot)
 
         Returns:
             LossOutput with total loss, components, and optional metrics
         """
-        # Reconstruction losses (ELBO: -log p(x|p) terms)
+        # Reconstruction losses (ELBO: -log p(x|p) terms - all from generative decoder)
         L_x_gen = _compute_reconstruction_loss(gen_outputs.x, x_target)
-        L_x_inf = _compute_reconstruction_loss(inf_outputs.x, x_target)
 
         # Consistency losses (ELBO: KL divergence approximations via MSE)
         L_p_consistency = _compute_consistency_loss(inf_outputs.p, gen_outputs.p)
@@ -520,7 +517,6 @@ class TEMLoss(BaseTEMLoss):
         # Build components dict
         components = {
             "L_x_gen": L_x_gen.detach(),
-            "L_x_inf": L_x_inf.detach(),
             "L_p_consistency": L_p_consistency.detach(),
             "L_g_consistency": L_g_consistency.detach(),
             "L_reg_g": L_reg_g.detach(),
@@ -530,18 +526,23 @@ class TEMLoss(BaseTEMLoss):
         # Base total using base class method for weight management
         total = (
             self._get_effective_weight("L_x_gen", self.w_x_gen) * L_x_gen
-            + self._get_effective_weight("L_x_inf", self.w_x_inf) * L_x_inf
             + self._get_effective_weight("L_p_consistency", self.w_p_consistency) * L_p_consistency
             + self._get_effective_weight("L_g_consistency", self.w_g_consistency) * L_g_consistency
             + self._get_effective_weight("L_reg_g", self.w_reg_g, is_regularization=True) * L_reg_g
             + self._get_effective_weight("L_reg_p", self.w_reg_p, is_regularization=True) * L_reg_p
         )
 
-        # Optional: L_x_g for reconstruction from g_inf → p → x (legacy parity)
+        # L_x_g: Reconstruction from g_inf → p → x (legacy parity)
         if gen_outputs.x_from_g is not None:
             L_x_g = _compute_reconstruction_loss(gen_outputs.x_from_g, x_target)
             components["L_x_g"] = L_x_g.detach()
             total = total + self._get_effective_weight("L_x_g", self.w_x_g) * L_x_g
+
+        # L_x_p: Reconstruction from p_inf → x (legacy parity)
+        if gen_outputs.x_from_inf_p is not None:
+            L_x_p = _compute_reconstruction_loss(gen_outputs.x_from_inf_p, x_target)
+            components["L_x_p"] = L_x_p.detach()
+            total = total + self._get_effective_weight("L_x_p", self.w_x_p) * L_x_p
 
         # Optional: L_p_x for sensory-grounded consistency
         if inf_outputs.p_x is not None:
@@ -568,7 +569,7 @@ def _compute_metrics(gen_outputs: GenerativeOutputs, inf_outputs: InferenceOutpu
 
     Args:
         gen_outputs: Generative pathway outputs with p, g, and x predictions
-        inf_outputs: Inference pathway outputs with p, g, and x predictions
+        inf_outputs: Inference pathway outputs with p and g (no x)
         x_target: Ground truth observations for accuracy computation
 
     Returns:
@@ -576,14 +577,11 @@ def _compute_metrics(gen_outputs: GenerativeOutputs, inf_outputs: InferenceOutpu
             - p_agreement: Cosine similarity between generative and inference grounded codes
             - g_agreement: Cosine similarity between generative and inference abstract codes
             - gen_reconstruction_accuracy: Accuracy of generative pathway predictions
-            - inf_reconstruction_accuracy: Accuracy of inference pathway predictions
     """
     labels = torch.argmax(x_target, dim=1)
     gen_preds = torch.argmax(gen_outputs.x.logits[0], dim=1)
-    inf_preds = torch.argmax(inf_outputs.x.logits[0], dim=1)
 
     gen_accuracy = (gen_preds == labels).float().mean().item()
-    inf_accuracy = (inf_preds == labels).float().mean().item()
 
     # Compute mean cosine similarity across all frequency scales using vectorized operations
     # Stack all frequencies and compute cosine similarity in batch
@@ -593,12 +591,12 @@ def _compute_metrics(gen_outputs: GenerativeOutputs, inf_outputs: InferenceOutpu
     g_similarities = torch.stack([F.cosine_similarity(gen_outputs.g[f], inf_outputs.g[f], dim=1).mean() for f in range(len(gen_outputs.g))])
     g_agreement = g_similarities.mean().item()
 
-    # Create structured metrics object
+    # Create structured metrics object (inf_reconstruction_accuracy removed)
     metrics = PathwayMetrics(
         p_agreement=p_agreement,
         g_agreement=g_agreement,
         gen_reconstruction_accuracy=gen_accuracy,
-        inf_reconstruction_accuracy=inf_accuracy,
+        inf_reconstruction_accuracy=0.0,  # Not applicable - inference doesn't reconstruct
     )
 
     # Return as dict for backward compatibility with LossOutput

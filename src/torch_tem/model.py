@@ -209,33 +209,35 @@ class TEMModel(nn.Module):
         # Process through both pathways to get all outputs
         state_updated = self.forward(x, locations, a, state)
 
-        # Compute x_from_g: reconstruct observation from inferred g
-        # This provides additional supervision for the inference pathway
-        # Following legacy model: g_inf → p → x reconstruction
-        g_inf = state_updated.mec.abstract_location  # Inferred abstract location
-        p_from_g_inf = self.memory.retrieve(g_inf, for_inference=False)  # Retrieve p from g_inf
-        x_from_g = self.lec.decode(p_from_g_inf)  # Decode x from p
+        # Compute all three decoder calls for ELBO reconstruction terms (matching legacy)
+        # L_x_gen: g_gen → p_gen → x (main generative reconstruction)
+        p_gen = state_updated.mec.projection  # Retrieved from g_gen
+        x_gen = state_updated.prediction  # Already computed in forward() from p_g
+
+        # L_x_g: g_inf → p → x (reconstruction from inferred abstract location)
+        g_inf = state_updated.mec.abstract_location
+        p_from_g_inf = self.memory.retrieve(g_inf, for_inference=False)
+        x_from_g = self.lec.decode(p_from_g_inf)
+
+        # L_x_p: p_inf → x (reconstruction from inferred grounded location)
+        p_inf = state_updated.grounded_location
+        x_from_inf_p = self.lec.decode(p_inf) if p_inf is not None else None
 
         # Extract pathway outputs for ELBO computation
-        # Note: Both pathways share the same decoder via teacher forcing.
-        # state_updated.prediction is computed from p_g (retrieved from inferred g),
-        # so gen_outputs.x and inf_outputs.x reference the same tensor.
-        # This provides dual supervision: L_x_gen and L_x_inf both train the shared decoder.
-
-        # Generative pathway: q(g,p,x|a,g_prev) via transition → memory → decoder
+        # Generative pathway: q(g,p,x|a,g_prev) - all decoder outputs here
         gen_outputs = GenerativePathwayOutputs(
             g=state_updated.mec.transition_stats.mean,  # q(g|a,g_prev): Generated abstract location
-            p=state_updated.mec.projection,  # q(p|g): Retrieved grounded location (multi-scale)
-            x=state_updated.prediction,  # q(x|p_g): Shared decoder output (teacher forcing)
-            x_from_g=x_from_g,  # q(x|p) where p from g_inf (L_x_g reconstruction)
+            p=p_gen,  # q(p|g): Retrieved grounded location from g_gen
+            x=x_gen,  # q(x|p_gen): Primary reconstruction (L_x_gen)
+            x_from_g=x_from_g,  # q(x|p) where p from g_inf (L_x_g)
+            x_from_inf_p=x_from_inf_p,  # q(x|p_inf): Reconstruction from inference p (L_x_p)
         )
 
-        # Inference pathway: f(g,p|x,a) via encoder → memory → grounded inference
+        # Inference pathway: f(g,p|x,a) - only location codes, NO decoder
         inf_outputs = InferencePathwayOutputs(
-            g=state_updated.mec.abstract_location,  # f(g|x,p_x): Inferred abstract location
-            p=state_updated.lec.projection,  # f(p_x|x): Sensory-retrieved grounded location (multi-scale)
-            x=state_updated.prediction,  # Same shared decoder output (teacher forcing)
-            p_x=state_updated.grounded_location,  # f(p|g,x): Final grounded location inference
+            g=g_inf,  # f(g|x,p_x): Inferred abstract location
+            p=state_updated.lec.projection,  # f(p_x|x): Sensory-retrieved grounded location
+            p_x=p_inf,  # f(p|g,x): Final grounded location inference (for L_p_x consistency)
         )
 
         # Compute ELBO using TEMLoss (teacher forcing between pathways)

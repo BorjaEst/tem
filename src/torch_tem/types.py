@@ -40,7 +40,7 @@ The type system follows the TEM architecture:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 from torch import Tensor
 
@@ -229,64 +229,6 @@ class LocationInference:
 
     abstract: AbstractLocation
     grounded: GroundedLocation
-
-
-@dataclass
-class GenerativePathwayOutputs:
-    """Outputs from generative pathway for ELBO computation.
-
-    The generative pathway produces locations and observations through:
-    q(g,p,x|a,g_prev) = q(g|a,g_prev) · q(p|g) · q(x|p)
-
-    Implements the GenerativeOutputs protocol from losses module.
-
-    Attributes:
-        g: Generated abstract location from transition model
-        p: Retrieved grounded location from memory (multi-scale)
-        x: Generated sensory prediction from decoder
-        x_from_g: Optional sensory prediction from inferred g (for L_x_g)
-
-    Theory:
-        These outputs represent the generative model's beliefs about
-        location and observations given actions. Used for ELBO computation
-        with teacher forcing from the inference pathway.
-
-        The x_from_g field enables reconstruction loss from g_inf → p → x,
-        providing additional supervision for the inference pathway and tighter
-        ELBO bounds (legacy model parity).
-    """
-
-    g: AbstractLocation  # q(g|a,g_prev)
-    p: MultiScaleCode  # q(p|g)
-    x: SensoryPrediction  # q(x|p)
-    x_from_g: Optional[SensoryPrediction] = None  # q(x|p) where p from g_inf
-
-
-@dataclass
-class InferencePathwayOutputs:
-    """Outputs from inference pathway for ELBO computation.
-
-    The inference pathway produces locations from observations through:
-    f(g,p|x,a) = f(p_x|x) · f(g|p_x,a) · f(p|g,x)
-
-    Implements the InferenceOutputs protocol from losses module.
-
-    Attributes:
-        g: Inferred abstract location from sensory evidence
-        p: Sensory-retrieved grounded location (multi-scale projection)
-        x: Reconstructed observation (shared decoder with generative)
-        p_x: Final grounded location inference (optional, from conjunctive coding)
-
-    Theory:
-        These outputs represent the inference network's beliefs about
-        location given sensory observations. Used for ELBO computation
-        with consistency constraints to the generative pathway.
-    """
-
-    g: AbstractLocation  # f(g|x,p_x)
-    p: MultiScaleCode  # f(p_x|x)
-    x: SensoryPrediction  # Reconstruction
-    p_x: Optional[MultiScaleCode] = None  # f(p|g,x)
 
 
 @dataclass

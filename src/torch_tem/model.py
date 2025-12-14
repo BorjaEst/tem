@@ -19,7 +19,6 @@ from . import config, hpc, lec, losses, mec
 
 from .types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
 from .types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
-from .types import InferencePathwayOutputs, GenerativePathwayOutputs  # isort: skip
 
 
 class TEMParams(config.ModelConfig):
@@ -124,6 +123,7 @@ class TEMModel(nn.Module):
         self.loss_x_fn = losses.SensoryReconstructionLoss()
         self.loss_p_fn = losses.GroundedLocationLoss()
         self.loss_g_fn = losses.AbstractLocationLoss()
+        self.loss_reg_fn = losses.RegularizationLoss()
         self.loss_total_fn = losses.TEMLoss()
 
     def init_state(self, x: Observation) -> TEMState:
@@ -229,19 +229,28 @@ class TEMModel(nn.Module):
         Returns:
             LossOutput containing total loss and individual components.
         """
+        # Extract grounded locations from TEM state for loss computation
         p_x, p_g, p = state.grounded
+        g_gen = self.mec.projection(state.mec.transition_stats.mean)  # Project predicted abstract location
+        p_gen = self.memory.retrieve(g_gen, for_inference=False)  # Retrieve from generative memory
 
         # L_x: Sensory reconstruction from three pathways (teacher forcing)
-        Lx_x = self.loss_x_fn(prediction=self.lec.decode(p_x), target=x)  # From sensory retrieval
-        Lx_g = self.loss_x_fn(prediction=self.lec.decode(p_g), target=x)  # From abstract retrieval
-        Lx_p = self.loss_x_fn(prediction=self.lec.decode(p), target=x)  # From inference
+        Lx = [
+            # self.loss_x_fn(prediction=self.lec.decode(p_x), target=x),  # From sensory retrieval
+            self.loss_x_fn(prediction=self.lec.decode(p_g), target=x),  # From abstract retrieval
+            self.loss_x_fn(prediction=self.lec.decode(p), target=x),  # From inference
+            self.loss_x_fn(prediction=self.lec.decode(p_gen), target=x),  # From generative prediction
+        ]
         # L_p: Grounded location consistency (inference matches memory retrieval)
         Lp = self.loss_p_fn(p=p, p_g=p_g)
         # L_g: Abstract location KL divergence (posterior vs prior)
         Lg = self.loss_g_fn(g=state.abstract_location, g_gen=state.transition_stats)
 
+        # Regularization losses
+        L_reg_g, L_reg_p = self.loss_reg_fn(g=state.abstract_location, p=p)
+
         # Compute total ELBO
-        return self.loss_total_fn(Lx_x + Lx_g + Lx_p, Lp, Lg)
+        return self.loss_total_fn(sum(Lx), Lp, Lg, L_reg_g, L_reg_p)
 
 
 class Simulation(Iterator[TEMState]):

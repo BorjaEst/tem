@@ -71,12 +71,12 @@ class SensoryReconstructionLoss(nn.Module):
         # Check target shape and type to choose appropriate loss
         if target.dim() == 1 or (target.dim() == 2 and target.shape[1] == 1):
             # Class indices: (B,) or (B, 1)
-            loss = F.cross_entropy(logits, target.view(-1).long())
+            loss = F.cross_entropy(logits, target.view(-1).long(), reduction="sum")
         elif target.dim() == 2 and target.shape[1] == logits.shape[1]:
             # One-hot or soft targets: (B, C)
             # Use BCEWithLogitsLoss for multi-label or CrossEntropy for soft targets
             # For TEM, observations are usually categorical, so CrossEntropy is appropriate.
-            loss = F.cross_entropy(logits, target)
+            loss = F.cross_entropy(logits, target, reduction="sum")
         else:
             raise ValueError(f"Shape mismatch: logits {logits.shape}, target {target.shape}")
 
@@ -126,7 +126,7 @@ class AbstractLocationLoss(nn.Module):
             log_det = torch.log(sigma_prior)
 
             # Sum over batch and dimensions
-            kl_f = (mahalanobis + log_det).sum(dim=-1).mean()
+            kl_f = (mahalanobis + log_det).sum()
             total_kl += kl_f
 
         return total_kl
@@ -159,11 +159,11 @@ class GroundedLocationLoss(nn.Module):
 
         if p_g is not None:
             for p_inf, p_ret in zip(p, p_g):
-                total_loss += F.mse_loss(p_inf, p_ret)
+                total_loss += F.mse_loss(p_inf, p_ret, reduction="sum")
 
         if p_x is not None:
             for p_inf, p_ret in zip(p, p_x):
-                total_loss += F.mse_loss(p_inf, p_ret)
+                total_loss += F.mse_loss(p_inf, p_ret, reduction="sum")
 
         return total_loss
 
@@ -178,10 +178,10 @@ class RegularizationLoss(nn.Module):
 
     def forward(self, g: AbstractLocation, p: GroundedLocation) -> Tuple[Tensor, Tensor]:
         # L2 on g: sum(g^2)
-        l_reg_g = sum(g_i.pow(2).sum(dim=1).mean() for g_i in g)
+        l_reg_g = sum(g_i.pow(2).sum() for g_i in g)
 
         # L1 on p: sum(|p|)
-        l_reg_p = sum(p_i.abs().sum(dim=1).mean() for p_i in p)
+        l_reg_p = sum(p_i.abs().sum() for p_i in p)
 
         return l_reg_g, l_reg_p
 

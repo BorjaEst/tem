@@ -41,7 +41,7 @@ Legacy Compatibility:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol, Tuple
+from typing import Dict, List, Optional, Protocol
 
 import torch
 import torch.nn.functional as F
@@ -64,6 +64,7 @@ class GenerativeOutputs(Protocol):
     g: List[Tensor]  # Abstract locations List[n_f] of [B, n_g[f]]
     p: List[Tensor]  # Grounded locations List[n_f] of [B, n_p[f]]
     x: SensoryPrediction  # Sensory predictions
+    x_from_g: Optional[SensoryPrediction] = None  # Optional sensory predictions from g_inf
 
 
 class InferenceOutputs(Protocol):
@@ -149,6 +150,32 @@ class DefaultTEMWeights:
 
 
 @dataclass(frozen=True)
+class PathwayMetrics:
+    """Structured metrics for pathway quality assessment.
+
+    Attributes:
+        p_agreement: Cosine similarity between generative and inference grounded locations
+        g_agreement: Cosine similarity between generative and inference abstract locations
+        gen_reconstruction_accuracy: Percentage of correct predictions from generative pathway
+        inf_reconstruction_accuracy: Percentage of correct predictions from inference pathway
+    """
+
+    p_agreement: float
+    g_agreement: float
+    gen_reconstruction_accuracy: float
+    inf_reconstruction_accuracy: float
+
+    def to_dict(self) -> Dict[str, float]:
+        """Convert to dictionary for logging frameworks."""
+        return {
+            "p_agreement": self.p_agreement,
+            "g_agreement": self.g_agreement,
+            "gen_reconstruction_accuracy": self.gen_reconstruction_accuracy,
+            "inf_reconstruction_accuracy": self.inf_reconstruction_accuracy,
+        }
+
+
+@dataclass(frozen=True)
 class LossOutput:
     """Structured output from loss computation.
 
@@ -156,22 +183,75 @@ class LossOutput:
     - Automatic logging of all components
     - Easy integration with PyTorch Lightning
     - Clear separation between optimization target and monitoring metrics
+    - Gradient monitoring for debugging training dynamics
 
     Attributes:
         total: Total scalar loss for backpropagation
         components: Dictionary of individual loss values for logging
         metrics: Optional additional metrics (e.g., accuracy, correlation)
+        grad_norms: Optional gradient norms per component for debugging
 
     Example:
         >>> output = loss_fn(predictions, targets)
         >>> output.total.backward()
         >>> for name, value in output.components.items():
         ...     logger.log(f'train/{name}', value)
+        >>> if output.metrics:
+        ...     for name, value in output.metrics.items():
+        ...         logger.log(f'metrics/{name}', value)
     """
 
     total: Tensor
     components: Dict[str, Tensor]
     metrics: Optional[Dict[str, float]] = None
+    grad_norms: Optional[Dict[str, float]] = None
+
+
+# =============================================================================
+# Base Loss Class
+# =============================================================================
+
+
+class BaseTEMLoss(nn.Module):
+    """Base class providing common functionality for TEM loss modules.
+
+    Extracts shared logic for:
+    - Weight management with annealing
+    - Component freezing for staged training
+    - Metrics computation control
+
+    Subclasses should implement the forward method.
+    """
+
+    def __init__(self, annealing_factor: float = 1.0, frozen_components: Optional[set] = None, compute_metrics: bool = False):
+        """Initialize base loss configuration.
+
+        Args:
+            annealing_factor: Multiplicative factor for regularization (0.0-1.0)
+            frozen_components: Set of component names to exclude from loss
+            compute_metrics: Whether to compute diagnostic metrics
+        """
+        super().__init__()
+        self.annealing_factor = annealing_factor
+        self.frozen_components = frozen_components or set()
+        self.compute_metrics = compute_metrics
+
+    def _get_effective_weight(self, component_name: str, base_weight: float, is_regularization: bool = False) -> float:
+        """Compute effective weight considering freezing and annealing.
+
+        Args:
+            component_name: Name of the loss component
+            base_weight: Base weight from configuration
+            is_regularization: Whether this is a regularization term
+
+        Returns:
+            Effective weight (0.0 if frozen, annealed if regularization)
+        """
+        if component_name in self.frozen_components:
+            return 0.0
+        if is_regularization:
+            return base_weight * self.annealing_factor
+        return base_weight
 
 
 # =============================================================================
@@ -179,7 +259,7 @@ class LossOutput:
 # =============================================================================
 
 
-class GenerativeLoss(nn.Module):
+class GenerativeLoss(BaseTEMLoss):
     """Loss for the generative pathway: g → p → x.
 
     The generative pathway can be trained independently to learn:
@@ -190,38 +270,38 @@ class GenerativeLoss(nn.Module):
     This pathway does NOT require sensory input or inference, making it suitable
     for pre-training on simulated trajectories or reinforcement learning scenarios.
 
-    Loss Components:
-        L_x_gen: Cross-entropy between generated and true observations
-        L_reg_g: L2 regularization on abstract location codes (sparsity)
-        L_g: Optional consistency with inferred g (teacher forcing)
+    Loss Components (ELBO terms):
+        L_x_gen: -log p(x|p) - Cross-entropy between generated and true observations
+        L_reg_g: ||g||² - L2 regularization on abstract location codes (sparsity)
+        L_g: MSE with inferred g - Optional consistency with inferred g (teacher forcing)
 
     Args:
         weights: Weight configuration (defaults to DefaultGenerativeWeights if None)
+        annealing_factor: Multiplicative factor for regularization (curriculum learning)
+        compute_metrics: Whether to compute diagnostic metrics (adds overhead)
 
     Example:
         >>> # Using defaults
         >>> loss_fn = GenerativeLoss()
         >>>
-        >>> # Using custom weights
-        >>> loss_fn = GenerativeLoss(weights=DefaultGenerativeWeights(w_reg_g=0.001))
+        >>> # Using custom weights with annealing
+        >>> loss_fn = GenerativeLoss(
+        ...     weights=DefaultGenerativeWeights(w_reg_g=0.001),
+        ...     annealing_factor=0.5,
+        ... )
         >>>
         >>> output = loss_fn(gen_outputs, x_target)
         >>> output.total.backward()
     """
 
-    def __init__(self, weights: Optional[GenerativeLossWeights] = None):
-        super().__init__()
+    def __init__(self, weights: Optional[GenerativeLossWeights] = None, annealing_factor: float = 1.0, compute_metrics: bool = False):
+        super().__init__(annealing_factor, None, compute_metrics)
         config = weights or DefaultGenerativeWeights()
         self.w_x_gen = config.w_x_gen
         self.w_reg_g = config.w_reg_g
         self.w_g = config.w_g
 
-    def forward(
-        self,
-        outputs: GenerativeOutputs,
-        x_target: Tensor,
-        g_target: Optional[List[Tensor]] = None,
-    ) -> LossOutput:
+    def forward(self, outputs: GenerativeOutputs, x_target: Tensor, g_target: Optional[List[Tensor]] = None) -> LossOutput:
         """Compute generative pathway loss.
 
         Args:
@@ -232,25 +312,35 @@ class GenerativeLoss(nn.Module):
         Returns:
             LossOutput with total loss and individual components
         """
-        # L_x_gen: Sensory generation quality
-        labels = torch.argmax(x_target, dim=1)
-        L_x_gen = F.cross_entropy(outputs.x.logits[0], labels, reduction="mean")
+        # L_x_gen: Sensory generation quality (ELBO: -log p(x|p))
+        L_x_gen = _compute_reconstruction_loss(outputs.x, x_target)
 
-        # L_reg_g: Abstract location regularization (L2)
-        L_reg_g = sum((g**2).sum() / g.numel() for g in outputs.g)
+        # L_reg_g: Abstract location regularization (ELBO: approximate KL to prior)
+        L_reg_g = _compute_l2_regularization(outputs.g)
 
         components = {"L_x_gen": L_x_gen.detach(), "L_reg_g": L_reg_g.detach()}
 
-        # Base loss
-        total = self.w_x_gen * L_x_gen + self.w_reg_g * L_reg_g
+        # Base loss with annealing applied via base class method
+        total = self._get_effective_weight("L_x_gen", self.w_x_gen) * L_x_gen + self._get_effective_weight("L_reg_g", self.w_reg_g, is_regularization=True) * L_reg_g
 
         # Optional: L_g for teacher forcing
         if g_target is not None:
-            L_g = sum(F.mse_loss(outputs.g[f], g_target[f], reduction="mean") for f in range(len(outputs.g)))
+            L_g = _compute_consistency_loss(outputs.g, g_target)
             components["L_g"] = L_g.detach()
-            total = total + self.w_g * L_g
+            total = total + self._get_effective_weight("L_g", self.w_g) * L_g
 
-        return LossOutput(total=total, components=components)
+        # Compute metrics if requested
+        metrics = None
+        if self.compute_metrics and g_target is not None:
+            labels = torch.argmax(x_target, dim=1)
+            gen_preds = torch.argmax(outputs.x.logits[0], dim=1)
+            gen_accuracy = (gen_preds == labels).float().mean().item()
+            # Vectorized cosine similarity computation
+            g_similarities = torch.stack([F.cosine_similarity(outputs.g[f], g_target[f], dim=1).mean() for f in range(len(outputs.g))])
+            g_agreement = g_similarities.mean().item()
+            metrics = {"gen_reconstruction_accuracy": gen_accuracy, "g_agreement": g_agreement}
+
+        return LossOutput(total=total, components=components, metrics=metrics)
 
 
 # =============================================================================
@@ -258,7 +348,7 @@ class GenerativeLoss(nn.Module):
 # =============================================================================
 
 
-class InferenceLoss(nn.Module):
+class InferenceLoss(BaseTEMLoss):
     """Loss for the inference pathway: x → p, g.
 
     The inference pathway can be trained independently to learn:
@@ -270,27 +360,32 @@ class InferenceLoss(nn.Module):
     This pathway does NOT require the generative pathway, making it suitable
     for supervised learning from observations or behavioral cloning.
 
-    Loss Components:
-        L_x_inf: Cross-entropy for sensory reconstruction from inferred p
-        L_p_x: MSE between inferred p and sensory-retrieved p (optional)
-        L_reg_p: L1 regularization on grounded location codes (sparsity)
+    Loss Components (ELBO terms):
+        L_x_inf: -log p(x|p_inf) - Cross-entropy for sensory reconstruction from inferred p
+        L_p_x: MSE between f(p|g,x) and f(p_x|x) - Sensory-grounded consistency (optional)
+        L_reg_p: ||p||₁ - L1 regularization on grounded location codes (sparsity)
 
     Args:
         weights: Weight configuration (defaults to DefaultInferenceWeights if None)
+        annealing_factor: Multiplicative factor for regularization (curriculum learning)
+        compute_metrics: Whether to compute diagnostic metrics (adds overhead)
 
     Example:
         >>> # Using defaults
         >>> loss_fn = InferenceLoss()
         >>>
-        >>> # Using custom weights
-        >>> loss_fn = InferenceLoss(weights=DefaultInferenceWeights(w_reg_p=0.001))
+        >>> # Using custom weights with annealing
+        >>> loss_fn = InferenceLoss(
+        ...     weights=DefaultInferenceWeights(w_reg_p=0.001),
+        ...     annealing_factor=0.5,
+        ... )
         >>>
         >>> output = loss_fn(inf_outputs, x_target)
         >>> output.total.backward()
     """
 
-    def __init__(self, weights: Optional[InferenceLossWeights] = None):
-        super().__init__()
+    def __init__(self, weights: Optional[InferenceLossWeights] = None, annealing_factor: float = 1.0, compute_metrics: bool = False):
+        super().__init__(annealing_factor, None, compute_metrics)
         config = weights or DefaultInferenceWeights()
         self.w_x_inf = config.w_x_inf
         self.w_p_x = config.w_p_x
@@ -306,25 +401,32 @@ class InferenceLoss(nn.Module):
         Returns:
             LossOutput with total loss and individual components
         """
-        # L_x_inf: Sensory reconstruction quality from inferred p
-        labels = torch.argmax(x_target, dim=1)
-        L_x_inf = F.cross_entropy(outputs.x.logits[0], labels, reduction="mean")
+        # L_x_inf: Sensory reconstruction quality from inferred p (ELBO: -log p(x|p_inf))
+        L_x_inf = _compute_reconstruction_loss(outputs.x, x_target)
 
-        # L_reg_p: Grounded location regularization (L1)
-        L_reg_p = sum(p.abs().sum() / p.numel() for p in outputs.p)
+        # L_reg_p: Grounded location regularization (ELBO: approximate KL to prior)
+        L_reg_p = _compute_l1_regularization(outputs.p)
 
         components = {"L_x_inf": L_x_inf.detach(), "L_reg_p": L_reg_p.detach()}
 
-        # Base loss
-        total = self.w_x_inf * L_x_inf + self.w_reg_p * L_reg_p
+        # Base loss with annealing applied via base class method
+        total = self._get_effective_weight("L_x_inf", self.w_x_inf) * L_x_inf + self._get_effective_weight("L_reg_p", self.w_reg_p, is_regularization=True) * L_reg_p
 
         # Optional: L_p_x for sensory-grounded consistency
         if outputs.p_x is not None:
-            L_p_x = sum(F.mse_loss(outputs.p[f], outputs.p_x[f], reduction="mean") for f in range(len(outputs.p)))
+            L_p_x = _compute_consistency_loss(outputs.p, outputs.p_x)
             components["L_p_x"] = L_p_x.detach()
-            total = total + self.w_p_x * L_p_x
+            total = total + self._get_effective_weight("L_p_x", self.w_p_x) * L_p_x
 
-        return LossOutput(total=total, components=components)
+        # Compute metrics if requested
+        metrics = None
+        if self.compute_metrics:
+            labels = torch.argmax(x_target, dim=1)
+            inf_preds = torch.argmax(outputs.x.logits[0], dim=1)
+            inf_accuracy = (inf_preds == labels).float().mean().item()
+            metrics = {"inf_reconstruction_accuracy": inf_accuracy}
+
+        return LossOutput(total=total, components=components, metrics=metrics)
 
 
 # =============================================================================
@@ -332,43 +434,56 @@ class InferenceLoss(nn.Module):
 # =============================================================================
 
 
-class TEMLoss(nn.Module):
+class TEMLoss(BaseTEMLoss):
     """Full TEM training loss combining generative and inference pathways.
 
     This loss enables complete TEM training with consistency constraints between
     pathways, implementing teacher forcing where inference guides generation.
 
-    The key insight: during training, the generative pathway can use inferred
-    values as targets, stabilizing learning through:
-    1. Inference provides high-quality g_inf and p_inf
-    2. Generative learns to match these via transition dynamics
-    3. Consistency losses align the pathways
+    The ELBO (Evidence Lower Bound) following Gemici et al. (2017):
+        log p(x|a) ≥ E_q[log p(x|p)] - KL[q(g|a) || f(g|x)] - KL[q(p|g) || f(p|x)]
 
-    Loss Components:
-        L_x_gen: Generative sensory prediction quality
-        L_x_inf: Inference sensory reconstruction quality
-        L_p_consistency: MSE between inferred and generated p (teacher forcing)
-        L_g_consistency: MSE between inferred and generated g (teacher forcing)
-        L_p_x: Sensory-grounded consistency (optional)
-        L_reg_g: Abstract location regularization
-        L_reg_p: Grounded location regularization
+    Where:
+        - p(x|p): Generative model (decoder)
+        - q(g|a): Transition model (path integration)
+        - q(p|g): Memory retrieval (attractor dynamics)
+        - f(g|x): Abstract inference (sensory → abstract)
+        - f(p|x): Grounded inference (sensory → grounded)
+
+    Loss Components (ELBO terms):
+        L_x_gen: -log p(x|p_gen) - Generative reconstruction from p_gen
+        L_x_inf: -log p(x|p_inf) - Inference reconstruction from p_inf
+        L_x_g: -log p(x|p) where p from g_inf - Inference pathway quality
+        L_p_consistency: MSE between q(p|g_gen) and f(p|x) - Grounded alignment
+        L_g_consistency: MSE between q(g|a) and f(g|x) - Abstract alignment
+        L_p_x: MSE between f(p|x) and f(p|g_inf,x) - Sensory-grounded consistency
+        L_reg_g: ||g||² - Abstract location sparsity (approximate KL to prior)
+        L_reg_p: ||p||₁ - Grounded location sparsity (approximate KL to prior)
 
     Args:
         weights: Weight configuration (defaults to DefaultTEMWeights if None)
+        annealing_factor: Multiplicative factor for regularization (curriculum learning)
+        frozen_components: Set of component names to freeze (zero weight)
+        compute_metrics: Whether to compute diagnostic metrics (adds overhead)
 
     Example:
         >>> # Using defaults
         >>> loss_fn = TEMLoss()
         >>>
-        >>> # Using custom weights
-        >>> loss_fn = TEMLoss(weights=DefaultTEMWeights(w_reg_g=0.001, w_reg_p=0.001))
+        >>> # Using custom configuration
+        >>> loss_fn = TEMLoss(
+        ...     weights=DefaultTEMWeights(w_reg_g=0.001, w_reg_p=0.001),
+        ...     annealing_factor=0.5,  # Reduce regularization early in training
+        ...     frozen_components={"L_x_gen"},  # Freeze generative reconstruction
+        ...     compute_metrics=True,  # Enable pathway agreement metrics
+        ... )
         >>>
         >>> output = loss_fn(gen_outputs, inf_outputs, x_target)
         >>> output.total.backward()
     """
 
-    def __init__(self, weights: Optional[TEMLossWeights] = None):
-        super().__init__()
+    def __init__(self, weights: Optional[TEMLossWeights] = None, annealing_factor: float = 1.0, frozen_components: Optional[set] = None, compute_metrics: bool = False):
+        super().__init__(annealing_factor, frozen_components, compute_metrics)
         config = weights or DefaultTEMWeights()
         self.w_x_gen = config.w_x_gen
         self.w_x_inf = config.w_x_inf
@@ -377,33 +492,32 @@ class TEMLoss(nn.Module):
         self.w_p_x = config.w_p_x
         self.w_reg_g = config.w_reg_g
         self.w_reg_p = config.w_reg_p
+        self.w_x_g = 1.0  # Weight for L_x_g (new component)
 
     def forward(self, gen_outputs: GenerativeOutputs, inf_outputs: InferenceOutputs, x_target: Tensor) -> LossOutput:
         """Compute full TEM loss with pathway consistency.
 
         Args:
-            gen_outputs: Generative pathway outputs (g, p, x)
-            inf_outputs: Inference pathway outputs (g, p, x, optional p_x)
+            gen_outputs: Generative pathway outputs (g, p, x, optional x_from_g)
+            outputs: Inference pathway outputs (g, p, x, optional p_x)
             x_target: Ground truth observation [B, n_x] (one-hot)
 
         Returns:
-            LossOutput with total loss and all components
+            LossOutput with total loss, components, and optional metrics
         """
-        labels = torch.argmax(x_target, dim=1)
+        # Reconstruction losses (ELBO: -log p(x|p) terms)
+        L_x_gen = _compute_reconstruction_loss(gen_outputs.x, x_target)
+        L_x_inf = _compute_reconstruction_loss(inf_outputs.x, x_target)
 
-        # Reconstruction losses
-        L_x_gen = F.cross_entropy(gen_outputs.x.logits[0], labels, reduction="mean")
-        L_x_inf = F.cross_entropy(inf_outputs.x.logits[0], labels, reduction="mean")
+        # Consistency losses (ELBO: KL divergence approximations via MSE)
+        L_p_consistency = _compute_consistency_loss(inf_outputs.p, gen_outputs.p)
+        L_g_consistency = _compute_consistency_loss(inf_outputs.g, gen_outputs.g)
 
-        # Consistency losses (teacher forcing)
-        L_p_consistency = sum(F.mse_loss(inf_outputs.p[f], gen_outputs.p[f], reduction="mean") for f in range(len(inf_outputs.p)))
+        # Regularization (ELBO: approximate KL to prior)
+        L_reg_g = _compute_l2_regularization(inf_outputs.g)
+        L_reg_p = _compute_l1_regularization(inf_outputs.p)
 
-        L_g_consistency = sum(F.mse_loss(inf_outputs.g[f], gen_outputs.g[f], reduction="mean") for f in range(len(inf_outputs.g)))
-
-        # Regularization
-        L_reg_g = sum((g**2).sum() / g.numel() for g in inf_outputs.g)
-        L_reg_p = sum(p.abs().sum() / p.numel() for p in inf_outputs.p)
-
+        # Build components dict
         components = {
             "L_x_gen": L_x_gen.detach(),
             "L_x_inf": L_x_inf.detach(),
@@ -413,20 +527,142 @@ class TEMLoss(nn.Module):
             "L_reg_p": L_reg_p.detach(),
         }
 
-        # Base total
+        # Base total using base class method for weight management
         total = (
-            self.w_x_gen * L_x_gen
-            + self.w_x_inf * L_x_inf
-            + self.w_p_consistency * L_p_consistency
-            + self.w_g_consistency * L_g_consistency
-            + self.w_reg_g * L_reg_g
-            + self.w_reg_p * L_reg_p
+            self._get_effective_weight("L_x_gen", self.w_x_gen) * L_x_gen
+            + self._get_effective_weight("L_x_inf", self.w_x_inf) * L_x_inf
+            + self._get_effective_weight("L_p_consistency", self.w_p_consistency) * L_p_consistency
+            + self._get_effective_weight("L_g_consistency", self.w_g_consistency) * L_g_consistency
+            + self._get_effective_weight("L_reg_g", self.w_reg_g, is_regularization=True) * L_reg_g
+            + self._get_effective_weight("L_reg_p", self.w_reg_p, is_regularization=True) * L_reg_p
         )
+
+        # Optional: L_x_g for reconstruction from g_inf → p → x (legacy parity)
+        if gen_outputs.x_from_g is not None:
+            L_x_g = _compute_reconstruction_loss(gen_outputs.x_from_g, x_target)
+            components["L_x_g"] = L_x_g.detach()
+            total = total + self._get_effective_weight("L_x_g", self.w_x_g) * L_x_g
 
         # Optional: L_p_x for sensory-grounded consistency
         if inf_outputs.p_x is not None:
-            L_p_x = sum(F.mse_loss(inf_outputs.p[f], inf_outputs.p_x[f], reduction="mean") for f in range(len(inf_outputs.p)))
+            L_p_x = _compute_consistency_loss(inf_outputs.p, inf_outputs.p_x)
             components["L_p_x"] = L_p_x.detach()
-            total = total + self.w_p_x * L_p_x
+            total = total + self._get_effective_weight("L_p_x", self.w_p_x) * L_p_x
 
-        return LossOutput(total=total, components=components)
+        # Compute metrics if requested using helper function
+        metrics_dict = _compute_metrics(gen_outputs, inf_outputs, x_target) if self.compute_metrics else None
+
+        return LossOutput(total=total, components=components, metrics=metrics_dict)
+
+
+# =============================================================================
+# Metrics Computation
+# =============================================================================
+
+
+def _compute_metrics(gen_outputs: GenerativeOutputs, inf_outputs: InferenceOutputs, x_target: Tensor) -> Dict[str, float]:
+    """Compute diagnostic metrics for pathway quality assessment.
+
+    Computes agreement between pathways and reconstruction accuracy to monitor
+    training progress and detect pathway divergence.
+
+    Args:
+        gen_outputs: Generative pathway outputs with p, g, and x predictions
+        inf_outputs: Inference pathway outputs with p, g, and x predictions
+        x_target: Ground truth observations for accuracy computation
+
+    Returns:
+        Dictionary containing:
+            - p_agreement: Cosine similarity between generative and inference grounded codes
+            - g_agreement: Cosine similarity between generative and inference abstract codes
+            - gen_reconstruction_accuracy: Accuracy of generative pathway predictions
+            - inf_reconstruction_accuracy: Accuracy of inference pathway predictions
+    """
+    labels = torch.argmax(x_target, dim=1)
+    gen_preds = torch.argmax(gen_outputs.x.logits[0], dim=1)
+    inf_preds = torch.argmax(inf_outputs.x.logits[0], dim=1)
+
+    gen_accuracy = (gen_preds == labels).float().mean().item()
+    inf_accuracy = (inf_preds == labels).float().mean().item()
+
+    # Compute mean cosine similarity across all frequency scales using vectorized operations
+    # Stack all frequencies and compute cosine similarity in batch
+    p_similarities = torch.stack([F.cosine_similarity(gen_outputs.p[f], inf_outputs.p[f], dim=1).mean() for f in range(len(gen_outputs.p))])
+    p_agreement = p_similarities.mean().item()
+
+    g_similarities = torch.stack([F.cosine_similarity(gen_outputs.g[f], inf_outputs.g[f], dim=1).mean() for f in range(len(gen_outputs.g))])
+    g_agreement = g_similarities.mean().item()
+
+    # Create structured metrics object
+    metrics = PathwayMetrics(
+        p_agreement=p_agreement,
+        g_agreement=g_agreement,
+        gen_reconstruction_accuracy=gen_accuracy,
+        inf_reconstruction_accuracy=inf_accuracy,
+    )
+
+    # Return as dict for backward compatibility with LossOutput
+    return metrics.to_dict()
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def _compute_reconstruction_loss(predictions: SensoryPrediction, targets: Tensor, logits_index: int = 0, reduction: str = "mean") -> Tensor:
+    """Compute cross-entropy reconstruction loss.
+
+    Args:
+        predictions: Sensory predictions with logits
+        targets: Ground truth observation (one-hot encoded)
+        logits_index: Index of logits tensor to use
+        reduction: Reduction strategy ('mean', 'sum', 'none')
+
+    Returns:
+        Scalar loss tensor
+    """
+    labels = torch.argmax(targets, dim=1)
+    return F.cross_entropy(predictions.logits[logits_index], labels, reduction=reduction)
+
+
+def _compute_l2_regularization(codes: List[Tensor]) -> Tensor:
+    """Compute L2 (squared) regularization over multi-scale codes.
+
+    Args:
+        codes: List of tensors representing multi-scale location codes
+
+    Returns:
+        Mean squared magnitude across all codes (averaged per frequency)
+    """
+    # Compute mean per frequency (since n_g[f] varies), then average across frequencies
+    return torch.stack([c.pow(2).mean() for c in codes]).mean()
+
+
+def _compute_l1_regularization(codes: List[Tensor]) -> Tensor:
+    """Compute L1 (absolute) regularization over multi-scale codes.
+
+    Args:
+        codes: List of tensors representing multi-scale location codes
+
+    Returns:
+        Mean absolute magnitude across all codes (averaged per frequency)
+    """
+    # Compute mean per frequency (since n_p[f] varies), then average across frequencies
+    return torch.stack([c.abs().mean() for c in codes]).mean()
+
+
+def _compute_consistency_loss(codes1: List[Tensor], codes2: List[Tensor], reduction: str = "mean") -> Tensor:
+    """Compute MSE consistency loss between two multi-scale codes.
+
+    Args:
+        codes1: First multi-scale code
+        codes2: Second multi-scale code
+        reduction: Reduction strategy
+
+    Returns:
+        Mean consistency loss across all frequencies
+    """
+    # Compute MSE per frequency (since n[f] varies), then aggregate across frequencies
+    per_freq_mse = torch.stack([F.mse_loss(c1, c2) for c1, c2 in zip(codes1, codes2)])
+    return per_freq_mse.mean() if reduction == "mean" else per_freq_mse.sum()

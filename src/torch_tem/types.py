@@ -244,16 +244,22 @@ class GenerativePathwayOutputs:
         g: Generated abstract location from transition model
         p: Retrieved grounded location from memory (multi-scale)
         x: Generated sensory prediction from decoder
+        x_from_g: Optional sensory prediction from inferred g (for L_x_g)
 
     Theory:
         These outputs represent the generative model's beliefs about
         location and observations given actions. Used for ELBO computation
         with teacher forcing from the inference pathway.
+
+        The x_from_g field enables reconstruction loss from g_inf → p → x,
+        providing additional supervision for the inference pathway and tighter
+        ELBO bounds (legacy model parity).
     """
 
     g: AbstractLocation  # q(g|a,g_prev)
     p: MultiScaleCode  # q(p|g)
     x: SensoryPrediction  # q(x|p)
+    x_from_g: Optional[SensoryPrediction] = None  # q(x|p) where p from g_inf
 
 
 @dataclass

@@ -209,12 +209,20 @@ class TEMModel(nn.Module):
         # Process through both pathways to get all outputs
         state_updated = self.forward(x, locations, a, state)
 
+        # Compute x_from_g: reconstruct observation from inferred g
+        # This provides additional supervision for the inference pathway
+        # Following legacy model: g_inf → p → x reconstruction
+        g_inf = state_updated.mec.abstract_location  # Inferred abstract location
+        p_from_g_inf = self.memory.retrieve(g_inf, for_inference=False)  # Retrieve p from g_inf
+        x_from_g = self.lec.decode(p_from_g_inf)  # Decode x from p
+
         # Extract pathway outputs for ELBO computation
         # Generative pathway: q(g,p,x|a,g_prev) via transition → memory → decoder
         gen_outputs = GenerativePathwayOutputs(
             g=state_updated.mec.transition_stats.mean,  # q(g|a,g_prev): Generated abstract location
             p=state_updated.mec.projection,  # q(p|g): Retrieved grounded location (multi-scale)
             x=state_updated.prediction,  # q(x|p): Generated sensory prediction
+            x_from_g=x_from_g,  # q(x|p) where p from g_inf (L_x_g reconstruction)
         )
 
         # Inference pathway: f(g,p|x,a) via encoder → memory → grounded inference

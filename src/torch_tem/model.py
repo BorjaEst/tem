@@ -242,7 +242,7 @@ class TEMModel(nn.Module):
             self.loss_x_fn(prediction=self.lec.decode(p_gen), target=x),  # From generative prediction
         ]
         # L_p: Grounded location consistency (inference matches memory retrieval)
-        Lp = self.loss_p_fn(p=p, p_g=p_g)
+        Lp = self.loss_p_fn(p=p, p_g=p_g, p_x=p_x)
         # L_g: Abstract location KL divergence (posterior vs prior)
         Lg = self.loss_g_fn(g=state.abstract_location, g_gen=state.transition_stats)
 

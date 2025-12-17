@@ -263,3 +263,65 @@ def plot_schedule_effect(
 
     plt.tight_layout()
     return fig
+
+
+# ==============================================================================
+# Abstract Location Snapshot
+# ==============================================================================
+def plot_abstract_location_snapshot(
+    abstract_location: AbstractLocation,
+    frequencies: List[float],
+    batch_idx: int = 0,
+    title: str = "Abstract Location Snapshot (Grid Cell Activations)",
+    figsize: tuple = None,
+) -> plt.Figure:
+    """Plot abstract location at a single timepoint as bar charts.
+
+    Visualizes grid cell activations across all frequency modules at a specific
+    moment in time. Each frequency module is shown in a separate subplot with
+    bar charts showing individual cell activations.
+
+    Args:
+        abstract_location: List of [B, n_g[f]] tensors, one per frequency module
+        frequencies: Frequency values per module (e.g., [0.99, 0.3, 0.09])
+        batch_idx: Which batch element to visualize (default: 0)
+        title: Figure title
+        figsize: Figure size (width, height). Auto-computed if None.
+
+    Returns:
+        matplotlib Figure with n_f subplots showing grid cell activations
+
+    Example:
+        >>> # After training or during inference
+        >>> abstract_loc = state.mec.abstract_location  # List[n_f] of [B, n_g[f]]
+        >>> fig = plot_abstract_location_snapshot(
+        ...     abstract_loc,
+        ...     frequencies=[0.99, 0.3, 0.09, 0.03, 0.01]
+        ... )
+        >>> fig.savefig('abstract_location_snapshot.png')
+    """
+    n_f = len(abstract_location)
+
+    # Auto-compute figsize if not provided
+    if figsize is None:
+        figsize = (10, 3 * n_f)
+
+    # Create subplots
+    fig, axes = plt.subplots(n_f, 1, figsize=figsize, squeeze=False)
+    axes = axes.flatten()
+
+    for f, g_f in enumerate(abstract_location):
+        # Extract batch element and convert to numpy
+        g_f_np = g_f[batch_idx].detach().cpu().numpy()  # [n_g[f]]
+
+        # Plot bar chart
+        ax = axes[f]
+        ax.bar(range(len(g_f_np)), g_f_np, color="steelblue", alpha=0.7)
+        ax.set_title(f"Abstract Location - Frequency {f} (f={frequencies[f]:.3f})")
+        ax.set_xlabel("Grid Cell Index")
+        ax.set_ylabel("Activation")
+        ax.grid(True, alpha=0.3, axis="y")
+
+    fig.suptitle(title, fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    return fig

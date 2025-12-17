@@ -13,7 +13,7 @@ All plotting functions follow consistent conventions:
 - Provide both quick-plot and customizable interfaces
 """
 
-from torch_tem.figures.abstract import plot_g_inf_evolution, plot_schedule_effect, plot_source_contributions, plot_uncertainty_evolution
+from torch_tem.figures.abstract import plot_abstract_location_snapshot, plot_g_inf_evolution, plot_schedule_effect, plot_source_contributions, plot_uncertainty_evolution
 from torch_tem.figures.data import plot_batch_tensors, plot_environment_layout, plot_policy_comparison, plot_walk_statistics, plot_walks
 from torch_tem.figures.grounded import plot_grounded_location_activity, plot_outer_product_structure, plot_place_cell_dynamics
 from torch_tem.figures.memory import plot_attractor_convergence, plot_hierarchical_masks, plot_learning_curve, plot_memory_difference, plot_memory_matrices, plot_retrieval_quality
@@ -76,6 +76,7 @@ __all__ = [
     "plot_uncertainty_evolution",
     "plot_g_inf_evolution",
     "plot_schedule_effect",
+    "plot_abstract_location_snapshot",
     # Simulation state evolution
     "plot_abstract_location_heatmap",
     "plot_memory_formation_timeline",

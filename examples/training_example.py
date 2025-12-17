@@ -403,50 +403,32 @@ if __name__ == "__main__":
             act_t = test_actions[t] if t > 0 else None  # [B] or None
             state = tem_model(obs_t, step_locations, act_t, state)
 
-    # Plot abstract location evolution (if available)
-    try:
-        # Use the abstract location from final state
-        abstract_loc = state.mec.abstract_location  # List[n_f] of [batch, n_g[f]]
-        # Create simple visualization of final abstract location
-        fig3, axes = plt.subplots(len(abstract_loc), 1, figsize=(10, 3 * len(abstract_loc)))
-        if len(abstract_loc) == 1:
-            axes = [axes]
-
-        for f, (ax, g_f) in enumerate(zip(axes, abstract_loc)):
-            # Plot first batch item's abstract location for frequency f
-            g_f_np = g_f[0].cpu().numpy()  # [n_g[f]]
-            ax.bar(range(len(g_f_np)), g_f_np)
-            ax.set_title(f"Abstract Location - Frequency {f} (f={config.f_initial[f]:.3f})")
-            ax.set_xlabel("Grid Cell Index")
-            ax.set_ylabel("Activation")
-            ax.grid(True, alpha=0.3, axis="y")
-
-        plt.tight_layout()
-        if config.save_plots:
-            fig3.savefig(config.output_dir / "03_abstract_location.png", dpi=150, bbox_inches="tight")
-            print(f"  Saved: {config.output_dir / '03_abstract_location.png'}")
-    except Exception as e:
-        print(f"  Note: Could not plot abstract location: {e}")
+    # Plot abstract location snapshot
+    fig3 = figures.plot_abstract_location_snapshot(
+        state.mec.abstract_location,
+        config.f_initial,
+        batch_idx=0,
+        title="Abstract Location Snapshot (Final State)",
+    )
+    if config.save_plots:
+        fig3.savefig(config.output_dir / "03_abstract_location.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: {config.output_dir / '03_abstract_location.png'}")
 
     # Plot memory structure
-    try:
-        # Access memory from state.hpc.memory
-        M_gen = state.hpc.memory[0] if state.hpc.memory else None
-        M_inf = state.hpc.memory[1] if len(state.hpc.memory) > 1 and state.hpc.memory[1] is not None else None
+    M_gen = state.hpc.memory[0] if state.hpc.memory else None
+    M_inf = state.hpc.memory[1] if len(state.hpc.memory) > 1 and state.hpc.memory[1] is not None else None
 
-        if M_gen is not None:
-            # Extract first batch item but keep as tensor
-            if M_gen.ndim > 2:
-                M_gen = M_gen[0]
-            if M_inf is not None and M_inf.ndim > 2:
-                M_inf = M_inf[0]
+    if M_gen is not None:
+        # Extract first batch item but keep as tensor
+        if M_gen.ndim > 2:
+            M_gen = M_gen[0]
+        if M_inf is not None and M_inf.ndim > 2:
+            M_inf = M_inf[0]
 
-            fig4 = figures.plot_memory_matrices(M_gen, M_inf, title="Final Hebbian Memory Matrices")
-            if config.save_plots:
-                fig4.savefig(config.output_dir / "04_memory_structure.png", dpi=150, bbox_inches="tight")
-                print(f"  Saved: {config.output_dir / '04_memory_structure.png'}")
-    except Exception as e:
-        print(f"  Note: Could not plot memory structure: {e}")
+        fig4 = figures.plot_memory_matrices(M_gen, M_inf, title="Final Hebbian Memory Matrices")
+        if config.save_plots:
+            fig4.savefig(config.output_dir / "04_memory_structure.png", dpi=150, bbox_inches="tight")
+            print(f"  Saved: {config.output_dir / '04_memory_structure.png'}")
 
     print("\n" + "=" * 80)
     print("Summary:")

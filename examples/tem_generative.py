@@ -67,7 +67,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import core, data, figures, hpc, lec, mec, utils
 from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.hpc import Memory
 
 
 # ==============================================================================
@@ -210,10 +209,15 @@ if __name__ == "__main__":
     memory_gen = data.MemoryMatrixGenerator(model_config)
     M_gen_init, M_inf_init = memory_gen.from_walk(g_training, lambda g: mec_projection.repeat(mec_projection.downsample(g)))
 
-    # Initialize memory system with pre-learned matrices
-    mem = Memory(model_config)
-    mem.storage.M_gen[0] = M_gen_init.clone()
-    mem.storage.M_inf[0] = M_inf_init.clone()
+    # Initialize memory matrices externally (functional interface)
+    n_p_total = sum(model_config.n_p)
+    M_gen = M_gen_init.unsqueeze(0)  # Add batch dimension: [B, N, N]
+    M_inf = M_inf_init.unsqueeze(0) if not model_config.common_memory else None
+
+    # Initialize attractor for retrieval
+    mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
+    mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
+    mem_attractor = hpc.attractor.AttractorDynamics(model_config, mask_inf, mask_gen)
 
     print(f"  ✓ Generated memory from {training_walk_length} training steps")
     print(f"  ✓ Memory: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
@@ -266,7 +270,7 @@ if __name__ == "__main__":
         # Step 3 (Manuscript): Retrieve from memory
         # p_g = attractor(g_, M_gen)
         # ============================================================
-        p_g = mem.retrieve(g_, for_inference=False)  # List[n_f] of [B, n_p[f]]
+        p_g = mem_attractor(g_, M_gen, for_inference=False)  # List[n_f] of [B, n_p[f]]
         p_g_flat = torch.cat(p_g, dim=1)  # [B, sum(n_p)]
         p_g_history.append(p_g_flat[0].detach())
 
@@ -355,7 +359,7 @@ if __name__ == "__main__":
 
     # Plot 5: Memory structure (pre-learned)
     # Show structure of pre-learned memory matrix
-    M_gen_final = mem.get_memory(for_inference=False)[0].detach().cpu().numpy()  # [sum(n_p), sum(n_p)]
+    M_gen_final = M_gen[0].detach().cpu().numpy()  # [sum(n_p), sum(n_p)]
     fig5, axes = plt.subplots(1, 2, figsize=(14, 6))
 
     # Memory matrix structure

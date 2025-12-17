@@ -173,6 +173,11 @@ if __name__ == "__main__":
     mem_attractor = attractor.AttractorDynamics(model_config, mask_inf, mask_gen)
 
     n_p_total = sum(model_config.n_p)
+
+    # Initialize memory state externally (functional interface)
+    M_gen = utils.create_initial_memory(n_p_total, config.batch_size, dual_memory=not model_config.common_memory, device=torch.device("cpu"))[0]
+    M_inf = utils.create_initial_memory(n_p_total, config.batch_size, dual_memory=not model_config.common_memory, device=torch.device("cpu"))[1]
+
     print(f"  ✓ MemoryStorage: {n_p_total}×{n_p_total} Hebbian matrix")
     print(f"    Dual memory: {not model_config.common_memory}")
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
@@ -199,22 +204,24 @@ if __name__ == "__main__":
         p_generated = torch.randn(config.batch_size, n_p_total).softmax(dim=1)
 
         # Store pre-update state
-        M_gen_before = mem_storage.M_gen.clone()
+        M_gen_before = M_gen.clone()
 
-        # Apply Hebbian learning
-        mem_storage.update(p_inferred, p_generated, eta=config.eta)
+        # Apply Hebbian learning (functional interface)
+        M_gen = mem_storage.update(p_inferred, p_generated, M_gen)
+        if M_inf is not None:
+            M_inf = mem_storage.update(p_inferred, p_generated, M_inf)
 
         # Monitor learning dynamics
-        m_gen_strength = torch.norm(mem_storage.M_gen).item()
+        m_gen_strength = torch.norm(M_gen).item()
         memory_strengths.append(m_gen_strength)
 
-        update_magnitude = torch.norm(mem_storage.M_gen - M_gen_before).item()
+        update_magnitude = torch.norm(M_gen - M_gen_before).item()
         update_magnitudes.append(update_magnitude)
 
-        if not model_config.common_memory:
+        if M_inf is not None:
             # Measure dual memory divergence
-            M_gen_flat = mem_storage.M_gen.flatten()
-            M_inf_flat = mem_storage.M_inf.flatten()
+            M_gen_flat = M_gen.flatten()
+            M_inf_flat = M_inf.flatten()
             cos_sim = torch.nn.functional.cosine_similarity(M_gen_flat.unsqueeze(0), M_inf_flat.unsqueeze(0)).item()
             cosine_sims.append(cos_sim)
 
@@ -249,8 +256,8 @@ if __name__ == "__main__":
     test_targets_list = utils.split_to_frequencies(test_targets, model_config.n_p)
 
     # Run attractor dynamics
-    M_inf = mem_storage.get_memory(for_inference=True)
-    test_retrievals_list = mem_attractor(test_queries_list, M_inf, for_inference=True)
+    M_for_retrieval = M_inf if M_inf is not None else M_gen
+    test_retrievals_list = mem_attractor(test_queries_list, M_for_retrieval, for_inference=True)
 
     # Compute retrieval quality
     test_queries_cat = torch.cat(test_queries_list, dim=1)
@@ -283,14 +290,13 @@ if __name__ == "__main__":
         noisy_queries_list = utils.split_to_frequencies(noisy_queries, model_config.n_p)
 
         # Test inference mode
-        M_inf = mem_storage.get_memory(for_inference=True)
-        retrieved_inf = mem_attractor(noisy_queries_list, M_inf, for_inference=True)
+        M_for_inf = M_inf if M_inf is not None else M_gen
+        retrieved_inf = mem_attractor(noisy_queries_list, M_for_inf, for_inference=True)
         retrieved_inf_cat = torch.cat(retrieved_inf, dim=1)
         mse_inf = torch.nn.functional.mse_loss(retrieved_inf_cat, test_targets).item()
         errors_by_mode["Inference"].append(mse_inf)
 
         # Test generative mode
-        M_gen = mem_storage.get_memory(for_inference=False)
         retrieved_gen = mem_attractor(noisy_queries_list, M_gen, for_inference=False)
         retrieved_gen_cat = torch.cat(retrieved_gen, dim=1)
         mse_gen = torch.nn.functional.mse_loss(retrieved_gen_cat, test_targets).item()
@@ -304,8 +310,8 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 5: Analyzing learned memory structure...")
 
-    M_gen = mem_storage.M_gen
-    M_inf = mem_storage.get_memory(for_inference=True)
+    # M_gen and M_inf already in scope from training loop
+    M_for_analysis = M_inf if M_inf is not None else M_gen
 
     # Compute statistics
     sparsity_threshold = 0.01
@@ -329,8 +335,8 @@ if __name__ == "__main__":
 
     # Plot 1: Memory matrices structure
     fig1 = figures.plot_memory_matrices(
-        mem_storage.M_gen[0],  # Use first batch element for visualization
-        mem_storage.get_memory(for_inference=True)[0],
+        M_gen[0],  # Use first batch element for visualization
+        M_for_analysis[0],
         n_p_per_freq=model_config.n_p,
         n_training_steps=config.n_training_steps,
     )

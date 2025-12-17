@@ -182,27 +182,17 @@ def main():
         # Store state components for analysis (extract batch dimension [0])
         abstract_locations.append([g[0].detach().cpu() for g in state.abstract_location])
         grounded_locations.append([p[0].detach().cpu() for p in state.grounded_location])
-        # SensoryPrediction is a dataclass with .values and .logits attributes
-        if state.prediction:
-            predictions.append([v[0].detach().cpu() for v in state.prediction.values])
-        else:
-            predictions.append(None)
 
         # Capture memory snapshots at intervals
         if t % (config.walk_length // 4) == 0:
-            M_gen = model.memory.storage.M_gen.detach().cpu()
-            M_inf = model.memory.storage.M_inf.detach().cpu()
+            M_gen = state.memory[0].detach().cpu()  # memory[0] is M_gen [B, N, N]
+            M_inf = state.memory[1].detach().cpu() if state.memory[1] is not None else None
             memory_snapshots.append((t, M_gen, M_inf))
 
         # Progress indicator
         if (t + 1) % 10 == 0 or t == 0:
             has_grounded = state.grounded_location is not None
-            print(
-                f"  Step {t+1:3d}/{config.walk_length}: "
-                f"abstract={len(state.abstract_location)} modules, "
-                f"grounded={'✓' if has_grounded else '✗'}, "
-                f"prediction={'✓' if state.prediction else '✗'}"
-            )
+            print(f"  Step {t+1:3d}/{config.walk_length}: " f"abstract={len(state.abstract_location)} modules, " f"grounded={'✓' if has_grounded else '✗'}")
 
     print(f"  ✓ Simulation complete: {config.walk_length} timesteps processed")
 

@@ -207,6 +207,12 @@ if __name__ == "__main__":
     print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
     print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
 
+    # Initialize memory matrices externally (functional interface)
+    n_p_total = sum(model_config.n_p)
+    dual_memory = not model_config.common_memory  # Dual if not common
+    M_gen = utils.create_initial_memory(n_p_total, model_config.batch_size, dual_memory, torch.device("cpu"))[0]
+    M_inf = utils.create_initial_memory(n_p_total, model_config.batch_size, dual_memory, torch.device("cpu"))[1]
+
     # =========================================================================
     # PHASE 3: Initialize Component States
     # =========================================================================
@@ -248,7 +254,8 @@ if __name__ == "__main__":
         x__history.append([x[0] for x in x_])
 
         # Step 4 (Manuscript): Retrieve memory p_x = attractor(~x, M_{t-1})
-        p_x = attractor(x_, storage.M_inf, for_inference=True)  # List[n_f] of [B, n_p[f]]
+        M_current = M_inf if M_inf is not None else M_gen
+        p_x = attractor(x_, M_current, for_inference=True)  # List[n_f] of [B, n_p[f]]
         p_x_history.append([p[0] for p in p_x])
 
         # Step 5 (Manuscript): Infer entorhinal g ~ q_φ(g | p_x, g_{t-1}, a_t)
@@ -269,10 +276,12 @@ if __name__ == "__main__":
         p_history.append([p_f[0] for p_f in p])
 
         # Step 8 (Manuscript): Form memory M_t = hebbian(M_{t-1}, p)
-        p_g = attractor(g_, storage.M_gen, for_inference=False)  # Retrieve memory
+        p_g = attractor(g_, M_gen, for_inference=False)  # Retrieve memory
         p_g = torch.cat(p_g, dim=1)  # [B, sum(n_p)]
         p = torch.cat(p, dim=1)  # [B, sum(n_p)]
-        storage.update(p, p_g, eta=config.eta)
+        M_gen = storage.update(p, p_g, M_gen)  # Update M_gen functionally
+        if M_inf is not None:
+            M_inf = storage.update(p, p_g, M_inf)  # Update M_inf if dual memory
 
         # Step 9 (Manuscript): Repeat process for next observation
         g_prev = g  # Update previous abstract location
@@ -322,8 +331,8 @@ if __name__ == "__main__":
         print(f"  Saved: 06_abstract_location.png")
 
     # Plot 7: Memory matrices (extract first batch element for visualization)
-    M_gen_vis = storage.M_gen[0]  # [sum(n_p), sum(n_p)]
-    M_inf_vis = storage.get_memory(for_inference=True)[0] if storage.M_inf is not None else None
+    M_gen_vis = M_gen[0]  # [sum(n_p), sum(n_p)]
+    M_inf_vis = M_inf[0] if M_inf is not None else None
     fig7 = figures.plot_memory_matrices(M_gen_vis, M_inf_vis, model_config.n_p, config.walk_length)
     if config.save_plots:
         fig7.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")

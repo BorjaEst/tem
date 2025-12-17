@@ -15,33 +15,6 @@ from torch_tem.data.walks import Walk, WalkGenerator
 from ..types import Vector
 
 
-class InfiniteWalkDataset(IterableDataset):
-    """Infinite stream of walks for training.
-
-    Generates walks on-the-fly without pre-caching, enabling infinite
-    training data with curriculum learning support.
-    """
-
-    def __init__(self, datamodule: "TEMDataModule"):
-        """Initialize infinite walk dataset.
-
-        Args:
-            datamodule: Parent datamodule providing generation methods
-        """
-        self.dm = datamodule
-        self.epoch = 0
-
-    def __iter__(self):
-        """Yield walks indefinitely."""
-        while True:
-            # Generate single walk
-            if self.dm.shiny_config is None:
-                walk = self.dm.walk_gen.generate_walk(self.dm.walk_length, self.dm._get_current_policy(self.epoch))
-            else:
-                walk = self.dm.walk_gen.generate_shiny_walk(self.dm.walk_length, self.dm.shiny_locations, self.dm.shiny_policies, self.dm.shiny_config.returns)
-            yield walk
-
-
 class TEMDataModule(L.LightningDataModule):
     """PyTorch Lightning DataModule for TEM training.
 
@@ -56,7 +29,6 @@ class TEMDataModule(L.LightningDataModule):
         batch_size: int,
         walk_length: int,
         shiny_config: Optional[ShinyConfig] = None,
-        randomize_observations: bool = False,
         repeat_bias: float = 2.0,
         env_config: Optional[EnvironmentConfig] = None,
         curriculum_schedule: Optional[Callable[[int], Dict]] = None,
@@ -65,11 +37,12 @@ class TEMDataModule(L.LightningDataModule):
         """Initialize TEM DataModule.
 
         Args:
-            env: Pre-built ``Environment`` instance
+            env: Pre-built ``Environment`` instance. If observation randomization
+                is needed, pass ``randomize_observations=True`` when constructing
+                the Environment.
             batch_size: Walks per batch
             walk_length: Steps per walk
             shiny_config: Optional shiny object configuration
-            randomize_observations: Shuffle observation assignments
             repeat_bias: Action repeat bias for straight-line movement. If
                 ``env_config`` is provided and ``repeat_bias`` is left at its
                 default, ``env_config.explore_bias`` is used instead.
@@ -215,3 +188,30 @@ class TEMDataModule(L.LightningDataModule):
             walks = self.walk_gen.generate_shiny_walks(self.batch_size, self.walk_length, self.shiny_locations, self.shiny_policies, self.shiny_config.returns)
 
         return self.walk_gen.batch_walks(walks)
+
+
+class InfiniteWalkDataset(IterableDataset):
+    """Infinite stream of walks for training.
+
+    Generates walks on-the-fly without pre-caching, enabling infinite
+    training data with curriculum learning support.
+    """
+
+    def __init__(self, datamodule: TEMDataModule):
+        """Initialize infinite walk dataset.
+
+        Args:
+            datamodule: Parent datamodule providing generation methods
+        """
+        self.dm = datamodule
+        self.epoch = 0
+
+    def __iter__(self):
+        """Yield walks indefinitely."""
+        while True:
+            # Generate single walk
+            if self.dm.shiny_config is None:
+                walk = self.dm.walk_gen.generate_walk(self.dm.walk_length, self.dm._get_current_policy(self.epoch))
+            else:
+                walk = self.dm.walk_gen.generate_shiny_walk(self.dm.walk_length, self.dm.shiny_locations, self.dm.shiny_policies, self.dm.shiny_config.returns)
+            yield walk

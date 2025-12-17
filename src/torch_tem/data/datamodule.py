@@ -127,9 +127,9 @@ class TEMDataModule(L.LightningDataModule):
             walks: List of Walk objects
 
         Returns:
-            observations: [batch, walk_length, n_observations]
-            actions: [batch, walk_length]
-            locations: [batch, walk_length]
+            observations: [walk_length, batch, n_observations]
+            actions: [walk_length, batch]
+            locations: [walk_length, batch]
         """
         return self.walk_gen.batch_walks(walks)
 
@@ -176,9 +176,9 @@ class TEMDataModule(L.LightningDataModule):
             epoch: Current epoch number for curriculum scheduling
 
         Returns:
-            observations: [batch, walk_length, n_observations]
-            actions: [batch, walk_length]
-            locations: [batch, walk_length]
+            observations: [walk_length, batch, n_observations]
+            actions: [walk_length, batch]
+            locations: [walk_length, batch]
         """
         policy = self._get_current_policy(epoch)
 

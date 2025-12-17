@@ -99,19 +99,13 @@ class ExampleConfig(BaseSettings):
     observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation assignment strategy")
 
     # Architecture configuration
-    f_initial: List[float] = Field(
-        default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01],
-        description="Initial frequencies for each spatial module",
-    )
-    n_g_subsampled: List[int] = Field(
-        default_factory=lambda: [10, 10, 8, 6, 6],
-        description="Grid cells per frequency module",
-    )
-    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
+    f_initial: List[float] = Field(default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01], description="Initial frequencies for each spatial module")
+    n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 10, 8, 6, 6], description="Grid cells per frequency module")
+    n_x_c: int = Field(default=15, ge=2, le=30, description="Compressed sensory dimension (two-hot)")
 
     # Training configuration
-    max_steps: int = Field(default=1000, ge=100, le=50000, description="Maximum training steps")
-    batch_size: int = Field(default=16, ge=1, le=64, description="Batch size for training")
+    max_steps: int = Field(default=100, ge=100, le=50000, description="Maximum training steps")
+    batch_size: int = Field(default=4, ge=1, le=64, description="Batch size for training")
     n_rollout: int = Field(default=20, ge=5, le=100, description="BPTT rollout length (steps per backward pass)")
 
     # Learning rate configuration
@@ -144,7 +138,7 @@ class ExampleConfig(BaseSettings):
 
     # Debugging and monitoring
     log_every_n_steps: int = Field(default=10, ge=1, description="Logging frequency")
-    val_check_interval: float = Field(default=0.25, gt=0, le=1, description="Validation check interval (fraction of epoch)")
+    val_check_interval: int = Field(default=50, ge=1, description="Validation check interval (number of batches)")
 
     @field_validator("checkpoint_dir", "output_dir")
     @classmethod
@@ -381,32 +375,32 @@ if __name__ == "__main__":
         fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: {config.output_dir / '01_environment.png'}")
 
-    # Plot loss curves
-    if trainer.logged_metrics:
-        fig2 = plot_loss_curves(trainer, config.output_dir / "02_loss_curves.png")
-        if config.save_plots:
-            fig2.savefig(config.output_dir / "02_loss_curves.png", dpi=150, bbox_inches="tight")
-            print(f"  Saved: {config.output_dir / '02_loss_curves.png'}")
+    # Plot loss curves (simplified - use TensorBoard for detailed metrics)
+    fig2 = plot_loss_curves(trainer, config.output_dir / "02_loss_curves.png")
+    if config.save_plots:
+        fig2.savefig(config.output_dir / "02_loss_curves.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: {config.output_dir / '02_loss_curves.png'}")
 
     # Generate test walk to visualize learned representations
     print("\n  Generating test walk for visualization...")
     tem_model.eval()
     with torch.no_grad():
         # Generate a single test walk
-        # Returns: observations [batch, walk_length, n_x], actions [batch, walk_length], locations [batch, walk_length]
+        # Returns: observations [T, B, n_x], actions [T, B], locations [T, B]
         test_obs, test_actions, test_locations = datamodule.generate_batch()
 
-        # Initialize state with first observation: [batch, n_x]
-        state = tem_model.init_state(test_obs[:, 0, :])
+        # Initialize state with first observation: [B, n_x]
+        state = tem_model.init_state(test_obs[0])
 
         # Process through walk (limit to 100 steps)
-        max_steps = min(100, test_obs.shape[1])
+        max_steps = min(100, test_obs.shape[0])
+        batch_size = test_obs.shape[1]
+        step_locations = [{"shiny": None}] * batch_size
+
         for t in range(max_steps):
-            # Create location dictionaries for batch
-            step_locations = [{"shiny": None}] * test_obs.shape[0]
             # Extract observation and action for timestep t
-            obs_t = test_obs[:, t, :]  # [batch, n_x]
-            act_t = test_actions[:, t] if t > 0 else None  # [batch] or None
+            obs_t = test_obs[t]  # [B, n_x]
+            act_t = test_actions[t] if t > 0 else None  # [B] or None
             state = tem_model(obs_t, step_locations, act_t, state)
 
     # Plot abstract location evolution (if available)
@@ -441,11 +435,13 @@ if __name__ == "__main__":
         M_inf = state.hpc.memory[1] if len(state.hpc.memory) > 1 and state.hpc.memory[1] is not None else None
 
         if M_gen is not None:
-            fig4 = figures.plot_memory_matrices(
-                M_gen[0].cpu().numpy(),  # First batch item
-                M_inf[0].cpu().numpy() if M_inf is not None else None,
-                title="Final Hebbian Memory Matrices",
-            )
+            # Extract first batch item but keep as tensor
+            if M_gen.ndim > 2:
+                M_gen = M_gen[0]
+            if M_inf is not None and M_inf.ndim > 2:
+                M_inf = M_inf[0]
+
+            fig4 = figures.plot_memory_matrices(M_gen, M_inf, title="Final Hebbian Memory Matrices")
             if config.save_plots:
                 fig4.savefig(config.output_dir / "04_memory_structure.png", dpi=150, bbox_inches="tight")
                 print(f"  Saved: {config.output_dir / '04_memory_structure.png'}")
@@ -456,11 +452,10 @@ if __name__ == "__main__":
     print("Summary:")
     print("=" * 80)
     print(f"  Training steps completed: {trainer.global_step}")
-    print(f"  Final loss: {trainer.logged_metrics.get('train_loss', 'N/A')}")
-    print(f"  Best checkpoint: {config.checkpoint_dir}")
     if config.use_tensorboard:
         print(f"  TensorBoard logs: lightning_logs/tem_training")
-        print(f"    View with: tensorboard --logdir lightning_logs")
+        print(f"    View detailed metrics with: tensorboard --logdir lightning_logs")
+    print(f"  Best checkpoint: {config.checkpoint_dir}")
     if config.save_plots:
         print(f"  Plots saved to: {config.output_dir}")
     print("=" * 80)

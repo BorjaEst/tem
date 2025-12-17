@@ -255,12 +255,13 @@ class WalkGenerator:
             walks: List of Walk objects
 
         Returns:
-            observations: [batch, walk_length, n_observations]
-            actions: [batch, walk_length]
-            locations: [batch, walk_length]
+            observations: [walk_length, batch, n_observations]
+            actions: [walk_length, batch]
+            locations: [walk_length, batch]
         """
-        observations = torch.stack([walk.observations for walk in walks])
-        actions = torch.stack([walk.actions for walk in walks])
-        locations = torch.stack([walk.locations for walk in walks])
+        # Stack walks: [batch, walk_length, ...] then transpose to [walk_length, batch, ...]
+        observations = torch.stack([walk.observations for walk in walks]).transpose(0, 1)
+        actions = torch.stack([walk.actions for walk in walks]).transpose(0, 1)
+        locations = torch.stack([walk.locations for walk in walks]).transpose(0, 1)
 
         return observations, actions, locations

@@ -1,5 +1,6 @@
 """Architecture configuration for the Temporal Experience Model (TEM)."""
 
+import math
 from typing import List
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
@@ -138,6 +139,7 @@ class ModelConfig(BaseModel):
         - When OVCs are separate, the extended frequency list
           (``f_extended``) matches the total number of modules
           (``n_f``).
+        - ``n_x_c`` is large enough to support two-hot encoding of all observations.
         """
 
         if len(self.f_initial) != len(self.n_g_subsampled):
@@ -145,6 +147,20 @@ class ModelConfig(BaseModel):
 
         if self.separate_ovc and self.n_ovc and len(self.f_extended) != self.n_f:
             raise ValueError("When separate_ovc is True and n_ovc is non-empty, the " "extended frequency list (f_extended) must have " "one entry per module (n_f).")
+
+        # Validate two-hot encoding capacity
+        max_two_hot_codes = int(math.comb(self.n_x_c, 2))
+        if self.n_x > max_two_hot_codes:
+            min_n_x_c = math.ceil((1 + math.sqrt(1 + 8 * self.n_x)) / 2)
+            raise ValueError(
+                f"Insufficient two-hot encoding capacity: n_x={self.n_x} observations "
+                f"requires at least C(n_x_c, 2)={self.n_x} unique codes, "
+                f"but n_x_c={self.n_x_c} only provides C({self.n_x_c}, 2)={max_two_hot_codes} codes. "
+                f"Minimum required: n_x_c={min_n_x_c}. "
+                f"Solutions: (1) Increase n_x_c to {min_n_x_c}+, "
+                f"(2) Use tiled/random observation_mode to reduce unique observations, "
+                f"(3) Reduce grid size."
+            )
 
         return self
 

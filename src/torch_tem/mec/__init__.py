@@ -40,11 +40,14 @@ class MECState:
     projection: MultiScaleCode
 
     def detach(self) -> "MECState":
-        """Detach all tensors in the state from the computation graph."""
+        """Detach all tensors from the computation graph."""
         return MECState(
-            transition_stats=self.transition_stats.detach(),
+            transition_stats=Transition(
+                mean=[m.detach() for m in self.transition_stats.mean],
+                uncertainty=[u.detach() for u in self.transition_stats.uncertainty],
+            ),
             abstract_location=[x.detach() for x in self.abstract_location],
-            projection=[x.detach() for x in self.projection]
+            projection=[x.detach() for x in self.projection],
         )
 
 

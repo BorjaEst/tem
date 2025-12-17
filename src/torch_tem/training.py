@@ -128,18 +128,18 @@ class TEMLightningModule(L.LightningModule):
 
         Args:
             observations (Tensor): Sequence of observations with shape
-                (batch_size, walk_length, observation_dim).
+                (walk_length, batch_size, observation_dim).
             actions (Tensor): Sequence of actions with shape
-                (batch_size, walk_length).
+                (walk_length, batch_size).
             optimizer (optim.Optimizer): The optimizer for gradient updates.
 
         Returns:
             Any: Loss output from the final time step.
         """
-        batch_size, walk_length, _ = observations.shape
+        walk_length, batch_size, _ = observations.shape
 
         # Initialize model state and environment locations
-        state = self.model.init_state(observations)
+        state = self.model.init_state(observations[0])
         step_locations = self.create_step_locations(batch_size)
 
         # Process each time step with BPTT truncation

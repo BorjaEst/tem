@@ -42,11 +42,18 @@ class TEMState:
 
     def detach(self) -> "TEMState":
         """Detach all tensors in the TEM state from the computation graph."""
+        if self.pathways:
+            pathways_detached = (
+                [p.detach() for p in self.pathways[0]],
+                [p.detach() for p in self.pathways[1]],
+            )
+        else:
+            pathways_detached = None
         return TEMState(
             hpc=self.hpc.detach(),
             lec=self.lec.detach(),
             mec=self.mec.detach(),
-            pathways=([p.detach() for p in self.pathways[0]], [p.detach() for p in self.pathways[1]]) if self.pathways else None
+            pathways=pathways_detached,
         )
 
     @property
@@ -130,7 +137,7 @@ class TEMModel(nn.Module):
         """Initialize TEM state from first observation.
 
         Args:
-            x: Initial sensory observation (for device placement).
+            x: Initial sensory observation [B, n_x] for device placement.
 
         Returns:
             Initial TEM state with zero-initialized locations.

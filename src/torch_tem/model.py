@@ -40,12 +40,14 @@ class TEMState:
     mec: mec.MECState  # MEC pathway state with abstract locations
     pathways: Optional[Tuple[GroundedLocation, GroundedLocation]] = None
 
-    def detach(self) -> None:
+    def detach(self) -> "TEMState":
         """Detach all tensors in the TEM state from the computation graph."""
-        self.hpc.detach()
-        self.lec.detach()
-        self.mec.detach()
-        self.pathways = (self.pathways[0].detach(), self.pathways[1].detach()) if self.pathways else None
+        return TEMState(
+            hpc=self.hpc.detach(),
+            lec=self.lec.detach(),
+            mec=self.mec.detach(),
+            pathways=([p.detach() for p in self.pathways[0]], [p.detach() for p in self.pathways[1]]) if self.pathways else None
+        )
 
     @property
     def grounded_location(self) -> Optional[GroundedLocation]:

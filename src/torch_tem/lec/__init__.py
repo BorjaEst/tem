@@ -37,11 +37,13 @@ class LECState:
     filtered_observation: MultiScaleCode
     projection: MultiScaleCode
 
-    def detach(self) -> None:
+    def detach(self) -> "LECState":
         """Detach all tensors in the state from the computation graph."""
-        self.compressed_observation = [x.detach() for x in self.compressed_observation]
-        self.filtered_observation = [x.detach() for x in self.filtered_observation]
-        self.projection = [x.detach() for x in self.projection]
+        return LECState(
+            compressed_observation=[x.detach() for x in self.compressed_observation],
+            filtered_observation=[x.detach() for x in self.filtered_observation],
+            projection=[x.detach() for x in self.projection],
+        )
 
 
 class LECModel(nn.Module):

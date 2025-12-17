@@ -44,7 +44,7 @@ class TEMLightningModule(L.LightningModule):
         # Lightning's TBPTT is deprecated, so manual loop is preferred.
         self.automatic_optimization = False
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> Tuple[List[optim.Optimizer], List[optim.lr_scheduler._LRScheduler]]:
         """Configure optimizer and learning rate scheduler.
 
         Sets up an Adam optimizer with the maximum learning rate specified in

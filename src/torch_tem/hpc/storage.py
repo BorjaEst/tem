@@ -24,6 +24,7 @@ from ..types import Matrix, Vector
 class StorageParams(Protocol):
     n_p: List[int]  # Dimensions of grounded location per frequency
     lambda_: float  # Memory retention factor
+    eta: float  # Learning rate for memory updates
     common_memory: bool  # Whether to use a common memory for inference and generation
     batch_size: int  # Number of parallel environments / memory instances
 
@@ -38,72 +39,34 @@ class MemoryStorage:
     def __init__(self, params: StorageParams, p_update_mask: Matrix):
         self.n_p = params.n_p
         self.lambda_ = params.lambda_
+        self.eta = params.eta
         self.use_dual_memory = not params.common_memory
         self.p_update_mask = p_update_mask
         self.batch_size = params.batch_size
 
-        # Initialize memory matrices: [batch_size, sum(n_p), sum(n_p)]
-        # Each batch element has its own independent memory
-        n_p_total = sum(self.n_p)
-        self.M_gen = torch.zeros(self.batch_size, n_p_total, n_p_total)
-        self.M_inf = torch.zeros(self.batch_size, n_p_total, n_p_total) if self.use_dual_memory else None
-
-    def update(self, p_inferred: Vector, p_generated: Vector, eta: float) -> None:
-        """Update memory matrices using Hebbian plasticity.
+    def update(self, p_inferred: Vector, p_generated: Vector, M: Matrix) -> Matrix:
+        """Update memory matrix using Hebbian plasticity (functional interface).
 
         Args:
             p_inferred: Inferred grounded locations [B, N]
             p_generated: Generated grounded locations [B, N]
-            eta: Learning rate (remembering strength)
+            M: Current memory matrix [B, N, N]
+
+        Returns:
+            Updated memory matrix [B, N, N]
         """
         # Move mask to same device
         mask = self.p_update_mask.to(p_inferred.device)
+        M = M.to(p_inferred.device)
 
-        # Generative memory update: M_gen = λ*M + η*(p_inf + p_gen) ⊗ (p_inf - p_gen)
+        # Hebbian update: M_new = λ*M + η*(p_inf + p_gen) ⊗ (p_inf - p_gen)
         term1 = p_inferred + p_generated
         term2 = p_inferred - p_generated
-        outer_gen = torch.bmm(term1.unsqueeze(2), term2.unsqueeze(1))  # [B, N, N]
+        outer = torch.bmm(term1.unsqueeze(2), term2.unsqueeze(1))  # [B, N, N]
 
-        self.M_gen = self.M_gen.to(outer_gen.device)
-        self.M_gen = torch.clamp(self.lambda_ * self.M_gen + eta * (outer_gen * mask), min=-1.0, max=1.0)
-
-        # Inference memory update (if using dual-memory architecture)
-        if self.use_dual_memory:
-            self.M_inf = self.M_inf.to(outer_gen.device)
-            self.M_inf = torch.clamp(self.lambda_ * self.M_inf + eta * outer_gen, min=-1.0, max=1.0)
-
-    def get_memory(self, for_inference: bool = False) -> Matrix:
-        """Retrieve memory matrix for attractor dynamics.
-
-        Args:
-            for_inference: If True and dual-memory is enabled, return inference memory
-
-        Returns:
-            Memory matrix [B, N, N] where B is batch size
-        """
-        if for_inference and self.M_inf is not None:
-            return self.M_inf
-        return self.M_gen
-
-    def get_all_memories(self) -> List[Matrix]:
-        """Get all memory matrices for checkpointing.
-
-        Returns:
-            List containing [M_gen] or [M_gen, M_inf] if dual-memory is enabled
-        """
-        if self.use_dual_memory:
-            return [self.M_gen, self.M_inf]
-        return [self.M_gen]
-
-    def set_memories(self, memories: List[Matrix]) -> None:
-        """Restore memory matrices from checkpoint.
-
-        Args:
-            memories: List containing [M_gen] or [M_gen, M_inf]
-        """
-        self.M_gen = memories[0]
-        if self.use_dual_memory and len(memories) > 1:
-            self.M_inf = memories[1]
+        # Apply mask only to generative memory (inference memory uses full outer product)
+        update_term = outer * mask if mask is not None else outer
+        return torch.clamp(self.lambda_ * M + self.eta * update_term, min=-1.0, max=1.0)
 
 
 # ======================================================================================

@@ -7,7 +7,30 @@ import torch
 from scipy.special import comb
 from torch import Tensor
 
-from ..types import GroundedLocation, Matrix, MultiScaleCode, Vector
+from ..types import BatchedMemory, GroundedLocation, Matrix, MultiScaleCode, Vector
+
+
+def create_initial_memory(n_p_total: int, batch_size: int, dual_memory: bool, device: torch.device) -> List[BatchedMemory]:
+    """Create initial zero memory matrices for HPC state initialization.
+
+    Args:
+        n_p_total: Total number of place cells (sum of n_p across frequencies)
+        batch_size: Number of parallel memory instances
+        dual_memory: If True, create separate M_gen and M_inf; if False, create single shared memory
+        device: Device for tensor allocation
+
+    Returns:
+        List containing [M_gen, M_inf] if dual_memory=True, else [M_gen, None]
+
+    Example:
+        >>> memory = create_initial_memory(n_p_total=50, batch_size=8, dual_memory=True, device='cpu')
+        >>> M_gen, M_inf = memory
+        >>> M_gen.shape
+        torch.Size([8, 50, 50])
+    """
+    M_gen = torch.zeros(batch_size, n_p_total, n_p_total, device=device)
+    M_inf = torch.zeros(batch_size, n_p_total, n_p_total, device=device) if dual_memory else None
+    return [M_gen, M_inf]
 
 
 def squared_error_freq(value: Union[Vector, MultiScaleCode], target: Union[Vector, MultiScaleCode]) -> Union[Vector, MultiScaleCode]:

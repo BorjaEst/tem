@@ -19,6 +19,7 @@ from . import config, hpc, lec, losses, mec
 
 from .types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
 from .types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
+from .types import BatchedMemory  # isort: skip
 
 
 class TEMParams(config.ModelConfig):
@@ -44,32 +45,35 @@ class TEMState:
     Maintains the complete state across all TEM pathways (LEC, MEC, HPC).
 
     Attributes:
-        grounded: Tuple of (p_x, p_g, p) grounded locations.
-            - p_x: Retrieved from sensory input (inference memory).
-            - p_g: Retrieved from abstract location (generative memory).
-            - p: Inferred from conjunction of sensory and abstract.
+        hpc: Hippocampus state with grounded locations and memory.
         lec: Lateral entorhinal cortex state.
         mec: Medial entorhinal cortex state.
     """
 
-    grounded: Optional[Tuple[Optional[GroundedLocation], GroundedLocation, Optional[GroundedLocation]]]
+    hpc: hpc.HPCState  # Hippocampal state with memory codes
     lec: lec.LECState  # LEC pathway state with sensory codes
     mec: mec.MECState  # MEC pathway state with abstract locations
-
-    @property
-    def grounded_sensory(self) -> Optional[GroundedLocation]:
-        """Return the retrieved sensory grounded location from TEM state."""
-        return self.grounded[0] if self.grounded is not None else None
-
-    @property
-    def grounded_abstract(self) -> Optional[GroundedLocation]:
-        """Return the retrieved abstract grounded location from TEM state."""
-        return self.grounded[1] if self.grounded is not None else None
+    pathways: Optional[Tuple[GroundedLocation, GroundedLocation]] = None
 
     @property
     def grounded_location(self) -> Optional[GroundedLocation]:
         """Return the inferred grounded location from TEM state."""
-        return self.grounded[2] if self.grounded is not None else None
+        return self.hpc.grounded_location
+
+    @property
+    def grounded_sensory(self) -> Optional[GroundedLocation]:
+        """Return retrieved grounded location from sensory pathway (p_x)."""
+        return self.pathways[0] if self.pathways else None
+
+    @property
+    def grounded_abstract(self) -> Optional[GroundedLocation]:
+        """Return retrieved grounded location from abstract pathway (p_g)."""
+        return self.pathways[1] if self.pathways else None
+
+    @property
+    def memory(self) -> List[BatchedMemory]:
+        """Return the hippocampal memory matrices from HPC state."""
+        return self.hpc.memory
 
     @property
     def compressed_observation(self) -> MultiScaleCode:
@@ -114,8 +118,7 @@ class TEMModel(nn.Module):
         self.eta = params.eta
 
         # Initialize components
-        self.grounded = hpc.GroundedLocInference(params)  # Hippocampal inference module
-        self.memory = hpc.Memory(params)  # Unified memory system (masks computed internally)
+        self.hpc = hpc.HPCModel(params)  # Hippocampus with memory and grounded inference
         self.lec = lec.LECModel(params)  # LEC pathway module
         self.mec = mec.MECModel(params)  # MEC pathway module
 
@@ -137,16 +140,17 @@ class TEMModel(nn.Module):
         """
         lec_state = self.lec.init_state(x[0].device)  # Initialize LEC state
         mec_state = self.mec.init_state(x[0].device)  # Initialize MEC state
-        return TEMState(grounded=None, lec=lec_state, mec=mec_state)
+        hpc_state = self.hpc.init_state(x[0].device)  # Initialize HPC state
+        return TEMState(lec=lec_state, mec=mec_state, hpc=hpc_state)
 
-    def forward(self, x: Optional[Observation], locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
+    def forward(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
         """Forward pass through TEM model.
 
         Processes sensory input and actions to update abstract and grounded locations,
         generate predictions, and update memory via Hebbian learning.
 
         Args:
-            x: Sensory observation (None for generative mode).
+            x: Sensory observation.
             locations: Environment descriptors for landmark cues.
             a: Action taken (None for initial state).
             state: Previous TEM state.
@@ -155,19 +159,21 @@ class TEMModel(nn.Module):
             Updated TEM state with new locations and predictions.
         """
 
-        # LEC Pathway steps; We process sensory input to prepare for memory retrieval
-        state_lec = self.lec(x, state.lec) if x is not None else state.lec  # Process observation: x → x_f
-        x_ = state_lec.projection  # Project to hippocampal input: x_f → x_
-        p_x = self.memory.retrieve(x_, for_inference=True) if x is not None else None
+        # LEC Pathway: Process sensory input to prepare for memory retrieval
+        state_lec = self.lec(x, state.lec)
+        x_ = state_lec.projection  # Projected sensory code for HPC retrieval
+        p_x = self.hpc.retrieve(x_, for_inference=True, state=state.hpc)
 
-        # MEC Pathway steps; We infer abstract location from action and previous location
-        state_mec = self.mec(p_x, locations, a, state.mec)  # Update abstract location: g → g
-        g_ = state_mec.projection  # Project to hippocampal input: g → g_
-        p_g = self.memory.retrieve(g_, for_inference=False)  # Retrieve memory from grid cells
+        # MEC Pathway: Infer abstract location from action and previous location
+        state_mec = self.mec(p_x, locations, a, state.mec)
+        g_ = state_mec.projection  # Projected abstract location for HPC retrieval
+        p_g = self.hpc.retrieve(g_, for_inference=False, state=state.hpc)
 
-        # Infer grounded location and generate sensory prediction
-        p = self.grounded(g_, x_) if x is not None else None  # Infer hippocampus (grounded location)
-        return TEMState(grounded=(p_x, p_g, p), lec=state_lec, mec=state_mec)
+        # HPC Pathway: Infer grounded location and update memory
+        state_hpc = self.hpc(g_, x_, p_g, state.hpc)
+
+        # Store pathways for teacher forcing in loss computation
+        return TEMState(lec=state_lec, mec=state_mec, hpc=state_hpc, pathways=(p_x, p_g))
 
     def inference(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> LocationInference:
         """Infer current location from sensory observation.
@@ -184,10 +190,20 @@ class TEMModel(nn.Module):
         Returns:
             LocationInference with abstract location (g) and grounded location (p).
         """
-        state = self.forward(x, locations, a, state)
-        return LocationInference(abstract=state.abstract_location, grounded=state.grounded_location)
+        # LEC Pathway: Process sensory input to prepare for memory retrieval
+        state_lec = self.lec(x, state.lec)  # Process sensory input through LEC
+        x_ = state_lec.projection  # Projected sensory code for HPC retrieval
+        p_x = self.hpc.retrieve(x_, for_inference=True, state=state.hpc)
 
-    def generative(self, locations: List[Dict], a: int, state: TEMState) -> SensoryPrediction:
+        # MEC Pathway: Infer abstract location from action and previous location
+        state_mec = self.mec(p_x, locations, a, state.mec)  # Infer abstract location via MEC
+        g_ = state_mec.projection
+
+        # HPC Pathway: Infer grounded location from abstract location and sensory input
+        p = self.hpc.grounded(g_, x_)
+        return LocationInference(abstract=state_mec.abstract_location, grounded=p)
+
+    def generative(self, locations: List[Dict], a: Optional[int], state: TEMState) -> SensoryPrediction:
         """Generate sensory prediction from action.
 
         Args:
@@ -198,21 +214,15 @@ class TEMModel(nn.Module):
         Returns:
             Predicted sensory observation.
         """
-        state = self.forward(None, locations, a, state)  # Where do I expect to be
-        return self.lec.decode(state.grounded_abstract)  # What do I expect to see
+        # Update MEC state via path integration
+        state_mec = self.mec(None, locations, a, state.mec)
+        g_ = state_mec.projection
 
-    def update_memory(self, state: TEMState) -> None:
-        """Update Hebbian memory using current TEM state.
+        # Retrieve grounded location from generative memory
+        p_g = self.hpc.retrieve(g_, for_inference=False, state=state.hpc)
 
-        Implements the Hebbian update rule to strengthen associations between
-        co-active patterns in the inference and generative pathways.
-
-        Args:
-            state: Current TEM state containing inferred and generated locations.
-        """
-        p_inferred = state.grounded_location  # p: Inferred from conjunction (g ⊗ x)
-        p_generated = state.grounded_abstract  # p_g: Retrieved from abstract location (g)
-        self.memory.update(p_inferred, p_generated, self.eta)
+        # Decode to sensory prediction
+        return self.lec.decode(p_g)
 
     def loss(self, x: Observation, state: TEMState) -> losses.LossOutput:
         """Compute Evidence Lower Bound (ELBO) loss for TEM.
@@ -232,7 +242,7 @@ class TEMModel(nn.Module):
         # Extract grounded locations from TEM state for loss computation
         p_x, p_g, p = state.grounded
         g_gen = self.mec.projection(state.mec.transition_stats.mean)  # Project predicted abstract location
-        p_gen = self.memory.retrieve(g_gen, for_inference=False)  # Retrieve from generative memory
+        p_gen = self.hpc.retrieve(g_gen, for_inference=False, state=state.hpc)  # Retrieve from generative memory
 
         # L_x: Sensory reconstruction from three pathways (teacher forcing)
         Lx = [

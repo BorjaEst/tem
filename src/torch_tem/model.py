@@ -15,27 +15,12 @@ from typing import Dict, List, Optional, Tuple
 
 from torch import nn
 
-from . import config, hpc, lec, losses, mec
+from torch_tem import hpc, lec, losses, mec
+from torch_tem.config import ModelConfig
 
-from .types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
-from .types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
-from .types import BatchedMemory  # isort: skip
-
-
-class TEMParams(config.ModelConfig):
-    """Protocol for TEM model initialization parameters.
-
-    Extends ModelConfig with TEM-specific training parameters.
-
-    Attributes:
-        batch_size: Batch size for parallel environments.
-        eta: Learning rate for Hebbian memory update.
-    """
-
-    batch_size: int  # Batch size for parallel environments
-    eta: float  # Learning rate for Hebbian memory update
-
-    # TODO: Placeholder for TEM-specific parameters if needed
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
+from torch_tem.types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
+from torch_tem.types import BatchedMemory  # isort: skip
 
 
 @dataclass
@@ -55,10 +40,22 @@ class TEMState:
     mec: mec.MECState  # MEC pathway state with abstract locations
     pathways: Optional[Tuple[GroundedLocation, GroundedLocation]] = None
 
+    def detach(self) -> None:
+        """Detach all tensors in the TEM state from the computation graph."""
+        self.hpc.detach()
+        self.lec.detach()
+        self.mec.detach()
+        self.pathways = (self.pathways[0].detach(), self.pathways[1].detach()) if self.pathways else None
+
     @property
     def grounded_location(self) -> Optional[GroundedLocation]:
         """Return the inferred grounded location from TEM state."""
         return self.hpc.grounded_location
+
+    @property
+    def grounded(self) -> Tuple[Optional[GroundedLocation], Optional[GroundedLocation], Optional[GroundedLocation]]:
+        """Return tuple of (p_x, p_g, p)."""
+        return self.grounded_sensory, self.grounded_abstract, self.grounded_location
 
     @property
     def grounded_sensory(self) -> Optional[GroundedLocation]:
@@ -107,15 +104,13 @@ class TEMModel(nn.Module):
     Memory updates via Hebbian learning strengthen associations between co-active patterns.
     """
 
-    def __init__(self, params: TEMParams):
+    def __init__(self, params: ModelConfig):
         """Initialize TEM model.
 
         Args:
             params: Configuration with all component parameters and training settings.
         """
         super().__init__()
-        self.batch_size = params.batch_size
-        self.eta = params.eta
 
         # Initialize components
         self.hpc = hpc.HPCModel(params)  # Hippocampus with memory and grounded inference
@@ -138,9 +133,9 @@ class TEMModel(nn.Module):
         Returns:
             Initial TEM state with zero-initialized locations.
         """
-        lec_state = self.lec.init_state(x[0].device)  # Initialize LEC state
-        mec_state = self.mec.init_state(x[0].device)  # Initialize MEC state
-        hpc_state = self.hpc.init_state(x[0].device)  # Initialize HPC state
+        lec_state = self.lec.init_state(x.device)  # Initialize LEC state
+        mec_state = self.mec.init_state(x.device)  # Initialize MEC state
+        hpc_state = self.hpc.init_state(x.device)  # Initialize HPC state
         return TEMState(lec=lec_state, mec=mec_state, hpc=hpc_state)
 
     def forward(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:

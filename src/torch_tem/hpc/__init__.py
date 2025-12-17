@@ -65,6 +65,11 @@ class HPCState:
     grounded_location: GroundedLocation
     memory: List[BatchedMemory]  # [M_gen, M_inf] or [M_gen, None]
 
+    def detach(self) -> None:
+        """Detach all tensors in the state from the computation graph."""
+        self.grounded_location = [x.detach() for x in self.grounded_location]
+        self.memory = [mem.detach() if mem is not None else None for mem in self.memory]
+
 
 class HPCModel(nn.Module):
     def __init__(self, params: HPCParams):

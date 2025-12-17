@@ -39,6 +39,12 @@ class MECState:
     abstract_location: AbstractLocation
     projection: MultiScaleCode
 
+    def detach(self) -> None:
+        """Detach all tensors in the state from the computation graph."""
+        self.transition_stats = [x.detach() for x in self.transition_stats]
+        self.abstract_location = [x.detach() for x in self.abstract_location]
+        self.projection = [x.detach() for x in self.projection]
+
 
 class MECModel(nn.Module):
     """Medial Entorhinal Cortex (MEC) pathway for spatial navigation.

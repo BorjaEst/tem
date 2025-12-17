@@ -37,6 +37,12 @@ class LECState:
     filtered_observation: MultiScaleCode
     projection: MultiScaleCode
 
+    def detach(self) -> None:
+        """Detach all tensors in the state from the computation graph."""
+        self.compressed_observation = [x.detach() for x in self.compressed_observation]
+        self.filtered_observation = [x.detach() for x in self.filtered_observation]
+        self.projection = [x.detach() for x in self.projection]
+
 
 class LECModel(nn.Module):
     """Lateral Entorhinal Cortex (LEC) pathway for sensory processing.

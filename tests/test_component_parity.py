@@ -54,7 +54,7 @@ def create_test_models(batch_size: int = 4) -> Tuple[LegacyModel, TEMModel, dict
     # Convert to typed config and create refactored model
     typed_config = legacy_to_typed(legacy_params)
     set_seed(42)
-    refactored_model = TEMModel(typed_config)
+    refactored_model = TEMModel(typed_config.architecture)  # Pass only architecture config
     refactored_model.eval()
 
     # Copy trained parameters from legacy to refactored
@@ -364,7 +364,7 @@ def test_grounded_inference():
         # 2. Compute grounded location
         # Refactored grounded module takes downsampled g and filtered x
         # It handles expansion internally
-        # BUT it expects x to be normalized (SensoryProcessor does this)
+        # BUT it expects x to be normalized (lec.Processor does this)
         # Legacy x2x_ does normalization internally.
         # So we must normalize x_f for refactored to match legacy input parity.
         # We use legacy.f_n to ensure exact same normalization.

@@ -31,56 +31,6 @@ class ConfigWrapper:
 
 
 def legacy_to_typed(params: Dict[str, Any]) -> ConfigWrapper:
-    """Convert legacy parameter dict to typed ModelConfig.
-
-    This function handles all the critical conversions needed to make the
-    refactored TEMModel produce identical results to the legacy Model:
-
-    1. **Lambda/Kappa Naming**:
-       - Legacy `lambda` (0.9999) = memory retention rate
-       - Refactored uses: lamb parameter in storage.update()
-       - Legacy `kappa` (0.8) = retrieval decay (attractor dynamics)
-       - Refactored `kappa` = same meaning (retrieval decay)
-
-    2. **Memory Structure**:
-       - Legacy: batched [batch, sum(n_p), sum(n_p)]
-       - Refactored: batched if batch_size > 1, else global
-
-    3. **Module Connectivity**:
-       - Both use same hierarchical masks (computed from architecture)
-
-    Args:
-        params: Legacy parameter dictionary from parameters.parameters()
-
-    Returns:
-        ModelConfig with nested architecture/inference/training/environment configs
-
-    Example:
-        >>> import parameters
-        >>> legacy_params = parameters.parameters()
-        >>> typed_config = legacy_to_typed(legacy_params)
-        >>> # Now use with refactored model
-        >>> from torch_tem.model import TEMModel
-        >>> model = TEMModel(typed_config)
-        >>> model.set_batch_size(legacy_params['batch_size'])
-    """
-    # Extract base architectural parameters
-    architecture = _create_architecture_config(params)
-
-    # Extract inference parameters (memory dynamics, sampling)
-    inference = _create_inference_config(params)
-
-    # Extract training parameters (loss weights, learning rates, curriculum)
-    training = _create_training_config(params)
-
-    # Extract environment parameters (action space, shiny objects)
-    environment = _create_environment_config(params)
-
-    # Combine into full ModelConfig
-    return ModelConfig(architecture=architecture, inference=inference, training=training, environment=environment)
-
-
-def legacy_to_typed(params: Dict[str, Any]) -> ConfigWrapper:
     """Convert legacy parameter dict to typed ConfigWrapper.
 
     This function handles all the critical conversions needed to make the
@@ -138,43 +88,32 @@ def _create_merged_architecture(params: Dict[str, Any]):
 
     TEMModel components need fields from multiple configs, so we merge them
     into the architecture object that gets passed around."""
+    from torch_tem.config import ModelConfig
 
-    # Create base architecture config
-    arch = ModelConfig(
+    # Create base architecture config with all required fields
+    config = ModelConfig(
         # Base dimensions
+        batch_size=params["batch_size"],
         n_x=params["n_x"],
         n_x_c=params["n_x_c"],
         n_g_subsampled=params["n_g_subsampled"][: params["n_f_g"]],  # Exclude OVC if separate
-        n_ovc=params["n_ovc"] if "n_ovc" in params else [],
+        n_ovc=params.get("n_ovc", []),
         f_initial=params["f_initial"][: len(params["n_g_subsampled"]) - params.get("n_f_ovc", 0)],
         separate_ovc=params.get("separate_ovc", False),
         # Network initialization
         g_init_std=params["g_init_std"],
         g_mem_std=params["g_mem_std"],
         d_hidden_dim=params["d_hidden_dim"],
+        n_actions=params["n_actions"],
         # Memory structure
         common_memory=params["common_memory"],
+        # Training parameters
+        eta=params["eta"],
     )
 
-    # Create merged object with all necessary fields
-    class MergedArchConfig:
-        def __init__(self, base_arch, params_dict):
-            # Copy all architecture fields
-            for attr in dir(base_arch):
-                if not attr.startswith("_") and attr not in ["model_config", "model_computed_fields", "model_fields"]:
-                    try:
-                        setattr(self, attr, getattr(base_arch, attr))
-                    except:
-                        pass  # Skip non-copyable attributes
-
-            # Add inference field needed by various components
-            self.do_sample = params_dict["do_sample"]
-
-            # Store legacy metadata for reference (not used by refactored model)
-            self._legacy_n_actions = params_dict["n_actions"]
-            self._legacy_has_static_action = params_dict["has_static_action"]
-
-    return MergedArchConfig(arch, params)
+    return ConfigWrapper(
+        architecture=config, inference=config, training=_create_training_config(params), environment=_create_environment_config(params)  # Share the same config object
+    )
 
 
 # InferenceConfig has been merged into ModelConfig

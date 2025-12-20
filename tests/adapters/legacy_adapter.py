@@ -281,7 +281,7 @@ if __name__ == "__main__":
 
     import parameters
     from model import Model as LegacyModel
-    from torch_tem.model import TEMModel
+    from torch_tem.core.model import TEMModel
 
     print("=" * 70)
     print("LEGACY TO TYPED CONFIGURATION CONVERSION")

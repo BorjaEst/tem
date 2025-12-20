@@ -24,7 +24,7 @@ from torch import Tensor
 
 import parameters
 from model import Model as LegacyModel
-from torch_tem.model import TEMModel
+from torch_tem.core.model import TEMModel
 
 
 def set_seed(seed: int = 42):

@@ -18,7 +18,7 @@ from adapters.legacy_adapter import legacy_to_typed
 import parameters
 from model import Model as LegacyModel
 from torch_tem import utils as tem_utils
-from torch_tem.model import TEMModel
+from torch_tem.core.model import TEMModel
 
 
 def set_seed(seed: int = 42):

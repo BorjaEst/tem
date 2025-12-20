@@ -13,8 +13,8 @@ from torch import Tensor
 
 import utils
 from torch_tem.config import ModelConfig
-from torch_tem.hpc import MemoryStorage
-from torch_tem.model import TEMModel
+from torch_tem.core.hpc import MemoryStorage
+from torch_tem.core.model import TEMModel
 
 
 class Iteration:

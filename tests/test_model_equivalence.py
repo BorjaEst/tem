@@ -29,7 +29,7 @@ import parameters
 import world
 from model import Iteration
 from model import Model as LegacyModel
-from torch_tem.model import TEMModel, TEMState
+from torch_tem.core.model import TEMModel, TEMState
 
 
 def set_seed(seed: int = 42):

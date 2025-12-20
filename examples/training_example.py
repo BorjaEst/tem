@@ -59,7 +59,7 @@ When save_plots=true, generates visualizations in outputs/training/:
     4. 04_place_rate_maps.png - Learned place cell firing fields
     5. 05_memory_structure.png - Final Hebbian memory matrices
 
-When use_tensorboard=true, logs to lightning_logs/ for TensorBoard visualization:
+When use_tensorboard=true, logs to logs/ for TensorBoard visualization:
     - Loss components (total, sensory, abstract, grounded)
     - Learning rate schedule
     - Gradient norms
@@ -320,8 +320,8 @@ if __name__ == "__main__":
 
     # Configure logger
     if config.use_tensorboard:
-        logger = L.pytorch.loggers.TensorBoardLogger("lightning_logs", name="tem_training")
-        print(f"  TensorBoard logging enabled: lightning_logs/tem_training")
+        logger = L.pytorch.loggers.TensorBoardLogger("logs", name="tem_training")
+        print(f"  TensorBoard logging enabled: logs/tem_training")
     else:
         logger = None
         print(f"  Logging disabled")
@@ -435,8 +435,8 @@ if __name__ == "__main__":
     print("=" * 80)
     print(f"  Training steps completed: {trainer.global_step}")
     if config.use_tensorboard:
-        print(f"  TensorBoard logs: lightning_logs/tem_training")
-        print(f"    View detailed metrics with: tensorboard --logdir lightning_logs")
+        print(f"  TensorBoard logs: logs/tem_training")
+        print(f"    View detailed metrics with: tensorboard --logdir logs")
     print(f"  Best checkpoint: {config.checkpoint_dir}")
     if config.save_plots:
         print(f"  Plots saved to: {config.output_dir}")

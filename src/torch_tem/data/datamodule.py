@@ -119,6 +119,25 @@ class TEMDataModule(L.LightningDataModule):
 
         return DataLoader(val_walks, batch_size=self.batch_size, collate_fn=self._collate_walks, num_workers=0)
 
+    def test_dataloader(self) -> DataLoader:
+        """Fixed test set for final evaluation.
+
+        Generates a separate fixed set of walks for testing to provide
+        robust final evaluation metrics.
+
+        Returns:
+            DataLoader: Test dataloader
+        """
+        # Generate fixed test walks (larger set for more robust metrics)
+        n_test_walks = self.batch_size * 20  # 20 batches for testing
+
+        if self.shiny_config is None:
+            test_walks = self.walk_gen.generate_walks(n_test_walks, self.walk_length, None)
+        else:
+            test_walks = self.walk_gen.generate_shiny_walks(n_test_walks, self.walk_length, self.shiny_locations, self.shiny_policies, self.shiny_config.returns)
+
+        return DataLoader(test_walks, batch_size=self.batch_size, collate_fn=self._collate_walks, num_workers=0)
+
     def _collate_walks(self, walks: List[Walk]) -> Tuple[Vector, Vector, Vector]:
         """Collate walks into batched tensors.
 

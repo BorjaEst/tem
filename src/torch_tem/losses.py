@@ -65,9 +65,13 @@ class LossOutput:
     debugging. The total loss is used for backpropagation, while individual
     components can be tracked to diagnose training dynamics.
 
+    This class supports accumulation via __add__ and averaging via __truediv__
+    operators, enabling concise loss aggregation in training loops:
+        accumulated = loss1 + loss2 + loss3
+        averaged = accumulated / 3
+
     Attributes:
-        total: Weighted sum of all losses (for backprop). This is the scalar
-            that gradients are computed with respect to.
+        total: Weighted sum of all losses (for backprop).
         lx: Sensory reconstruction loss. Monitors how well the model predicts
             observations from place cells.
         lg: Abstract location loss (KL divergence). Monitors consistency between
@@ -86,6 +90,108 @@ class LossOutput:
     lp: Tensor
     l_reg_g: Optional[Tensor] = None
     l_reg_p: Optional[Tensor] = None
+
+    @staticmethod
+    def zero() -> "LossOutput":
+        """Create a zero-initialized LossOutput for accumulation.
+
+        Returns:
+            LossOutput with all components set to 0.0 tensors.
+
+        Example:
+            >>> accumulated = LossOutput.zero()
+            >>> for t in range(rollout_length):
+            ...     loss_output = model.loss(x[t], state)
+            ...     accumulated = accumulated + loss_output
+            >>> averaged = accumulated / rollout_length
+        """
+        return LossOutput(
+            total=torch.tensor(0.0),
+            lx=torch.tensor(0.0),
+            lg=torch.tensor(0.0),
+            lp=torch.tensor(0.0),
+            l_reg_g=torch.tensor(0.0),
+            l_reg_p=torch.tensor(0.0),
+        )
+
+    def __add__(self, other: "LossOutput") -> "LossOutput":
+        """Add two LossOutput instances component-wise.
+
+        Handles optional regularization terms gracefully (treats None as 0).
+
+        Args:
+            other: Another LossOutput instance to add.
+
+        Returns:
+            New LossOutput with summed components.
+
+        Example:
+            >>> loss_sum = loss1 + loss2 + loss3
+        """
+        # Add optional regularization terms (treat None as 0)
+        l_reg_g = None
+        if self.l_reg_g is not None or other.l_reg_g is not None:
+            self_reg_g = self.l_reg_g if self.l_reg_g is not None else torch.tensor(0.0)
+            other_reg_g = other.l_reg_g if other.l_reg_g is not None else torch.tensor(0.0)
+            l_reg_g = self_reg_g + other_reg_g
+
+        l_reg_p = None
+        if self.l_reg_p is not None or other.l_reg_p is not None:
+            self_reg_p = self.l_reg_p if self.l_reg_p is not None else torch.tensor(0.0)
+            other_reg_p = other.l_reg_p if other.l_reg_p is not None else torch.tensor(0.0)
+            l_reg_p = self_reg_p + other_reg_p
+
+        return LossOutput(
+            total=self.total + other.total,
+            lx=self.lx + other.lx,
+            lg=self.lg + other.lg,
+            lp=self.lp + other.lp,
+            l_reg_g=l_reg_g,
+            l_reg_p=l_reg_p,
+        )
+
+    def __truediv__(self, divisor: int | float) -> "LossOutput":
+        """Divide all loss components by a scalar.
+
+        Used to compute average losses over multiple timesteps.
+
+        Args:
+            divisor: Number to divide by (typically number of timesteps).
+
+        Returns:
+            New LossOutput with divided components.
+
+        Raises:
+            ValueError: If divisor is zero.
+
+        Example:
+            >>> avg_loss = accumulated_loss / n_timesteps
+        """
+        if divisor == 0:
+            raise ValueError("Cannot divide LossOutput by zero")
+
+        return LossOutput(
+            total=self.total / divisor,
+            lx=self.lx / divisor,
+            lg=self.lg / divisor,
+            lp=self.lp / divisor,
+            l_reg_g=self.l_reg_g / divisor if self.l_reg_g is not None else None,
+            l_reg_p=self.l_reg_p / divisor if self.l_reg_p is not None else None,
+        )
+
+    def as_dict(self) -> dict:
+        """Convert loss components to dictionary for logging.
+
+        Returns:
+            Dictionary mapping component names to scalar values.
+        """
+        return {
+            "lx": self.lx.item(),
+            "lg": self.lg.item(),
+            "lp": self.lp.item(),
+            "l_reg_g": self.l_reg_g.item() if self.l_reg_g is not None else 0.0,
+            "l_reg_p": self.l_reg_p.item() if self.l_reg_p is not None else 0.0,
+        }
 
 
 class SensoryReconstructionLoss(nn.Module):

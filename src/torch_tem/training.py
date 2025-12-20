@@ -1,12 +1,11 @@
-"""PyTorch Lightning Module for TEM training."""
-
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import lightning as L
 import torch
 from torch import Tensor, optim
 
 from torch_tem.core.model import TEMModel, TEMState
+from torch_tem.losses import LossOutput
 from torch_tem.types import Observation
 
 from .config.training import TrainingConfig
@@ -15,31 +14,30 @@ from .config.training import TrainingConfig
 class TEMLightningModule(L.LightningModule):
     """PyTorch Lightning module for training the Tolman-Eichenbaum Machine (TEM).
 
-    This module implements the training loop for TEM using manual optimization
-    to handle Backpropagation Through Time (BPTT) with truncation. This is necessary
-    because Lightning's automatic TBPTT is deprecated.
+    This module implements manual BPTT (Backpropagation Through Time) for training
+    TEM with truncated sequences, following the approach from the original paper.
+    Automatic optimization is disabled to enable fine-grained control over gradient
+    accumulation and clipping.
 
     Attributes:
-        model (TEMModel): The TEM model to train.
-        config (TrainingConfig): Training configuration including learning rate,
-            decay schedule, and BPTT rollout length.
+        model: The TEM model to train.
+        config: Training configuration containing hyperparameters.
     """
 
     def __init__(self, model: TEMModel, config: TrainingConfig):
-        """Initialize the Lightning module for TEM training.
+        """Initialize the Lightning module.
 
         Args:
-            model (TEMModel): The TEM model instance to train.
-            config (TrainingConfig): Configuration object containing training
-                hyperparameters such as learning rate, decay schedule, and
-                rollout length for BPTT.
+            model: TEM model instance to train.
+            config: Training configuration with learning rate, BPTT settings, etc.
         """
         super().__init__()
         self.model = model
         self.config = config
 
         # Save hyperparameters
-        self.save_hyperparameters(ignore=["model"])
+        self.save_hyperparameters({**config.model_dump()})
+        # self.save_hyperparameters({**model.config.model_dump()})
 
         # Automatic optimization is disabled to handle BPTT manually if needed,
         # Lightning's TBPTT is deprecated, so manual loop is preferred.
@@ -48,187 +46,207 @@ class TEMLightningModule(L.LightningModule):
     def configure_optimizers(self) -> Tuple[List[optim.Optimizer], List[optim.lr_scheduler._LRScheduler]]:
         """Configure optimizer and learning rate scheduler.
 
-        Sets up an Adam optimizer with the maximum learning rate specified in
-        the configuration, and a StepLR scheduler for exponential decay.
+        Uses Adam optimizer with StepLR scheduler for learning rate decay.
 
         Returns:
-            Tuple[List[optim.Optimizer], List[optim.lr_scheduler._LRScheduler]]:
-                A tuple containing a list with the optimizer and a list with the
-                learning rate scheduler.
+            Tuple containing:
+                - List with single Adam optimizer
+                - List with single StepLR scheduler
         """
         optimizer = optim.Adam(self.parameters(), lr=self.config.lr_max)
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.config.lr_decay_steps, gamma=self.config.lr_decay_rate)
 
         return [optimizer], [scheduler]
 
-    def forward(self, x: Observation, locations: List[Dict], a: Optional[Tensor], state: TEMState) -> TEMState:
-        """Forward pass through the TEM model.
-
-        Performs a single step inference and generation in the TEM model,
-        updating the internal state based on current observation and action.
+    def forward(self, x: Observation, locations: List[Dict], a: Optional[Tensor], state: TEMState) -> Tuple[TEMState, LossOutput]:
+        """Forward pass through the model and compute loss.
 
         Args:
-            x (Observation): Current sensory observation at time step t.
-            locations (List[Dict]): List of location dictionaries containing
-                environment-specific information such as shiny object presence.
-            a (Optional[Tensor]): Action taken at the previous time step. None
-                for the first step of a sequence.
-            state (TEMState): Current state of the TEM model including grounded
-                and abstract location representations.
+            x: Sensory observation at current timestep.
+            locations: List of location metadata (e.g., shiny objects) per batch item.
+            a: Actions taken (optional for first timestep).
+            state: Current model state (HPC, LEC, MEC activations).
 
         Returns:
-            TEMState: Updated state after processing the observation and action.
+            Tuple containing:
+                - Updated model state after processing this timestep
+                - LossOutput with all loss components
         """
-        return self.model(x, locations, a, state)
+        state = self.model(x, locations, a, state)
+        loss_output = self.model.loss(x, state)
+        return state, loss_output
 
     def training_step(self, batch: Tuple[Tensor, Tensor, Tensor], batch_idx: int):
-        """Execute a single training step with truncated BPTT.
+        """Execute one training step with manual BPTT over rollout chunks.
 
-        Processes a batch of sequential data through the TEM model using
-        Backpropagation Through Time (BPTT) with truncation. The method
-        manually handles optimization to allow for gradient truncation at
-        specified rollout intervals, preventing gradient explosion in long
-        sequences.
-
-        The training process:
-        1. Initializes model state for the batch
-        2. Iterates through each time step in the sequence
-        3. Accumulates loss over n_rollout steps
-        4. Performs backward pass and optimizer step at truncation points
-        5. Detaches state to truncate gradients
-        6. Logs training metrics
+        Implements truncated BPTT by splitting sequences into rollout chunks of
+        length n_rollout. Each chunk is processed, gradients are computed and
+        clipped, then parameters are updated. State is detached between chunks
+        to prevent gradient flow across chunk boundaries.
 
         Args:
-            batch (Tuple[Tensor, Tensor, Tensor]): Tuple containing:
-                - observations (Tensor): Sensory observations of shape
-                  (batch_size, walk_length, observation_dim)
-                - actions (Tensor): Actions taken at each step of shape
-                  (batch_size, walk_length)
-                - _ (Tensor): Additional batch data (currently unused)
-            batch_idx (int): Index of the current batch in the epoch.
-
-        Returns:
-            None: Metrics are logged internally via self.log().
+            batch: Tuple containing:
+                - observations: Sequence of observations [walk_length, batch_size, obs_dim]
+                - actions: Sequence of actions [walk_length, batch_size]
+                - _: Additional batch data (unused)
+            batch_idx: Index of current batch (unused, required by Lightning).
         """
         observations, actions, _ = batch
         optimizer = self.optimizers()
+        walk_length = len(observations)
 
-        # Process the entire walk sequence with BPTT
-        loss_output = self.walk_sequence(observations, actions, optimizer)
+        state = self.model.init_state(observations[0])
 
-        # Log final metrics and update scheduler
-        self.log_training_metrics(loss_output)
+        # Explicit BPTT loop over rollout chunks
+        for rollout_start in range(0, walk_length, self.config.n_rollout):
+            rollout_end = min(rollout_start + self.config.n_rollout, walk_length)
 
-        # Update learning rate scheduler if present
-        scheduler = self.lr_schedulers()
-        if scheduler is not None:
-            scheduler.step()
+            # Compute
+            loss_output, state = self.compute_rollout(observations[rollout_start:rollout_end], actions[rollout_start:rollout_end], state)
 
-    def walk_sequence(self, observations: Tensor, actions: Tensor, optimizer: optim.Optimizer) -> Any:
-        """Process a complete walk sequence with truncated BPTT.
+            # Optimize
+            self.manual_backward(loss_output.total)
+            self.clip_gradients(optimizer, gradient_clip_val=1.0, gradient_clip_algorithm="norm")
+            optimizer.step()
+            optimizer.zero_grad()
+
+            # Log
+            self.log_loss(loss_output, "train", on_step=True, on_epoch=False)
+            state = state.detach()
+
+        # Once per batch
+        self.log_learning_rate("train")
+        self.lr_schedulers().step()
+
+    def compute_rollout(self, observations: Tensor, actions: Tensor, state: TEMState) -> Tuple[LossOutput, TEMState]:
+        """Compute loss for a single rollout chunk.
 
         Args:
-            observations (Tensor): Sequence of observations with shape
-                (walk_length, batch_size, observation_dim).
-            actions (Tensor): Sequence of actions with shape
-                (walk_length, batch_size).
-            optimizer (optim.Optimizer): The optimizer for gradient updates.
+            observations: Observation tensor for this rollout [rollout_length, batch_size, obs_dim]
+            actions: Action tensor for this rollout [rollout_length, batch_size]
+            state: Current model state
 
         Returns:
-            Any: Loss output from the final time step.
+            Tuple of (averaged_loss, updated_state)
+        """
+        rollout_length, batch_size, _ = observations.shape
+        step_locations = self.create_step_locations(batch_size)
+
+        # Accumulate losses using + operator
+        accumulated = LossOutput.zero()
+        for t in range(rollout_length):
+            state, loss_output = self.forward(observations[t], step_locations, actions[t], state)
+            accumulated = accumulated + loss_output
+
+        # Compute averages using / operator
+        averaged = accumulated / rollout_length
+        return averaged, state
+
+    def validation_step(self, batch: Tuple[Tensor, Tensor, Tensor], batch_idx: int):
+        """Execute one validation step.
+
+        Computes loss over entire sequence without truncation for accurate
+        validation metrics.
+
+        Args:
+            batch: Tuple containing observations, actions, and metadata.
+            batch_idx: Index of current batch (unused, required by Lightning).
+        """
+        observations, actions, _ = batch
+
+        # Compute
+        loss_output = self.compute_sequence(observations, actions)
+
+        # Log
+        self.log_loss(loss_output, "val", on_step=False, on_epoch=True)
+
+    def test_step(self, batch: Tuple[Tensor, Tensor, Tensor], batch_idx: int):
+        """Execute one test step.
+
+        Computes loss over entire sequence without truncation for final
+        model evaluation.
+
+        Args:
+            batch: Tuple containing observations, actions, and metadata.
+            batch_idx: Index of current batch (unused, required by Lightning).
+        """
+        observations, actions, _ = batch
+
+        # Compute
+        loss_output = self.compute_sequence(observations, actions)
+
+        # Log
+        self.log_loss(loss_output, "test", on_step=False, on_epoch=True)
+
+    def compute_sequence(self, observations: Tensor, actions: Tensor) -> LossOutput:
+        """Compute loss for an entire sequence (used in validation/test).
+
+        Args:
+            observations: Full observation sequence [walk_length, batch_size, obs_dim]
+            actions: Full action sequence [walk_length, batch_size]
+
+        Returns:
+            Averaged LossOutput over the sequence.
         """
         walk_length, batch_size, _ = observations.shape
-
-        # Initialize model state and environment locations
         state = self.model.init_state(observations[0])
         step_locations = self.create_step_locations(batch_size)
 
-        # Process each time step with BPTT truncation
-        optimizer.zero_grad()
-        n_rollout = self.config.n_rollout
-        accumulated_loss = 0.0
-
+        # Accumulate losses using + operator
+        accumulated = LossOutput.zero()
         for t in range(walk_length):
-            # Forward pass through model for current time step
-            state = self.model(observations[t], step_locations, actions[t], state)
-            loss_output = self.model.loss(observations[t], state)
-            accumulated_loss += loss_output.total
+            state, loss_output = self.forward(observations[t], step_locations, actions[t], state)
+            accumulated = accumulated + loss_output
 
-            # Check if we should perform BPTT truncation
-            if self.should_truncate_bptt(t, walk_length, n_rollout):
-                state = self.bptt_step(accumulated_loss, n_rollout, optimizer, state)
-                accumulated_loss = 0.0
-
-        return loss_output
-
-    @staticmethod
-    def should_truncate_bptt(time_step: int, walk_length: int, n_rollout: int) -> bool:
-        """Determine if BPTT should be truncated at current time step.
-
-        BPTT truncation occurs either at regular rollout intervals or at
-        the end of the sequence to ensure gradients are computed for all steps.
-
-        Args:
-            time_step (int): Current time step (0-indexed).
-            walk_length (int): Total length of the walk sequence.
-            n_rollout (int): Number of steps between truncations.
-
-        Returns:
-            bool: True if truncation should occur, False otherwise.
-        """
-        is_rollout_boundary = (time_step + 1) % n_rollout == 0
-        is_sequence_end = (time_step + 1) == walk_length
-        return is_rollout_boundary or is_sequence_end
+        # Compute average using / operator
+        return accumulated / walk_length
 
     def create_step_locations(self, batch_size: int) -> List[Dict]:
-        """Create location dictionaries for each batch item.
+        """Create location metadata for each batch item.
+
+        Currently returns placeholder dictionaries. In full implementation,
+        this would extract shiny object locations and other environmental
+        metadata from the batch data.
 
         Args:
-            batch_size (int): Number of sequences in the batch.
+            batch_size: Number of items in the batch.
 
         Returns:
-            List[Dict]: List of location dictionaries with shiny object info.
+            List of dictionaries containing location metadata, one per batch item.
+
+        TODO: Implement proper shiny object handling from environment data.
         """
-        # TODO: Implement proper shiny object handling from environment
         return [{"shiny": None} for _ in range(batch_size)]
 
-    def bptt_step(self, accumulated_loss: Tensor, n_rollout: int, optimizer: optim.Optimizer, state: TEMState) -> TEMState:
-        """Perform backward pass and optimization step for BPTT.
-
-        Computes gradients on the accumulated loss, clips them to prevent
-        explosion, updates parameters, and detaches the state to truncate
-        the computational graph.
+    def log_loss(self, loss_output: LossOutput, prefix: str, on_step: bool, on_epoch: bool) -> None:
+        """Log all loss components.
 
         Args:
-            accumulated_loss (Tensor): Sum of losses over the rollout period.
-            n_rollout (int): Number of steps in the rollout for normalization.
-            optimizer (optim.Optimizer): The optimizer for parameter updates.
-            state (TEMState): Current model state to detach after update.
-
-        Returns:
-            TEMState: Detached state with gradients truncated.
+            loss_output: LossOutput containing all components.
+            prefix: Logging prefix ("train", "val", or "test").
+            on_step: Whether to log per step.
+            on_epoch: Whether to log per epoch.
         """
-        # Compute average loss over rollout period
-        avg_loss = accumulated_loss / n_rollout
+        prog_bar = prefix == "train"
 
-        # Backward pass with gradient clipping
-        self.manual_backward(avg_loss)
-        self.clip_gradients(optimizer, gradient_clip_val=1.0, gradient_clip_algorithm="norm")
+        # Log total loss
+        self.log(f"{prefix}/loss", loss_output.total, on_step=on_step, on_epoch=on_epoch, prog_bar=prog_bar)
 
-        # Update parameters and reset gradients
-        optimizer.step()
-        optimizer.zero_grad()
+        # Log all components
+        components = loss_output.as_dict()
+        for component_name in ["lx", "lg", "lp"]:
+            self.log(f"{prefix}/{component_name}", components[component_name], on_step=on_step, on_epoch=on_epoch)
 
-        # Detach state to truncate backpropagation graph
-        return state.detach()
+        # Log regularization terms if present and non-zero
+        for reg_name in ["l_reg_g", "l_reg_p"]:
+            if components[reg_name] != 0.0:
+                self.log(f"{prefix}/{reg_name}", components[reg_name], on_step=on_step, on_epoch=on_epoch)
 
-    def log_training_metrics(self, loss_output: Any) -> None:
-        """Log training metrics to Lightning logger.
+    def log_learning_rate(self, prefix: str) -> None:
+        """Log current learning rate to tensorboard.
 
         Args:
-            loss_output (Any): Loss output containing total and component losses.
+            prefix: Logging prefix ("train", "val", or "test").
         """
-        self.log("train_loss", loss_output.total, prog_bar=True)
-        self.log("train_lx", loss_output.lx)
-        self.log("train_lg", loss_output.lg)
-        self.log("train_lp", loss_output.lp)
+        current_lr = self.optimizers().param_groups[0]["lr"]
+        self.log(f"{prefix}/lr", current_lr, on_step=True, on_epoch=False)

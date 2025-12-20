@@ -134,6 +134,11 @@ class TEMModel(nn.Module):
         self.loss_reg_fn = losses.RegularizationLoss()
         self.loss_total_fn = losses.TEMLoss()
 
+    # @property
+    # def config(self) -> ModelConfig:
+    #     """Return model configuration."""
+    #     return ModelConfig(lec=self.lec.config, mec=self.mec.config, hpc=self.hpc.config)
+
     def init_state(self, x: Observation) -> TEMState:
         """Initialize TEM state from first observation.
 

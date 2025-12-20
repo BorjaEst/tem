@@ -64,8 +64,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import figures
 from torch_tem.config import EnvironmentConfig, ModelConfig
+from torch_tem.core.model import Simulation, TEMModel
 from torch_tem.data import Environment, WalkGenerator
-from torch_tem.model import Simulation, TEMModel
 
 
 # ==============================================================================

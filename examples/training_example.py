@@ -77,8 +77,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.config import EnvironmentConfig, ModelConfig, TrainingConfig
+from torch_tem.core.model import TEMModel
 from torch_tem.data import TEMDataModule
-from torch_tem.model import TEMModel
 from torch_tem.training import TEMLightningModule
 
 

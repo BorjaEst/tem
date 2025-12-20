@@ -66,9 +66,8 @@ import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import figures, utils
+from torch_tem import figures, hpc, utils
 from torch_tem.config import ModelConfig
-from torch_tem.hpc import attractor, storage
 
 
 # ==============================================================================
@@ -86,7 +85,7 @@ class ExampleConfig(BaseSettings):
     # Architecture configuration
     f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
     n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
-    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
+    n_x_c: int = Field(default=10, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
 
     # Memory configuration
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
@@ -165,12 +164,12 @@ if __name__ == "__main__":
     # HPC MemoryStorage: Hebbian plasticity
     # Manages M_gen (generative) and M_inf (inference) memory matrices
     # Update rule: M = λ*M + η*outer(p_inf + p_gen, p_inf - p_gen) * mask
-    mem_storage = storage.MemoryStorage(model_config, p_update_mask)
+    mem_storage = hpc.storage.MemoryStorage(model_config, p_update_mask)
 
     # HPC AttractorDynamics: Iterative pattern completion
     # Refines noisy queries using hierarchical coarse-to-fine retrieval
     # Update rule: p[t+1] = mask[t] * activation(κ*p[t] + M@p[t]) + (1-mask[t])*p[t]
-    mem_attractor = attractor.AttractorDynamics(model_config, mask_inf, mask_gen)
+    mem_attractor = hpc.attractor.AttractorDynamics(model_config, mask_inf, mask_gen)
 
     n_p_total = sum(model_config.n_p)
 

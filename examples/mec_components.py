@@ -60,17 +60,15 @@ When save_plots=true, generates 5 visualizations in outputs/mec_components/:
 """
 
 from pathlib import Path
-from typing import List, Literal
+from typing import List
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import data, figures, mec, utils
+from torch_tem import figures, mec
 from torch_tem.config import ModelConfig
-from torch_tem.types import Transition
 
 
 # ==============================================================================

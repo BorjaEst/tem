@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..types import AbstractLocation, Transition, Vector
+from torch_tem.types import AbstractLocation, Transition, Vector
 
 
 class PatternGeneratorParams(Protocol):

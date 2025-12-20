@@ -15,8 +15,7 @@ from typing import List, Protocol
 
 import torch
 
-from .. import utils
-from ..types import Matrix, MultiScaleCode
+from torch_tem.types import Matrix, MultiScaleCode
 
 
 class AttractorParams(Protocol):

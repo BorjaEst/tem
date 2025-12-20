@@ -6,9 +6,10 @@ import lightning as L
 import torch
 from torch import Tensor, optim
 
+from torch_tem.core.model import TEMModel, TEMState
+from torch_tem.types import Observation
+
 from .config.training import TrainingConfig
-from .model import TEMModel, TEMState
-from .types import Observation
 
 
 class TEMLightningModule(L.LightningModule):

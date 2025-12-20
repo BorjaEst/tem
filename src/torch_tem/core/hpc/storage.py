@@ -16,9 +16,8 @@ with gradual decay (forgetting) over time.
 from typing import List, Protocol
 
 import torch
-from torch import Tensor
 
-from ..types import Matrix, Vector
+from torch_tem.types import Matrix, Vector
 
 
 class StorageParams(Protocol):

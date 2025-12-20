@@ -15,7 +15,7 @@ from typing import List, Protocol, Tuple
 import torch
 from torch import Tensor
 
-from ..types import HebbianMemory, Vector
+from torch_tem.types import HebbianMemory, Vector
 
 
 class MemoryParams(Protocol):

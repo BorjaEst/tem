@@ -19,8 +19,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .. import utils
-from ..types import MultiScaleCode
+from torch_tem import utils
+from torch_tem.types import MultiScaleCode
 
 
 class ProjectionParams(Protocol):

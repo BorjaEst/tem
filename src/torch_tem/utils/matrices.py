@@ -7,7 +7,7 @@ import torch
 from scipy.special import comb
 from torch import Tensor
 
-from ..types import BatchedMemory, GroundedLocation, Matrix, MultiScaleCode, Vector
+from torch_tem.types import BatchedMemory, GroundedLocation, Matrix, MultiScaleCode, Vector
 
 
 def create_initial_memory(n_p_total: int, batch_size: int, dual_memory: bool, device: torch.device) -> List[BatchedMemory]:

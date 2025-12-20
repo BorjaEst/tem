@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..types import Matrix, Vector
+from torch_tem.types import Matrix, Vector
 
 # =======================================================================================
 # PROTOCOL INTERFACES

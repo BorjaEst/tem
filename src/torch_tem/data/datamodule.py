@@ -11,8 +11,7 @@ from torch_tem.data.environment import Environment, EnvironmentParams, Location
 from torch_tem.data.policies import PolicyGenerator
 from torch_tem.data.shiny import ShinyConfig, ShinyEnvironmentBuilder
 from torch_tem.data.walks import Walk, WalkGenerator
-
-from ..types import Vector
+from torch_tem.types import Vector
 
 
 class TEMDataModule(L.LightningDataModule):

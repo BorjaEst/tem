@@ -4,8 +4,9 @@ from typing import List
 import torch
 from torch import Tensor, nn
 
-from .. import utils
-from ..types import MultiScaleCode, Observation, SensoryPrediction
+from torch_tem import utils
+from torch_tem.types import MultiScaleCode, Observation, SensoryPrediction
+
 from . import decoder, encoder, processor, projection
 
 

@@ -35,7 +35,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .types import AbstractLocation, GroundedLocation, SensoryPrediction, Transition
+from torch_tem.types import AbstractLocation, GroundedLocation, SensoryPrediction, Transition
 
 
 @dataclass

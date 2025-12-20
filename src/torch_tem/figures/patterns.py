@@ -19,7 +19,7 @@ import torch
 from matplotlib.figure import Figure
 from torch import Tensor
 
-from ..types import AbstractLocation, Transition, Vector
+from torch_tem.types import AbstractLocation, Transition, Vector
 
 
 def plot_place_cell_patterns(

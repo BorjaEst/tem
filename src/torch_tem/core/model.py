@@ -15,8 +15,9 @@ from typing import Dict, List, Optional, Tuple
 
 from torch import nn
 
-from torch_tem import hpc, lec, losses, mec
+from torch_tem import losses
 from torch_tem.config import ModelConfig
+from torch_tem.core import hpc, lec, mec
 
 from torch_tem.types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
 from torch_tem.types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
@@ -62,7 +63,7 @@ class TEMState:
         return self.hpc.grounded_location
 
     @property
-    def grounded(self) -> Tuple[Optional[GroundedLocation], Optional[GroundedLocation], Optional[GroundedLocation]]:
+    def grounded(self) -> Tuple[Optional[GroundedLocation], Optional[GroundedLocation], GroundedLocation]:
         """Return tuple of (p_x, p_g, p)."""
         return self.grounded_sensory, self.grounded_abstract, self.grounded_location
 
@@ -296,7 +297,7 @@ class Simulation(Iterator[TEMState]):
         first_x = walk.observations[0].unsqueeze(0)  # [n_x] -> [1, n_x]
         self.__state = self.__model.init_state(first_x)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[TEMState]:
         """Return iterator interface."""
         return self
 

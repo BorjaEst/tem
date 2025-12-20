@@ -9,8 +9,7 @@ from torch import Tensor
 
 from torch_tem.config import EnvironmentConfig
 from torch_tem.data.environment import Environment, Location
-
-from ..types import Vector
+from torch_tem.types import Vector
 
 
 class Walk(BaseModel):

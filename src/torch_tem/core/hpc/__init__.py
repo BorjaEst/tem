@@ -25,8 +25,9 @@ from typing import List, Tuple
 import torch
 from torch import Tensor, nn
 
-from .. import utils
-from ..types import BatchedMemory, GroundedLocation, MultiScaleCode
+from torch_tem import utils
+from torch_tem.types import BatchedMemory, GroundedLocation, MultiScaleCode
+
 from . import attractor, grounded, storage
 from .attractor import AttractorDynamics, AttractorParams
 from .grounded import GroundedLocInference, GroundedLocParams
@@ -67,7 +68,10 @@ class HPCState:
 
     def detach(self) -> "HPCState":
         """Detach all tensors in the state from the computation graph."""
-        return HPCState(grounded_location=[x.detach() for x in self.grounded_location], memory=[mem.detach() if mem is not None else None for mem in self.memory])
+        return HPCState(
+            grounded_location=[x.detach() for x in self.grounded_location],
+            memory=[mem.detach() if mem is not None else None for mem in self.memory],
+        )
 
 
 class HPCModel(nn.Module):

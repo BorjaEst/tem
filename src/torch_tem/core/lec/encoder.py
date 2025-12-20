@@ -22,9 +22,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.types import Matrix, MultiScaleCode, Observation
-
-from .. import utils
+from torch_tem.types import Observation
 
 
 class EncoderParams(Protocol):

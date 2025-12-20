@@ -4,7 +4,8 @@ from typing import Dict, List, Optional
 import torch
 from torch import Tensor, nn
 
-from ..types import AbstractLocation, GroundedLocation, MultiScaleCode
+from torch_tem.types import AbstractLocation, GroundedLocation, MultiScaleCode
+
 from . import abstract, projection, transition
 from .transition import Transition
 

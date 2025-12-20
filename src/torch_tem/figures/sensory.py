@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..types import MultiScaleCode, Vector
+from torch_tem.types import MultiScaleCode, Vector
 
 
 # ==============================================================================

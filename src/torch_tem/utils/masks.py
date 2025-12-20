@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..types import Matrix
+from torch_tem.types import Matrix
 
 
 def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_initial: List[float]) -> Matrix:

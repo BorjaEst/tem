@@ -12,9 +12,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from torch_tem.types import Matrix, Vector
 from torch_tem.utils import compute_graph_layout
-
-from ..types import Matrix, Vector
 
 
 # ==============================================================================

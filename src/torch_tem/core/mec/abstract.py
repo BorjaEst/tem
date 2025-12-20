@@ -41,9 +41,9 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..core.mlp import MLP
-from ..types import AbstractLocation, GroundedLocation, Transition
-from ..utils.fusion import fuse_transitions, sample_transition
+from torch_tem.core.mlp import MLP
+from torch_tem.types import AbstractLocation, GroundedLocation, Transition
+from torch_tem.utils.fusion import fuse_transitions, sample_transition
 
 
 class AbstractLocParams(Protocol):

@@ -21,19 +21,7 @@ class TrainingConfig(BaseModel):
 
     train_it: int = Field(default=20000, ge=1, description="Number of training walks (environments × walks) to generate")
     n_rollout: int = Field(default=20, ge=1, description="Unroll length for BPTT (steps per optimisation step)")
-    batch_size: int = Field(default=16, ge=1, description="Number of walks processed in parallel during training")
-
-    # ===================================================================================
-    # WALK LENGTH CURRICULUM
-    # ===================================================================================
-
-    walk_it_min: int = Field(default=25, ge=1, description="Minimum walk length at end of training")
-    walk_it_max: int = Field(default=300, ge=1, description="Maximum walk length at start of training")
-
-    @computed_field(description="Width of the walk-length sampling window (used for curriculum over time)")
-    @property
-    def walk_it_window(self) -> float:
-        return 0.2 * (self.walk_it_max - self.walk_it_min)
+    batch_size: int = Field(default=16, ge=1, description="Number of walks processed in parallel per optimisation step")
 
     # ===================================================================================
     # LEARNING RATE SCHEDULE

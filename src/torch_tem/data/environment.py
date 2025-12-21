@@ -63,14 +63,9 @@ class EnvironmentParams(Protocol):
     observation_mode: Literal["unique", "tiled", "random"]
     n_actions: int
     has_static_action: bool
-
-    @property
-    def n_locations(self) -> int:  # pragma: no cover - simple protocol
-        ...
-
-    @property
-    def n_observations(self) -> int:  # pragma: no cover - simple protocol
-        ...
+    n_locations: int
+    n_observations: int
+    randomize_observations: bool
 
 
 class Environment:
@@ -87,12 +82,11 @@ class Environment:
         locations: List of Location Pydantic models
     """
 
-    def __init__(self, params: EnvironmentParams, randomize_observations: bool = False):
+    def __init__(self, params: EnvironmentParams):
         """Construct environment from validated ``EnvironmentParams``.
 
         Args:
             params: Environment configuration implementing ``EnvironmentParams``.
-            randomize_observations: Shuffle observation assignments after loading.
         """
         # Derive basic attributes from high-level params
         width = params.width
@@ -185,7 +179,7 @@ class Environment:
         self.locations = locations
 
         # Randomize observations if requested
-        if randomize_observations:
+        if params.randomize_observations:
             self.randomize_observations()
 
         # Cache for shortest paths

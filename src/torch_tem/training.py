@@ -229,18 +229,23 @@ class TEMLightningModule(L.LightningModule):
         """
         prog_bar = prefix == "train"
 
-        # Log total loss
-        self.log(f"{prefix}/loss", loss_output.total, on_step=on_step, on_epoch=on_epoch, prog_bar=prog_bar)
+        # Log total loss (convert Tensor to scalar for TensorBoard)
+        total_scalar = loss_output.total.item() if isinstance(loss_output.total, Tensor) else loss_output.total
+        self.log(f"{prefix}/loss", total_scalar, on_step=on_step, on_epoch=on_epoch, prog_bar=prog_bar)
 
-        # Log all components
+        # Log all components (as_dict() already converts to float, but ensure scalars)
         components = loss_output.as_dict()
         for component_name in ["lx", "lg", "lp"]:
-            self.log(f"{prefix}/{component_name}", components[component_name], on_step=on_step, on_epoch=on_epoch)
+            value = components[component_name]
+            scalar_value = value.item() if isinstance(value, Tensor) else float(value)
+            self.log(f"{prefix}/{component_name}", scalar_value, on_step=on_step, on_epoch=on_epoch)
 
         # Log regularization terms if present and non-zero
         for reg_name in ["l_reg_g", "l_reg_p"]:
-            if components[reg_name] != 0.0:
-                self.log(f"{prefix}/{reg_name}", components[reg_name], on_step=on_step, on_epoch=on_epoch)
+            value = components[reg_name]
+            if value != 0.0:
+                scalar_value = value.item() if isinstance(value, Tensor) else float(value)
+                self.log(f"{prefix}/{reg_name}", scalar_value, on_step=on_step, on_epoch=on_epoch)
 
     def log_learning_rate(self, prefix: str) -> None:
         """Log current learning rate to tensorboard.
@@ -249,4 +254,5 @@ class TEMLightningModule(L.LightningModule):
             prefix: Logging prefix ("train", "val", or "test").
         """
         current_lr = self.optimizers().param_groups[0]["lr"]
-        self.log(f"{prefix}/lr", current_lr, on_step=True, on_epoch=False)
+        scalar_lr = float(current_lr) if not isinstance(current_lr, float) else current_lr
+        self.log(f"{prefix}/lr", scalar_lr, on_step=True, on_epoch=False)

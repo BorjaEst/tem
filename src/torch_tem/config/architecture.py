@@ -44,6 +44,17 @@ class ModelConfig(BaseModel):
     # ===================================================================================
 
     common_memory: bool = Field(default=False, description="Share a single memory between generative and inference networks")
+    eta: float = Field(default=0.5, ge=0, le=1, description="Hebbian rate of remembering (η in memory update)")
+    lambda_: float = Field(default=0.9, ge=0, le=1, description="Hebbian memory retention factor (λ in memory decay)")
+    kappa: float = Field(default=0.8, ge=0, le=1, description="Hebbian retrieval decay term κ")
+
+    # ===================================================================================
+    # INFERENCE BEHAVIOUR
+    # ===================================================================================
+
+    do_sample: bool = Field(default=False, description="If False, use distribution means instead of sampling (no observation noise)")
+    p2g_scale_offset: float = Field(default=0.0, ge=0, description="Variance offset scaling for memory path during abstract inference (controls memory influence)")
+    p2g_sig_val: float = Field(default=10000.0, ge=0, description="Base variance magnitude for memory-derived abstract location uncertainty")
 
     # ===================================================================================
     # DERIVED DIMENSIONS (computed properties)
@@ -102,8 +113,6 @@ class ModelConfig(BaseModel):
     @computed_field(description="Two-hot encoding lookup table for sensory compression")
     @property
     def two_hot_table(self) -> List[Tensor]:
-        from torch_tem import utils
-
         return utils.create_two_hot_table(self.n_x, self.n_x_c)
 
     @computed_field(description="Number of attractor iterations for memory retrieval (equals n_f_g)")
@@ -163,19 +172,3 @@ class ModelConfig(BaseModel):
             )
 
         return self
-
-    # ===================================================================================
-    # INFERENCE BEHAVIOUR
-    # ===================================================================================
-
-    do_sample: bool = Field(default=False, description="If False, use distribution means instead of sampling (no observation noise)")
-    p2g_scale_offset: float = Field(default=0.0, ge=0, description="Variance offset scaling for memory path during abstract inference (controls memory influence)")
-    p2g_sig_val: float = Field(default=10000.0, ge=0, description="Base variance magnitude for memory-derived abstract location uncertainty")
-
-    # ===================================================================================
-    # MEMORY DYNAMICS (can be tuned at inference time)
-    # ===================================================================================
-
-    eta: float = Field(default=0.5, ge=0, le=1, description="Hebbian rate of remembering (η in memory update)")
-    lambda_: float = Field(default=0.9, ge=0, le=1, description="Hebbian memory retention factor (λ in memory decay)")
-    kappa: float = Field(default=0.8, ge=0, le=1, description="Hebbian retrieval decay term κ")

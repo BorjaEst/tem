@@ -20,6 +20,7 @@ class EnvironmentConfig(BaseModel):
     width: int = Field(default=5, ge=1, description="Grid width (number of columns)")
     height: int = Field(default=5, ge=1, description="Grid height (number of rows)")
     observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation assignment strategy; mirrors Environment.from_grid observation_mode")
+    randomize_observations: bool = Field(default=False, description="Randomize observation assignments after environment construction")
 
     # ===================================================================================
     # ACTION SPACE

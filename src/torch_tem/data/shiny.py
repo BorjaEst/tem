@@ -1,54 +1,32 @@
 """Shiny object configuration and placement."""
 
-import copy
-from typing import List
+from typing import List, Protocol
 
 import numpy as np
-from pydantic import BaseModel, Field, model_validator
 
 from torch_tem.config import EnvironmentConfig
 from torch_tem.data.environment import Environment, Location
 from torch_tem.data.policies import PolicyGenerator
 
 
-class ShinyConfig(BaseModel):
-    """Configuration for shiny object environments.
+class ShinyParams(Protocol):
+    """Protocol for environment parameters needed by ShinyEnvironmentBuilder.
 
-    Shiny objects are special reward locations that drive goal-directed
-    behavior with automatic goal switching during walks.
+    Defines the minimal interface required from environment objects to place
+    shiny objects and generate shiny-directed policies. Satisfied by Environment class.
     """
 
-    n: int = Field(gt=0, description="Number of shiny objects")
-    returns: int = Field(gt=0, description="Steps to linger at shiny object before switching")
-    gamma: float = Field(default=0.9, ge=0.0, le=1.0, description="Discount factor for Q-learning")
-    beta: float = Field(default=1.0, gt=0.0, description="Softmax temperature")
-    min_separation: float = Field(default=0.3, ge=0.0, le=1.0, description="Minimum distance ratio between shiny objects")
+    n_locations: int
+    n_observations: int
+    locations: List[Location]
 
-    @model_validator(mode="after")
-    def validate_feasibility(self) -> "ShinyConfig":
-        """Check if configuration is internally consistent."""
-        if self.n > 1 and self.min_separation > 0.9:
-            raise ValueError("Cannot place multiple shiny objects with min_separation > 0.9")
-        return self
-
-    @classmethod
-    def from_environment_config(cls, env_config: EnvironmentConfig, min_separation: float = 0.3) -> "ShinyConfig":
-        """Create shiny configuration from an ``EnvironmentConfig``.
-
-        Args:
-            env_config: Global environment configuration.
-            min_separation: Minimum distance ratio between shiny objects.
+    def shortest_paths(self) -> np.ndarray:
+        """Compute all-pairs shortest path distances.
 
         Returns:
-            ShinyConfig: Constructed shiny configuration.
+            ndarray: [n_locations, n_locations] distance matrix
         """
-        return cls(
-            n=env_config.shiny_n,
-            returns=env_config.shiny_returns,
-            gamma=env_config.shiny_gamma,
-            beta=env_config.shiny_beta,
-            min_separation=min_separation,
-        )
+        ...
 
 
 class ShinyEnvironmentBuilder:
@@ -58,16 +36,16 @@ class ShinyEnvironmentBuilder:
     observation deduplication, and shiny-directed policy generation.
     """
 
-    def __init__(self, environment: Environment, shiny_config: ShinyConfig, policy_generator: PolicyGenerator):
+    def __init__(self, environment: Environment, params: ShinyParams, policy_generator: PolicyGenerator):
         """Initialize shiny environment builder.
 
         Args:
-            environment: Base environment to augment
-            shiny_config: Shiny object configuration
+            environment: Environment parameters implementing ShinyParams
+            params: Shiny object configuration
             policy_generator: Policy generator for shiny-directed policies
         """
         self.env = environment
-        self.config = shiny_config
+        self.config = params
         self.policy_gen = policy_generator
 
     def place_shiny_objects(self) -> List[int]:

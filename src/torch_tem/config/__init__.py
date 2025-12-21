@@ -12,17 +12,19 @@ from torch_tem.config.architecture import ModelConfig
 from torch_tem.config.datamodule import DataModuleConfig
 from torch_tem.config.environment import EnvironmentConfig
 from torch_tem.config.policies import DistancePolicyConfig, MixedPolicyConfig, PolicyConfig, QLearningPolicyConfig, RandomPolicyConfig, ShinyPolicyConfig
+from torch_tem.config.shiny import ShinyConfig
 from torch_tem.config.training import TrainingConfig
 
 __all__ = [
     "ModelConfig",
-    "TrainingConfig",
-    "EnvironmentConfig",
     "DataModuleConfig",
+    "EnvironmentConfig",
     "PolicyConfig",
     "RandomPolicyConfig",
     "DistancePolicyConfig",
     "QLearningPolicyConfig",
     "ShinyPolicyConfig",
     "MixedPolicyConfig",
+    "ShinyConfig",
+    "TrainingConfig",
 ]

@@ -10,9 +10,9 @@ from typing import List, Optional, Protocol, Tuple
 
 import numpy as np
 import torch
-from torch import Tensor
+from pydantic import BaseModel
 
-from torch_tem.types import AbstractLocation, Vector
+from torch_tem.types import AbstractLocation
 
 
 class AbstractInferenceParams(Protocol):

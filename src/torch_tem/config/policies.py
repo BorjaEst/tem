@@ -156,15 +156,6 @@ class MixedPolicyConfig(BaseModel):
     policies: List[Union[RandomPolicyConfig, DistancePolicyConfig, QLearningPolicyConfig, "ShinyPolicyConfig"]] = Field(description="Policies to mix")
     weights: List[float] = Field(description="Mixing weights (must sum to 1.0)")
 
-    # ===================================================================================
-    # WALK LENGTH CURRICULUM (inherited from first policy by default)
-    # ===================================================================================
-
-    walk_length_min: Optional[int] = Field(default=None, ge=1, description="Override walk length min (default: from first policy)")
-    walk_length_max: Optional[int] = Field(default=None, ge=1, description="Override walk length max (default: from first policy)")
-    walk_length_curriculum: Optional[bool] = Field(default=None, description="Override curriculum setting (default: from first policy)")
-    walk_length_curriculum_steps: Optional[int] = Field(default=None, ge=1, description="Override curriculum steps (default: from first policy)")
-
     @model_validator(mode="after")
     def validate_weights(self) -> "MixedPolicyConfig":
         """Ensure weights sum to 1.0 and match policy count."""
@@ -179,21 +170,26 @@ class MixedPolicyConfig(BaseModel):
     # HELPER METHODS
     # ===================================================================================
 
-    def get_walk_length_min(self) -> int:
-        """Get effective walk_length_min (override or from first policy)."""
-        return self.walk_length_min if self.walk_length_min is not None else self.policies[0].walk_length_min
+    @property
+    def walk_length_min(self) -> int:
+        """Get effective walk_length_min."""
+        return min(policy.walk_length_min for policy in self.policies)
 
-    def get_walk_length_max(self) -> int:
-        """Get effective walk_length_max (override or from first policy)."""
-        return self.walk_length_max if self.walk_length_max is not None else self.policies[0].walk_length_max
+    @property
+    def walk_length_max(self) -> int:
+        """Get effective walk_length_max."""
+        return max(policy.walk_length_max for policy in self.policies)
 
-    def get_walk_length_curriculum(self) -> bool:
-        """Get effective curriculum setting (override or from first policy)."""
-        return self.walk_length_curriculum if self.walk_length_curriculum is not None else self.policies[0].walk_length_curriculum
+    @property
+    def walk_length_curriculum(self) -> bool:
+        """Get effective walk_length_curriculum."""
+        return any(policy.walk_length_curriculum for policy in self.policies)
 
-    def get_walk_length_curriculum_steps(self) -> Optional[int]:
-        """Get effective curriculum steps (override or from first policy)."""
-        return self.walk_length_curriculum_steps if self.walk_length_curriculum_steps is not None else self.policies[0].walk_length_curriculum_steps
+    @property
+    def walk_length_curriculum_steps(self) -> Optional[int]:
+        """Get effective walk_length_curriculum_steps."""
+        steps = [policy.walk_length_curriculum_steps for policy in self.policies if policy.walk_length_curriculum_steps is not None]
+        return max(steps) if steps else None
 
 
 # ===================================================================================

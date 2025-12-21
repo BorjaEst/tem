@@ -104,7 +104,6 @@ class GroundedLocInference(nn.Module):
             p_f = g_expanded[f] * x_expanded[f]
 
             # Apply activation: leaky_relu(clamp(x, -1, 1))
-            # Matches legacy f_p activation
             p_f = torch.nn.functional.leaky_relu(torch.clamp(p_f, min=-1.0, max=1.0))
 
             p.append(p_f)

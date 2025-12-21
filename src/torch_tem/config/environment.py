@@ -39,12 +39,6 @@ class EnvironmentConfig(BaseModel):
     shiny_beta: float = Field(default=1.5, ge=0, description="Inverse temperature for shiny-object action selection")
     shiny_n: int = Field(default=2, ge=0, description="Number of shiny objects placed in the arena")
     shiny_returns: int = Field(default=15, ge=0, description="Number of revisits to a shiny object after discovery")
-    shiny: dict[str, Any] = Field(default_factory=dict, description="Legacy-style shiny parameter dict used by the world object")
-
-    @computed_field(description="Grouped shiny parameters dictionary, matching legacy 'shiny' field")
-    @property
-    def shiny_dict(self) -> dict[str, Any]:
-        return {"gamma": self.shiny_gamma, "beta": self.shiny_beta, "n": self.shiny_n, "returns": self.shiny_returns}
 
     # ===================================================================================
     # DERIVED GEOMETRY (for wiring into data/architecture)

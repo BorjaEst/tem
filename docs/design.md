@@ -172,7 +172,7 @@ ModelConfig (src/torch_tem/config/__init__.py)
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 class ArchitectureConfig(BaseModel):
-    model_config = ConfigDict(strict=True, validate_assignment=True)
+    model_config = ConfigDict(strict=False, validate_assignment=True)
 
     n_x: int = Field(gt=0, description="Sensory observation dimensions")
     n_x_c: int = Field(gt=0, description="Compressed sensory dimensions")

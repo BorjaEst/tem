@@ -383,7 +383,6 @@ class WalkDataset(Dataset[WalkSample]):
             shiny_cfg = ShinyConfig(
                 n=policy_cfg.n,
                 returns=policy_cfg.returns,
-                gamma=policy_cfg.gamma,
                 beta=policy_cfg.beta,
                 min_separation=policy_cfg.min_separation,
             )

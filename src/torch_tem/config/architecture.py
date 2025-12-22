@@ -16,7 +16,7 @@ class ModelConfig(BaseModel):
     All connectivity masks and static matrices are computed from the base architectural parameters.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
     # ===================================================================================
     # BASE DIMENSIONS

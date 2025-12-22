@@ -21,7 +21,7 @@ class ShinyConfig(BaseModel):
     and goal-switching behavior (number of returns before switching).
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     # ===================================================================================
     # SHINY OBJECT PLACEMENT

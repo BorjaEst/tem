@@ -13,7 +13,7 @@ class TrainingConfig(BaseModel):
     Can be changed between training runs on the same architecture.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
     # ===================================================================================
     # TRAINING SCHEDULE

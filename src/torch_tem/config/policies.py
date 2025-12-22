@@ -25,7 +25,7 @@ class RandomPolicyConfig(BaseModel):
     ensure adequate spatial sampling.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -33,14 +33,7 @@ class RandomPolicyConfig(BaseModel):
 
     type: Literal["random"] = "random"
 
-    # ===================================================================================
-    # WALK LENGTH CURRICULUM (long walks for comprehensive exploration)
-    # ===================================================================================
-
-    walk_length_min: int = Field(default=50, ge=1, description="Minimum walk length (curriculum end target)")
-    walk_length_max: int = Field(default=300, ge=1, description="Maximum walk length (curriculum start target)")
-    walk_length_curriculum: bool = Field(default=True, description="Enable walk length curriculum")
-    walk_length_curriculum_steps: Optional[int] = Field(default=None, ge=1, description="Steps to complete curriculum (default: n_train_batches)")
+    # Note: Walk length is owned by DataModuleConfig.sequence_length.
 
 
 # ===================================================================================
@@ -56,7 +49,7 @@ class DistancePolicyConfig(BaseModel):
     Uses shorter walk lengths since optimal paths reach goals efficiently.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -72,14 +65,7 @@ class DistancePolicyConfig(BaseModel):
     goal_mode: Literal["random", "fixed"] = Field(default="random", description="Goal selection: random location per walk or fixed goals")
     n_goals: int = Field(default=1, ge=1, description="Number of goal locations (random or fixed)")
 
-    # ===================================================================================
-    # WALK LENGTH CURRICULUM (short walks - goals reached quickly)
-    # ===================================================================================
-
-    walk_length_min: int = Field(default=25, ge=1, description="Minimum walk length (curriculum end target)")
-    walk_length_max: int = Field(default=100, ge=1, description="Maximum walk length (curriculum start target)")
-    walk_length_curriculum: bool = Field(default=True, description="Enable walk length curriculum")
-    walk_length_curriculum_steps: Optional[int] = Field(default=None, ge=1, description="Steps to complete curriculum (default: n_train_batches)")
+    # Note: Walk length is owned by DataModuleConfig.sequence_length.
 
 
 # ===================================================================================
@@ -95,7 +81,7 @@ class QLearningPolicyConfig(BaseModel):
     Uses shorter walk lengths since optimal policies reach goals efficiently.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -118,14 +104,7 @@ class QLearningPolicyConfig(BaseModel):
     goal_mode: Literal["random", "fixed"] = Field(default="random", description="Goal selection: random location per walk or fixed goals")
     n_goals: int = Field(default=1, ge=1, description="Number of goal locations (random or fixed)")
 
-    # ===================================================================================
-    # WALK LENGTH CURRICULUM (short walks - goals reached quickly)
-    # ===================================================================================
-
-    walk_length_min: int = Field(default=25, ge=1, description="Minimum walk length (curriculum end target)")
-    walk_length_max: int = Field(default=100, ge=1, description="Maximum walk length (curriculum start target)")
-    walk_length_curriculum: bool = Field(default=True, description="Enable walk length curriculum")
-    walk_length_curriculum_steps: Optional[int] = Field(default=None, ge=1, description="Steps to complete curriculum (default: n_train_batches)")
+    # Note: Walk length is owned by DataModuleConfig.sequence_length.
 
 
 # ===================================================================================
@@ -137,11 +116,10 @@ class MixedPolicyConfig(BaseModel):
     """Weighted mixture of multiple policies for diverse behavior.
 
     Combines multiple policies with specified weights, sampling from each according
-    to the weight distribution. Walk length parameters can be inherited from the
-    first policy or explicitly overridden for the mixture.
+    to the weight distribution.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -166,30 +144,7 @@ class MixedPolicyConfig(BaseModel):
             raise ValueError(f"Policy weights must sum to 1.0, got {total}")
         return self
 
-    # ===================================================================================
-    # HELPER METHODS
-    # ===================================================================================
-
-    @property
-    def walk_length_min(self) -> int:
-        """Get effective walk_length_min."""
-        return min(policy.walk_length_min for policy in self.policies)
-
-    @property
-    def walk_length_max(self) -> int:
-        """Get effective walk_length_max."""
-        return max(policy.walk_length_max for policy in self.policies)
-
-    @property
-    def walk_length_curriculum(self) -> bool:
-        """Get effective walk_length_curriculum."""
-        return any(policy.walk_length_curriculum for policy in self.policies)
-
-    @property
-    def walk_length_curriculum_steps(self) -> Optional[int]:
-        """Get effective walk_length_curriculum_steps."""
-        steps = [policy.walk_length_curriculum_steps for policy in self.policies if policy.walk_length_curriculum_steps is not None]
-        return max(steps) if steps else None
+    # Note: Walk length is owned by DataModuleConfig.sequence_length.
 
 
 # ===================================================================================
@@ -201,12 +156,10 @@ class ShinyPolicyConfig(BaseModel):
     """Goal-switching policy with shiny objects for reward-driven navigation.
 
     Automatically switches between multiple goal locations (shiny objects) with
-    a lingering period at each goal. Uses distance-based or Q-learning navigation
-    between goals. Medium walk lengths accommodate multiple goal visits within
-    a single episode.
+    a lingering period at each goal.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -218,9 +171,7 @@ class ShinyPolicyConfig(BaseModel):
     # NAVIGATION BEHAVIOR
     # ===================================================================================
 
-    navigation_policy: Literal["distance", "q_learning"] = Field(default="distance", description="Policy type for navigation to shiny objects")
     beta: float = Field(default=1.5, gt=0, description="Softmax inverse temperature for action selection")
-    gamma: float = Field(default=0.7, ge=0, le=1, description="Discount factor (for Q-learning navigation)")
 
     # ===================================================================================
     # SHINY OBJECT PLACEMENT
@@ -235,13 +186,7 @@ class ShinyPolicyConfig(BaseModel):
 
     returns: int = Field(default=15, ge=1, description="Steps to linger at shiny object before switching goals")
 
-    # ===================================================================================
-    # WALK LENGTH CURRICULUM (medium walks for multiple goal visits)
-    # ===================================================================================
-
-    walk_length_max: int = Field(default=200, ge=1, description="Maximum walk length (curriculum start target)")
-    walk_length_curriculum: bool = Field(default=True, description="Enable walk length curriculum")
-    walk_length_curriculum_steps: Optional[int] = Field(default=None, ge=1, description="Steps to complete curriculum (default: n_train_batches)")
+    # Note: Walk length is owned by DataModuleConfig.sequence_length.
 
 
 # ===================================================================================

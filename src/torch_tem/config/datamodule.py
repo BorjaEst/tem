@@ -28,7 +28,7 @@ class DataModuleConfig(BaseModel):
     Defines how training/validation/test data is generated and delivered to the model.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=False)
 
     # ===================================================================================
     # ENVIRONMENT and POLICY

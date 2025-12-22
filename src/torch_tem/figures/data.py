@@ -4,7 +4,7 @@ Provides plotting utilities for environments, policies, walks, and batches.
 All functions use Protocol-based typing for flexibility and testability.
 """
 
-from typing import List, Optional, Protocol, Tuple
+from typing import Dict, List, Optional, Protocol, Tuple
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -316,6 +316,249 @@ def plot_walk_statistics(walks: List[WalkProtocol], figsize: Tuple[float, float]
 
 
 # ==============================================================================
+# Spatial Visit Visualization (Geometry-Agnostic)
+# ==============================================================================
+def plot_location_visit_map(
+    env: EnvironmentProtocol,
+    locations: Vector | List[Vector],
+    title: str = "Location Visit Map",
+    figsize: Tuple[float, float] = (10, 10),
+    show_edges: bool = True,
+    cmap: str = "viridis",
+) -> plt.Figure:
+    """Plot how often each location was visited, without assuming grid geometry.
+
+    This function uses the environment adjacency matrix to compute a 2D layout via
+    :func:`torch_tem.utils.compute_graph_layout`, then plots nodes sized/colored by
+    visit count.
+
+    Args:
+        env: Environment providing adjacency and n_locations.
+        locations: Either a single location tensor/array (e.g. [T] or [T, B] or
+            [B, T]) or a list of such sequences (e.g. multiple walks).
+        title: Plot title.
+        figsize: Figure size.
+        show_edges: If True, draw graph edges beneath the nodes.
+        cmap: Matplotlib colormap name.
+
+    Returns:
+        matplotlib Figure object.
+    """
+
+    def _to_numpy_1d(seq: Vector) -> np.ndarray:
+        if isinstance(seq, Tensor):
+            arr = seq.detach().cpu().numpy()
+        else:
+            arr = np.asarray(seq)
+        return arr.reshape(-1)
+
+    if isinstance(locations, list):
+        all_locations = np.concatenate([_to_numpy_1d(seq) for seq in locations], axis=0)
+    else:
+        all_locations = _to_numpy_1d(locations)
+
+    # Defensive: ignore invalid indices (keeps the helper robust to future envs)
+    all_locations = all_locations[(all_locations >= 0) & (all_locations < env.n_locations)]
+    counts = np.bincount(all_locations.astype(int), minlength=env.n_locations)
+
+    # Get adjacency matrix (handle both Tensor and list)
+    adj = env.adjacency
+    if isinstance(adj, list):
+        adj = torch.tensor(adj).numpy()
+    else:
+        adj = adj.numpy()
+
+    x, y = compute_graph_layout(adj, env.n_locations)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if show_edges:
+        for i in range(env.n_locations):
+            for j in range(env.n_locations):
+                if adj[i, j] > 0:
+                    ax.plot([x[i], x[j]], [y[i], y[j]], "k-", alpha=0.15, linewidth=1, zorder=1)
+
+    max_count = float(np.max(counts)) if counts.size else 0.0
+    if max_count <= 0:
+        node_sizes = np.full(env.n_locations, 200.0)
+        node_colors = np.zeros(env.n_locations)
+    else:
+        # Size scaling that stays readable across env sizes
+        node_sizes = 200.0 + 800.0 * (counts / max_count)
+        node_colors = counts
+
+    sc = ax.scatter(
+        x,
+        y,
+        s=node_sizes,
+        c=node_colors,
+        cmap=cmap,
+        edgecolors="black",
+        linewidths=1.5,
+        zorder=5,
+    )
+
+    for i in range(env.n_locations):
+        ax.text(x[i], y[i], str(i), ha="center", va="center", fontsize=8, zorder=10)
+
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    plt.colorbar(sc, ax=ax, label="Visit count")
+    plt.tight_layout()
+    return fig
+
+
+# ==============================================================================
+# Split-Level Visit Statistics (Geometry-Agnostic)
+# ==============================================================================
+def plot_split_location_visit_statistics(
+    env: EnvironmentProtocol,
+    split_locations: Dict[str, Vector | List[Vector]],
+    title: str = "Split Visitation Statistics",
+    figsize: Tuple[float, float] = (14, 10),
+) -> plt.Figure:
+    """Summarize visitation statistics across data splits (train/val/test).
+
+    This helper intentionally does not assume a grid/hex geometry. It uses only
+    location IDs and the environment's `n_locations`.
+
+    Statistics per split:
+    - total steps
+    - unique visited locations + coverage
+    - normalized entropy of visitation distribution
+    Additionally, it visualizes split overlap via Jaccard similarity.
+
+    Args:
+        env: Environment providing `n_locations`.
+        split_locations: Mapping from split name to location sequences. Each
+            value can be a single sequence (e.g. [T], [T,B], [B,T]) or a list of
+            sequences (e.g. multiple batches/walks).
+        title: Figure title.
+        figsize: Figure size.
+
+    Returns:
+        matplotlib Figure object.
+    """
+
+    def _to_numpy_1d(seq: Vector) -> np.ndarray:
+        if isinstance(seq, Tensor):
+            arr = seq.detach().cpu().numpy()
+        else:
+            arr = np.asarray(seq)
+        return arr.reshape(-1)
+
+    def _flatten(value: Vector | List[Vector]) -> np.ndarray:
+        if isinstance(value, list):
+            if len(value) == 0:
+                return np.asarray([], dtype=int)
+            arr = np.concatenate([_to_numpy_1d(v) for v in value], axis=0)
+        else:
+            arr = _to_numpy_1d(value)
+        if arr.size == 0:
+            return np.asarray([], dtype=int)
+        arr = arr[(arr >= 0) & (arr < env.n_locations)]
+        return arr.astype(int, copy=False)
+
+    def _normalized_entropy_from_counts(counts: np.ndarray) -> float:
+        total = float(np.sum(counts))
+        if total <= 0.0:
+            return 0.0
+        if env.n_locations <= 1:
+            return 0.0
+        p = counts / total
+        p = p[p > 0]
+        h = -float(np.sum(p * np.log(p)))
+        return float(h / np.log(env.n_locations))
+
+    split_names = list(split_locations.keys())
+    if len(split_names) == 0:
+        raise ValueError("split_locations must contain at least one split")
+
+    # Compute per-split distributions
+    counts_by_split: Dict[str, np.ndarray] = {}
+    steps_by_split: Dict[str, int] = {}
+    unique_by_split: Dict[str, int] = {}
+    coverage_by_split: Dict[str, float] = {}
+    entropy_by_split: Dict[str, float] = {}
+    visited_sets: Dict[str, set[int]] = {}
+
+    for split in split_names:
+        arr = _flatten(split_locations[split])
+        counts = np.bincount(arr, minlength=env.n_locations) if arr.size else np.zeros(env.n_locations, dtype=int)
+        steps = int(arr.size)
+        unique = int(np.count_nonzero(counts))
+
+        counts_by_split[split] = counts
+        steps_by_split[split] = steps
+        unique_by_split[split] = unique
+        coverage_by_split[split] = float(unique / env.n_locations) if env.n_locations > 0 else 0.0
+        entropy_by_split[split] = _normalized_entropy_from_counts(counts)
+        visited_sets[split] = set(np.nonzero(counts)[0].tolist())
+
+    # Jaccard overlap matrix
+    n = len(split_names)
+    jaccard = np.zeros((n, n), dtype=float)
+    for i, a in enumerate(split_names):
+        for j, b in enumerate(split_names):
+            sa = visited_sets[a]
+            sb = visited_sets[b]
+            union = sa | sb
+            if len(union) == 0:
+                jaccard[i, j] = 0.0
+            else:
+                jaccard[i, j] = len(sa & sb) / len(union)
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    # Plot 1: total steps
+    steps_vals = [steps_by_split[s] for s in split_names]
+    axes[0, 0].bar(split_names, steps_vals, edgecolor="black", alpha=0.75)
+    axes[0, 0].set_title("Total Steps", fontsize=13, fontweight="bold")
+    axes[0, 0].set_ylabel("# steps")
+    axes[0, 0].grid(True, alpha=0.25, axis="y")
+
+    # Plot 2: unique locations + coverage
+    uniq_vals = [unique_by_split[s] for s in split_names]
+    bars = axes[0, 1].bar(split_names, uniq_vals, edgecolor="black", alpha=0.75, color="tab:green")
+    axes[0, 1].set_title("Unique Locations (Coverage)", fontsize=13, fontweight="bold")
+    axes[0, 1].set_ylabel("# unique locations")
+    axes[0, 1].grid(True, alpha=0.25, axis="y")
+    for bar, split in zip(bars, split_names):
+        cov = 100.0 * coverage_by_split[split]
+        axes[0, 1].text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(1.0, 0.02 * max(uniq_vals) if uniq_vals else 1.0),
+            f"{cov:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
+
+    # Plot 3: normalized entropy
+    ent_vals = [entropy_by_split[s] for s in split_names]
+    axes[1, 0].bar(split_names, ent_vals, edgecolor="black", alpha=0.75, color="tab:purple")
+    axes[1, 0].set_title("Visitation Entropy (Normalized)", fontsize=13, fontweight="bold")
+    axes[1, 0].set_ylabel("entropy (0–1)")
+    axes[1, 0].set_ylim(0.0, 1.05)
+    axes[1, 0].grid(True, alpha=0.25, axis="y")
+
+    # Plot 4: overlap heatmap
+    im = axes[1, 1].imshow(jaccard, vmin=0.0, vmax=1.0, cmap="Blues")
+    axes[1, 1].set_title("Split Overlap (Jaccard)", fontsize=13, fontweight="bold")
+    axes[1, 1].set_xticks(range(n), labels=split_names, rotation=45, ha="right")
+    axes[1, 1].set_yticks(range(n), labels=split_names)
+    for i in range(n):
+        for j in range(n):
+            axes[1, 1].text(j, i, f"{jaccard[i, j]:.2f}", ha="center", va="center", fontsize=9)
+    plt.colorbar(im, ax=axes[1, 1], fraction=0.046, pad=0.04, label="Jaccard")
+
+    fig.suptitle(title, fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    return fig
+
+
+# ==============================================================================
 # Batch Tensor Visualization
 # ==============================================================================
 def plot_batch_tensors(obs: Vector, actions: Vector, locations: Vector, figsize: Tuple[float, float] = (14, 10), max_walks: int = 5) -> plt.Figure:
@@ -377,3 +620,40 @@ def plot_batch_tensors(obs: Vector, actions: Vector, locations: Vector, figsize:
 
     plt.tight_layout()
     return fig
+
+
+def plot_batch_tensors_time_major(
+    obs: Vector,
+    actions: Vector,
+    locations: Vector,
+    figsize: Tuple[float, float] = (14, 10),
+    max_walks: int = 5,
+) -> plt.Figure:
+    """Wrapper for :func:`plot_batch_tensors` for time-major batches.
+
+    Args:
+        obs: Observation tensor shaped [T, B, n_observations].
+        actions: Action tensor shaped [T, B].
+        locations: Location tensor shaped [T, B].
+        figsize: Figure size.
+        max_walks: Maximum walks to overlay.
+
+    Returns:
+        matplotlib Figure object.
+    """
+    if isinstance(obs, Tensor) and obs.ndim == 3:
+        obs_batched = obs.transpose(0, 1)
+    else:
+        raise ValueError(f"Expected obs with shape [T, B, n_x], got {getattr(obs, 'shape', None)}")
+
+    if isinstance(actions, Tensor) and actions.ndim == 2:
+        actions_batched = actions.transpose(0, 1)
+    else:
+        raise ValueError(f"Expected actions with shape [T, B], got {getattr(actions, 'shape', None)}")
+
+    if isinstance(locations, Tensor) and locations.ndim == 2:
+        locations_batched = locations.transpose(0, 1)
+    else:
+        raise ValueError(f"Expected locations with shape [T, B], got {getattr(locations, 'shape', None)}")
+
+    return plot_batch_tensors(obs_batched, actions_batched, locations_batched, figsize=figsize, max_walks=max_walks)

@@ -129,7 +129,7 @@ if __name__ == "__main__":
     print("Phase 1: Setting up environment and data generation...")
 
     # Create environment configuration
-    env_config = EnvironmentConfig.model_validate(config.model_dump(), extra="ignore")
+    env_config = EnvironmentConfig.model_validate(config.model_dump(), extra="forbid")
     env = data.Environment(env_config)
     env.validate()
     print(f"  Environment: {env.n_locations} locations, {env.n_observations} observations")

@@ -11,7 +11,7 @@ class EnvironmentConfig(BaseModel):
     This defines the task distribution the model is trained on but does not affect model structure.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     # ===================================================================================
     # GEOMETRY / GRID LAYOUT

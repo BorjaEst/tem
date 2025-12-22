@@ -59,9 +59,13 @@ class TEMDataModule(L.LightningDataModule):
         Args:
             stage: One of `None`, "fit", "validate", or "test".
         """
-        # Build runtime objects (once per datamodule instance).
-        if self.environment is None or self.policy_gen is None or self.walk_gen is None:
+        # Build environment (once per datamodule instance).
+        if self.environment is None:
             self.environment = Environment(self.config.environment)
+            self.environment.validate()
+
+        # Build policy and walk generators (once per datamodule instance).
+        if self.policy_gen is None or self.walk_gen is None:
             self.policy_gen = PolicyGenerator(self.environment)
             self.walk_gen = WalkGenerator(self.environment, repeat_bias=self.config.environment.explore_bias)
 

@@ -59,7 +59,7 @@ class ExampleConfig(BaseSettings):
     save_plots: bool = Field(default=True, description="Save plots to output directory")
 
     # Demo controls
-    n_demo_walks: int = Field(default=5, ge=1, description="Number of single walks to generate for trajectory plots")
+    n_demo_walks: int = Field(default=2, ge=1, description="Number of single walks to generate for trajectory plots")
 
     @field_validator("output_dir")
     @classmethod

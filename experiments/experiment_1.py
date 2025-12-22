@@ -90,8 +90,8 @@ class ExperimentConfig(BaseSettings):
     save_plots: bool = Field(default=True, description="Save plots to output directory")
 
     # Debugging and monitoring
-    log_every_n_steps: int = Field(default=10, ge=1, description="Logging frequency")
-    val_check_interval: int = Field(default=50, ge=1, description="Validation check interval (number of batches)")
+    log_every_n_steps: int = Field(default=12, ge=1, description="Logging frequency")
+    val_check_interval: int = Field(default=12, ge=1, description="Validation check interval (number of batches)")
 
     @field_validator("checkpoint_dir", "output_dir")
     @classmethod
@@ -107,6 +107,7 @@ class ExperimentConfig(BaseSettings):
 if __name__ == "__main__":
     """Run complete TEM training pipeline with visualizations."""
     config = ExperimentConfig()
+    config_kwargs = config.model_dump(mode="python")
 
     print("=" * 80)
     print("TEM Training Example")
@@ -128,26 +129,19 @@ if __name__ == "__main__":
     print("Phase 1: Setting up environment and data generation...")
 
     # Create environment configuration
-    env_config = EnvironmentConfig(
-        width=config.grid_size,
-        height=config.grid_size,
-        observation_mode=config.observation_mode,
-        shiny_rate=config.shiny_rate,
-    )
-
-    # Create environment
+    env_config = EnvironmentConfig.model_validate(config.model_dump(), extra="ignore")
     env = data.Environment(env_config)
     env.validate()
     print(f"  Environment: {env.n_locations} locations, {env.n_observations} observations")
 
-    # Create data module
-    datamodule = TEMDataModule(
-        env=env,
+    # Create data module (full-walk, time-major batches)
+    dm_config = DataModuleConfig(
+        environment=env_config,
         batch_size=config.batch_size,
-        walk_length=(config.walk_length_min + config.walk_length_max) // 2,  # Use average for simplicity
-        env_config=env_config,
+        sequence_length=(config.walk_length_min + config.walk_length_max) // 2,  # Keep prior behavior
     )
-    print(f"  DataModule: batch_size={config.batch_size}, walk_length={datamodule.walk_length}")
+    datamodule = TEMDataModule(dm_config, env=env)
+    print(f"  DataModule: batch_size={dm_config.batch_size}, walk_length={dm_config.sequence_length}")
 
     # =========================================================================
     # PHASE 2: Model Initialization
@@ -185,11 +179,7 @@ if __name__ == "__main__":
 
     # Create training configuration
     training_config = TrainingConfig(
-        train_it=config.max_steps,
         n_rollout=config.n_rollout,
-        batch_size=config.batch_size,
-        walk_it_min=config.walk_length_min,
-        walk_it_max=config.walk_length_max,
         lr_max=config.lr_max,
         lr_decay_rate=config.lr_decay_rate,
         lr_decay_steps=config.lr_decay_steps,
@@ -201,7 +191,7 @@ if __name__ == "__main__":
     # Wrap in Lightning module
     lightning_module = TEMLightningModule(tem_model, training_config)
     print(f"  Training configuration:")
-    print(f"    - Max steps: {training_config.train_it}")
+    print(f"    - Max steps: {config.max_steps}")
     print(f"    - BPTT rollout: {training_config.n_rollout}")
     print(f"    - Learning rate: {training_config.lr_max}")
     print(f"    - LR decay: {training_config.lr_decay_rate} every {training_config.lr_decay_steps} steps")
@@ -219,27 +209,35 @@ if __name__ == "__main__":
     callbacks = [
         L.pytorch.callbacks.ModelCheckpoint(
             dirpath=config.checkpoint_dir,
-            filename="tem-{epoch:02d}-{val/loss:.4f}",
+            filename="tem-step={step:06d}-train_loss={train/loss:.4f}",
             save_top_k=3,
-            monitor="val/loss",
+            monitor="train/loss",
             mode="min",
+            every_n_train_steps=100,  # Save checkpoint every 50 training steps
         ),
         L.pytorch.callbacks.LearningRateMonitor(logging_interval="step"),
     ]
 
+    # Calculate expected batches (each batch processes walk_length/n_rollout optimizer steps)
+    # With manual optimization, max_steps counts optimizer steps, not batches
+    steps_per_batch = (datamodule.walk_length + config.n_rollout - 1) // config.n_rollout  # Ceiling division
+    target_batches = (config.max_steps + steps_per_batch - 1) // steps_per_batch  # Ceiling division
+
     # Create trainer
     trainer = L.Trainer(
-        max_steps=config.max_steps,
+        max_epochs=1,  # Single epoch with limit_train_batches
+        limit_train_batches=target_batches,  # Control actual training duration
         logger=logger,
         callbacks=callbacks,
         log_every_n_steps=config.log_every_n_steps,
         val_check_interval=config.val_check_interval,
+        num_sanity_val_steps=0,  # Skip sanity validation to prevent early stopping
         enable_progress_bar=True,
         enable_model_summary=True,
         accelerator="auto",  # Use GPU if available
         devices=1,
     )
-    print(f"  Trainer ready: max_steps={config.max_steps}")
+    print(f"  Trainer configured for approx. {target_batches} batches (~{config.max_steps} steps)")
 
     # =========================================================================
     # PHASE 5: Training

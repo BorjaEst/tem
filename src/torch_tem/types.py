@@ -40,7 +40,7 @@ The type system follows the TEM architecture:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple, TypeAlias
 
 from torch import Tensor
 
@@ -284,6 +284,35 @@ class Trajectory:
 # =============================================================================
 # Batch Processing
 # =============================================================================
+
+WalkSample: TypeAlias = Tuple[Vector, Vector, Vector]
+"""Single unbatched walk sample.
+
+This is the item-level return type used by the map-style walk dataset.
+
+Tuple elements:
+    observations: Float tensor of shape (T, n_x).
+    actions: Integer tensor of shape (T,).
+    locations: Integer tensor of shape (T,).
+
+Notes:
+    - The TEM DataModule collates a list of `WalkSample` into a time-major `WalkBatch`.
+    - The time dimension is always first (time-major), which simplifies truncated BPTT.
+"""
+
+WalkBatch: TypeAlias = Tuple[Tensor, Tensor, Tensor]
+"""Single time-major batch of walks.
+
+Tuple elements:
+    observations: Float tensor of shape (T, B, n_x).
+    actions: Integer tensor of shape (T, B).
+    locations: Integer tensor of shape (T, B).
+
+Notes:
+    `locations` is auxiliary and may be zeroed out by the dataloader's collate
+    function when location labels are not required.
+"""
+
 
 BatchedCode = Vector
 """A batched multi-scale code with shape (batch_size, n_cells).

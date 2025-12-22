@@ -1,8 +1,21 @@
-"""DataModule configuration for the Temporal Experience Model (TEM)."""
+"""DataModule configuration for the Temporal Experience Model (TEM).
+
+This config is the *single source of truth* for data shapes and dataloader
+behavior.
+
+In particular, when training TEM with (truncated) BPTT, the canonical batch
+layout is time-major full walks:
+
+- observations: float32 tensor [T, B, n_x]
+- actions: int64 tensor [T, B]
+- locations: int64 tensor [T, B] (auxiliary)
+
+The walk length T is defined solely by :attr:`sequence_length`.
+"""
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from torch_tem.config.environment import EnvironmentConfig
 from torch_tem.config.policies import PolicyConfig, RandomPolicyConfig
@@ -25,21 +38,11 @@ class DataModuleConfig(BaseModel):
     policy: PolicyConfig = Field(default_factory=RandomPolicyConfig, description="Action selection policy for walk generation")
 
     # ===================================================================================
-    # MULTI-ENVIRONMENT DIVERSITY
+    # SEQUENCE SHAPE (BPTT)
     # ===================================================================================
 
-    n_environments: int = Field(default=1, ge=1, description="Number of distinct environments to train on")
-    environments_per_batch: int = Field(default=1, ge=1, description="Number of different environments per batch (enables multi-env batches)")
-    environment_regeneration_interval: Optional[int] = Field(default=None, ge=1, description="Regenerate environments every N batches (None = never)")
-
-    @model_validator(mode="after")
-    def validate_environment_batching(self) -> "DataModuleConfig":
-        """Ensure environments_per_batch doesn't exceed batch_size or n_environments."""
-        if self.environments_per_batch > self.batch_size:
-            raise ValueError(f"environments_per_batch ({self.environments_per_batch}) cannot exceed batch_size ({self.batch_size})")
-        if self.environments_per_batch > self.n_environments:
-            raise ValueError(f"environments_per_batch ({self.environments_per_batch}) cannot exceed n_environments ({self.n_environments})")
-        return self
+    sequence_length: int = Field(default=100, ge=1, description="Number of timesteps per walk (T). Sole source of sequence length for the DataModule.")
+    return_locations: bool = Field(default=True, description="If True, include location IDs as third element of the batch tuple.")
 
     # ===================================================================================
     # DATA SPLITS
@@ -58,22 +61,3 @@ class DataModuleConfig(BaseModel):
     num_workers: int = Field(default=0, ge=0, description="Number of DataLoader worker processes (0 = main process only)")
     pin_memory: bool = Field(default=False, description="Pin memory for faster GPU transfer")
     drop_last: bool = Field(default=False, description="Drop last incomplete batch")
-
-    # ===================================================================================
-    # COMPUTED FIELDS
-    # ===================================================================================
-
-    @computed_field(description="Walk length curriculum window width (20% of range)")
-    @property
-    def walk_length_window(self) -> float:
-        """Curriculum sampling window width (from policy config)."""
-        walk_length_min = self.policy.walk_length_min
-        walk_length_max = self.policy.walk_length_max
-        return 0.2 * (walk_length_max - walk_length_min)
-
-    @computed_field(description="Current walk length for a given training iteration")
-    @property
-    def curriculum_steps(self) -> int:
-        """Total steps for curriculum completion (from policy config)."""
-        policy_steps = self.policy.walk_length_curriculum_steps
-        return policy_steps if policy_steps is not None else self.n_train_batches

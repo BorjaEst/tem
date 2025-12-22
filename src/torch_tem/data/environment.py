@@ -162,14 +162,7 @@ class Environment:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
             actions.append(Action(id=action_id_offset + 3, probability=base_probability, transition=transition))
 
-            locations.append(
-                Location(
-                    id=loc_id,
-                    observation=observations[loc_id],
-                    actions=actions,
-                    shiny=None,
-                )
-            )
+            locations.append(Location(id=loc_id, observation=observations[loc_id], actions=actions, shiny=None))
 
         # Store basic attributes
         self.n_locations = n_locations

@@ -1,296 +1,124 @@
-"""PyTorch Lightning DataModule for TEM training."""
+"""PyTorch Lightning DataModule for TEM training.
 
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, List, Optional, Protocol, Tuple, Literal, Union
+This module generates synthetic walk data on the fly and yields *time-major*
+full-walk tensors suitable for manual truncated BPTT in the Lightning module.
+
+Batch contract (time-major):
+    - observations: float32 [T, B, n_x]
+    - actions: int64 [T, B]
+    - locations: int64 [T, B] (auxiliary)
+"""
+
+import functools
+from typing import Optional
 
 import lightning as L
-import torch
-from torch import Tensor
-from torch.utils.data import DataLoader, Dataset, IterableDataset
+from torch.utils.data import DataLoader
 
-from torch_tem.config import EnvironmentConfig
-from torch_tem.data.environment import Environment, Location
+from torch_tem.config.datamodule import DataModuleConfig
+from torch_tem.data.environment import Environment
 from torch_tem.data.policies import PolicyGenerator
-from torch_tem.data.shiny import ShinyConfig, ShinyEnvironmentBuilder
-from torch_tem.data.walks import Walk, WalkGenerator
-from torch_tem.types import Vector
-
-
-class TEMDataParams(Protocol):
-    """Protocol defining parameters for TEM DataModule configuration."""
-    
-    env: Environment
-    batch_size: int
-    walk_length: int
-    env_config: Optional[EnvironmentConfig]
-    shiny_config: Optional[ShinyConfig]
-    policy_type: Literal["random", "distance", "q_learning"]
-    repeat_bias: float
-    num_workers: int
-    pin_memory: bool
-
-
-@dataclass
-class TEMDataParamsImpl:
-    """Concrete implementation of TEMDataParams protocol.
-    
-    This class can be instantiated directly or created from a DataModuleConfig.
-    """
-    
-    env: Environment
-    batch_size: int
-    walk_length: int
-    env_config: Optional[EnvironmentConfig] = None
-    shiny_config: Optional[ShinyConfig] = None
-    policy_type: Literal["random", "distance", "q_learning"] = "random"
-    repeat_bias: float = 2.0
-    num_workers: int = 0
-    pin_memory: bool = False
-
-    @classmethod
-    def from_config(
-        cls,
-        env: Environment,
-        datamodule_config,
-        env_config: Optional[EnvironmentConfig] = None,
-        shiny_config: Optional[ShinyConfig] = None,
-    ) -> "TEMDataParamsImpl":
-        """Create from DataModuleConfig.
-        
-        Args:
-            env: Environment instance
-            datamodule_config: DataModuleConfig instance
-            env_config: Optional environment configuration
-            shiny_config: Optional shiny configuration
-            
-        Returns:
-            TEMDataParamsImpl instance
-        """
-        return cls(
-            env=env,
-            batch_size=datamodule_config.batch_size,
-            walk_length=datamodule_config.walk_length,
-            env_config=env_config,
-            shiny_config=shiny_config,
-            policy_type=datamodule_config.policy_type,
-            repeat_bias=datamodule_config.repeat_bias,
-            num_workers=datamodule_config.num_workers,
-            pin_memory=datamodule_config.pin_memory,
-        )
-
-
-class InfiniteWalkDataset(IterableDataset):
-    """Infinite dataset that generates walks on-demand.
-    
-    Each iteration generates a fresh batch of walks from the environment,
-    supporting TEM's infinite training paradigm.
-    """
-
-    def __init__(
-        self,
-        walk_generator: WalkGenerator,
-        policy: List[Location],
-        batch_size: int,
-        walk_length: int,
-        shiny_locations: Optional[List[int]] = None,
-        shiny_policies: Optional[List[List[Location]]] = None,
-        shiny_returns: int = 5,
-    ):
-        """Initialize infinite walk dataset.
-        
-        Args:
-            walk_generator: WalkGenerator instance
-            policy: Action policy for each location
-            batch_size: Walks per batch
-            walk_length: Steps per walk
-            shiny_locations: Optional shiny object locations for goal-directed walks
-            shiny_policies: Optional policies for shiny object navigation
-            shiny_returns: Steps to linger at shiny objects before switching goals
-        """
-        super().__init__()
-        self.walk_gen = walk_generator
-        self.policy = policy
-        self.batch_size = batch_size
-        self.walk_length = walk_length
-        self.shiny_locations = shiny_locations
-        self.shiny_policies = shiny_policies
-        self.shiny_returns = shiny_returns
-
-    def __iter__(self) -> Iterator[Tuple[Tensor, Tensor, Tensor]]:
-        """Generate infinite batches of walks."""
-        while True:
-            # Generate walks based on mode
-            if self.shiny_locations is not None and self.shiny_policies is not None:
-                walks = self.walk_gen.generate_shiny_walks(
-                    n_walks=self.batch_size,
-                    walk_length=self.walk_length,
-                    shiny_locations=self.shiny_locations,
-                    shiny_policies=self.shiny_policies,
-                    returns=self.shiny_returns,
-                )
-            else:
-                walks = self.walk_gen.generate_walks(
-                    n_walks=self.batch_size,
-                    walk_length=self.walk_length,
-                    policy=self.policy,
-                )
-
-            # Batch and yield
-            yield self.walk_gen.batch_walks(walks)
+from torch_tem.data.walks import WalkDataset, WalkGenerator, collate_walk_samples
 
 
 class TEMDataModule(L.LightningDataModule):
-    """PyTorch Lightning DataModule for TEM training with infinite walk generation.
-    
-    Unlike traditional DataModules with fixed train/val/test splits, TEMDataModule
-    generates walks on-demand infinitely, supporting TEM's training paradigm where
-    each batch is a fresh sample from the environment.
-    
-    Supports:
-    - Random exploration with configurable repeat bias
-    - Multiple policy types (random, distance-based, Q-learning)
-    - Shiny object goal-directed navigation
-    - Curriculum learning through dynamic walk lengths
+    """Lightning DataModule that yields time-major full-walk batches.
+
+    The DataLoader returns tuples `(observations, actions, locations)` with the
+    following shapes:
+
+    - observations: float32 tensor of shape (T, B, n_x)
+    - actions: int64 tensor of shape (T, B)
+    - locations: int64 tensor of shape (T, B) (auxiliary)
+
+    Notes:
+        - The walk length `T` is determined solely by `config.sequence_length`.
+        - Truncated BPTT chunking (TBPTT) is performed in the LightningModule,
+          not in the DataModule.
+        - Epoch sizing is controlled by `n_*_batches`: the dataset length is
+          `n_batches * batch_size`, so the DataLoader produces exactly
+          `n_batches` batches (assuming `batch_size` is unchanged).
     """
 
-    def __init__(self, params: TEMDataParams):
-        """Initialize TEM DataModule.
-        
+    def __init__(self, config: DataModuleConfig):
+        """Initialize the DataModule.
+
         Args:
-            params: TEMDataParams protocol with all configuration parameters
+            config: Data generation and dataloader configuration.
         """
         super().__init__()
-        self.params = params
+        self.config = config
+        self.environment: Optional[Environment] = None
+        self.policy_gen: Optional[PolicyGenerator] = None
+        self.walk_gen: Optional[WalkGenerator] = None
+        self._datasets: dict[str, WalkDataset] = {}
 
-        # Initialize generators
-        self.walk_gen = WalkGenerator(
-            params.env, 
-            repeat_bias=params.repeat_bias, 
-            env_config=params.env_config
-        )
-        self.policy_gen = PolicyGenerator(params.env)
+    def setup(self, stage: Optional[str] = None) -> None:
+        """Build runtime objects and create datasets for the given stage.
 
-        # Generate policy based on type
-        if params.policy_type == "random":
-            self.policy = self.policy_gen.random_policy()
-        elif params.policy_type == "distance":
-            # Distance-based policy requires a goal location
-            # Use center of environment as default goal
-            goal_location = params.env.n_locations // 2
-            self.policy = self.policy_gen.distance_policy(goal_location)
-        elif params.policy_type == "q_learning":
-            # Q-learning policy requires reward locations
-            # Use shiny locations if available, otherwise use random location
-            if params.shiny_config is not None:
-                reward_locations = params.shiny_config.shiny_locations
-            else:
-                reward_locations = [params.env.n_locations // 2]
-            self.policy = self.policy_gen.q_learning_policy(reward_locations)
-        else:
-            raise ValueError(f"Unknown policy type: {params.policy_type}")
-
-        # Setup shiny configuration if provided
-        self.shiny_locations = None
-        self.shiny_policies = None
-        if params.shiny_config is not None:
-            self.shiny_locations = params.shiny_config.shiny_locations
-            # Generate goal-directed policies for each shiny object
-            self.shiny_policies = [
-                self.policy_gen.distance_policy(shiny_loc) 
-                for shiny_loc in params.shiny_config.shiny_locations
-            ]
-
-    def generate_batch(self) -> Tuple[Tensor, Tensor, Tensor]:
-        """Generate single batch of walks.
-        
-        Returns:
-            observations: [walk_length, batch_size, n_observations]
-            actions: [walk_length, batch_size]
-            locations: [walk_length, batch_size]
+        Args:
+            stage: One of `None`, "fit", "validate", or "test".
         """
-        if self.shiny_locations is not None and self.shiny_policies is not None:
-            walks = self.walk_gen.generate_shiny_walks(
-                n_walks=self.params.batch_size,
-                walk_length=self.params.walk_length,
-                shiny_locations=self.shiny_locations,
-                shiny_policies=self.shiny_policies,
-                returns=self.params.shiny_config.shiny_returns if self.params.shiny_config else 5,
-            )
-        else:
-            walks = self.walk_gen.generate_walks(
-                n_walks=self.params.batch_size,
-                walk_length=self.params.walk_length,
-                policy=self.policy,
-            )
+        # Build runtime objects (once per datamodule instance).
+        if self.environment is None or self.policy_gen is None or self.walk_gen is None:
+            self.environment = Environment(self.config.environment)
+            self.policy_gen = PolicyGenerator(self.environment)
+            self.walk_gen = WalkGenerator(self.environment, repeat_bias=self.config.environment.explore_bias)
 
-        return self.walk_gen.batch_walks(walks)
+        if stage in (None, "fit"):
+            self._datasets["fit"] = self._make_dataset(n_batches=self.config.n_train_batches)
+
+        if stage in (None, "fit", "validate"):
+            self._datasets["validate"] = self._make_dataset(n_batches=self.config.n_val_batches)
+
+        if stage in (None, "test"):
+            self._datasets["test"] = self._make_dataset(n_batches=self.config.n_test_batches)
+
+    def _make_dataset(self, n_batches: int) -> WalkDataset:
+        """Create a `WalkDataset` sized to yield exactly `n_batches` batches.
+
+        Args:
+            n_batches: Number of DataLoader batches to produce.
+
+        Returns:
+            A `WalkDataset` exposing `n_batches * batch_size` items.
+        """
+        n_items = n_batches * self.config.batch_size
+        return WalkDataset(n_items, self.environment, self.policy_gen, self.walk_gen, params=self.config)
 
     def train_dataloader(self) -> DataLoader:
-        """Create infinite training dataloader.
-        
-        Returns:
-            DataLoader that generates walks infinitely
-        """
-        dataset = InfiniteWalkDataset(
-            walk_generator=self.walk_gen,
-            policy=self.policy,
-            batch_size=self.params.batch_size,
-            walk_length=self.params.walk_length,
-            shiny_locations=self.shiny_locations,
-            shiny_policies=self.shiny_policies,
-            shiny_returns=self.params.shiny_config.shiny_returns if self.params.shiny_config else 5,
-        )
-
-        return DataLoader(
-            dataset=dataset,
-            batch_size=None,  # Batching handled by dataset
-            num_workers=self.params.num_workers,
-            pin_memory=self.params.pin_memory,
-        )
+        """Return the training DataLoader."""
+        return self._dataloader_for("fit")
 
     def val_dataloader(self) -> DataLoader:
-        """Create validation dataloader.
-        
-        For reproducible validation, you may want to set a fixed random seed
-        before calling this method.
-        
-        Returns:
-            DataLoader for validation (also infinite)
-        """
-        return self.train_dataloader()
+        """Return the validation DataLoader."""
+        return self._dataloader_for("validate")
 
     def test_dataloader(self) -> DataLoader:
-        """Create test dataloader.
-        
+        """Return the test DataLoader."""
+        return self._dataloader_for("test")
+
+    def _dataloader_for(self, stage: str) -> DataLoader:
+        """Create a DataLoader for a previously created dataset stage.
+
+        Args:
+            stage: Dataset stage key ("fit", "validate", "test").
+
         Returns:
-            DataLoader for testing (also infinite)
-        """
-        return self.train_dataloader()
+            A PyTorch DataLoader yielding time-major full-walk batches.
 
-    def update_walk_length(self, new_length: int):
-        """Update walk length for curriculum learning.
-        
-        Args:
-            new_length: New walk length for future batches
+        Raises:
+            RuntimeError: If `setup()` has not been called for the requested stage.
         """
-        self.params.walk_length = new_length
+        dataset = self._datasets.get(stage)
+        if dataset is None:
+            raise RuntimeError(f"DataModule not set up for stage '{stage}'. Call setup() first.")
 
-    def update_policy(self, new_policy_type: Literal["random", "distance", "q_learning"], **kwargs):
-        """Update policy during training.
-        
-        Args:
-            new_policy_type: New policy type
-            **kwargs: Additional arguments for policy generation (e.g., goal_location for distance)
-        """
-        self.params.policy_type = new_policy_type
-
-        if new_policy_type == "random":
-            self.policy = self.policy_gen.random_policy()
-        elif new_policy_type == "distance":
-            goal_location = kwargs.get("goal_location", self.params.env.n_locations // 2)
-            self.policy = self.policy_gen.distance_policy(goal_location)
-        elif new_policy_type == "q_learning":
-            reward_locations = kwargs.get("reward_locations", [self.params.env.n_locations // 2])
-            self.policy = self.policy_gen.q_learning_policy(reward_locations)
-        else:
-            raise ValueError(f"Unknown policy type: {new_policy_type}")
+        return DataLoader(
+            dataset,
+            batch_size=self.config.batch_size,
+            collate_fn=functools.partial(collate_walk_samples, return_locations=self.config.return_locations),
+            num_workers=self.config.num_workers,
+            pin_memory=self.config.pin_memory,
+            drop_last=self.config.drop_last,
+        )

@@ -124,13 +124,7 @@ def _create_training_config(params: Dict[str, Any]) -> TrainingConfig:
     """Extract training configuration from legacy params."""
     return TrainingConfig(
         # Training schedule
-        train_it=params["train_it"],
         n_rollout=params["n_rollout"],
-        batch_size=params["batch_size"],
-        # Walk length curriculum
-        walk_it_min=params["walk_it_min"],
-        walk_it_max=params["walk_it_max"],
-        # walk_it_window is computed property in TrainingConfig
         # Loss weights (base values before curriculum)
         loss_weights_x=params["loss_weights_x"],
         loss_weights_p=params["loss_weights_p"],

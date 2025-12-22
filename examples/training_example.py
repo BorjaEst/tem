@@ -247,14 +247,14 @@ if __name__ == "__main__":
     env.validate()
     print(f"  Environment: {env.n_locations} locations, {env.n_observations} observations")
 
-    # Create data module
-    datamodule = TEMDataModule(
-        env=env,
+    # Create data module (full-walk, time-major batches)
+    dm_config = DataModuleConfig(
+        environment=env_config,
         batch_size=config.batch_size,
-        walk_length=(config.walk_length_min + config.walk_length_max) // 2,  # Use average for simplicity
-        env_config=env_config,
+        sequence_length=(config.walk_length_min + config.walk_length_max) // 2,  # Keep prior behavior
     )
-    print(f"  DataModule: batch_size={config.batch_size}, walk_length={datamodule.walk_length}")
+    datamodule = TEMDataModule(dm_config, env=env)
+    print(f"  DataModule: batch_size={dm_config.batch_size}, walk_length={dm_config.sequence_length}")
 
     # =========================================================================
     # PHASE 2: Model Initialization
@@ -292,11 +292,7 @@ if __name__ == "__main__":
 
     # Create training configuration
     training_config = TrainingConfig(
-        train_it=config.max_steps,
         n_rollout=config.n_rollout,
-        batch_size=config.batch_size,
-        walk_it_min=config.walk_length_min,
-        walk_it_max=config.walk_length_max,
         lr_max=config.lr_max,
         lr_decay_rate=config.lr_decay_rate,
         lr_decay_steps=config.lr_decay_steps,
@@ -308,7 +304,7 @@ if __name__ == "__main__":
     # Wrap in Lightning module
     lightning_module = TEMLightningModule(tem_model, training_config)
     print(f"  Training configuration:")
-    print(f"    - Max steps: {training_config.train_it}")
+    print(f"    - Max steps: {config.max_steps}")
     print(f"    - BPTT rollout: {training_config.n_rollout}")
     print(f"    - Learning rate: {training_config.lr_max}")
     print(f"    - LR decay: {training_config.lr_decay_rate} every {training_config.lr_decay_steps} steps")

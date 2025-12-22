@@ -19,9 +19,7 @@ class TrainingConfig(BaseModel):
     # TRAINING SCHEDULE
     # ===================================================================================
 
-    train_it: int = Field(default=20000, ge=1, description="Number of training walks (environments × walks) to generate")
-    n_rollout: int = Field(default=20, ge=1, description="Unroll length for BPTT (steps per optimisation step)")
-    batch_size: int = Field(default=16, ge=1, description="Number of walks processed in parallel per optimisation step")
+    n_rollout: int = Field(default=20, ge=1, description="Unroll length for BPTT (timesteps per optimisation step)")
 
     # ===================================================================================
     # LEARNING RATE SCHEDULE

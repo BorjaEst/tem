@@ -90,10 +90,8 @@ if __name__ == "__main__":
     policy = policies[config.policy_type]
     walks = walk_gen.generate_walks(config.n_walks, config.walk_length, policy)
 
-    # DataModule and batch generation
-    shiny_config = data.ShinyConfig.from_environment_config(environment_config, min_separation=config.shiny_separation)
-    dm = data.TEMDataModule(env=env, batch_size=config.n_walks, walk_length=config.walk_length, shiny_config=shiny_config, env_config=environment_config)
-    obs, actions, locations = dm.generate_batch()
+    # Batch tensor generation (time-major)
+    obs, actions, locations = walk_gen.batch_walks(walks)
 
     # Plot environment layout
     fig1 = figures.plot_environment_layout(env, title=f"Environment ({env.n_locations} locations)")

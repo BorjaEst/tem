@@ -118,21 +118,15 @@ if __name__ == "__main__":
     val_dataset = datamodule.val_dataloader().dataset
     test_dataset = datamodule.test_dataloader().dataset
 
-    figs: list[tuple[str, plt.Figure]] = []
-    env = datamodule.environment
-    figs.append(("01_environment_layout.png", figures.plot_environment_layout(env, title=f"Environment ({env.n_locations} locations)")))
-
-    # The DataModule yields time-major tensors: observations [T,B,n_x], actions [T,B], locations [T,B].
-    # Pass the batch directly; the plotting utilities treat each batch column as one walk.
     batch_walk = data.Walk(observations=obs, actions=actions, locations=locations)
+    env = datamodule.environment
     policy_type = dm_config.policy.type
+
+    figs: list[tuple[str, plt.Figure]] = []
+    figs.append(("01_environment_layout.png", figures.plot_environment_layout(env, title=f"Environment ({env.n_locations} locations)")))
     figs.append(("02_walk_trajectories.png", figures.plot_walks(env, [batch_walk], title=f"Val-Walks, policy={policy_type})")))
     figs.append(("03_walk_statistics.png", figures.plot_walk_statistics([batch_walk])))
-
-    # Split statistics
     figs.append(("04_split_statistics.png", figures.plot_split_statistics(env, datamodule.datasets)))
-
-    # Batch tensors are time-major [T, B, ...] from the DataModule.
     figs.append(("05_batch_tensors.png", figures.plot_batch_tensors_time_major(obs, actions, locations)))
 
     if example_config.save_plots:

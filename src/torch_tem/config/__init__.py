@@ -2,17 +2,23 @@
 
 Provides:
 - ModelConfig: Model structure (dimensions, connectivity, memory)
-- TrainingConfig: Optimization schedule (LR, curricula, loss weights)
+- TrainingConfig: Optimization schedule (LR, loss weights, truncated BPTT rollout)
 - EnvironmentConfig: Task definition (action space, shiny objects)
 - DataModuleConfig: Data generation (walk length, policy, batching, splits)
 - Policy Configs: RandomPolicyConfig, DistancePolicyConfig, QLearningPolicyConfig, ShinyPolicyConfig, MixedPolicyConfig
 """
 
 from torch_tem.config.architecture import ModelConfig
-from torch_tem.config.datamodule import DataModuleConfig
-from torch_tem.config.environment import EnvironmentConfig
-from torch_tem.config.policies import DistancePolicyConfig, MixedPolicyConfig, PolicyConfig, QLearningPolicyConfig, RandomPolicyConfig, ShinyPolicyConfig
-from torch_tem.config.shiny import ShinyConfig
+from torch_tem.config.datamodule import (
+    DataModuleConfig,
+    DistancePolicyConfig,
+    EnvironmentConfig,
+    MixedPolicyConfig,
+    PolicyConfig,
+    QLearningPolicyConfig,
+    RandomPolicyConfig,
+    ShinyPolicyConfig,
+)
 from torch_tem.config.training import TrainingConfig
 
 __all__ = [
@@ -25,6 +31,5 @@ __all__ = [
     "QLearningPolicyConfig",
     "ShinyPolicyConfig",
     "MixedPolicyConfig",
-    "ShinyConfig",
     "TrainingConfig",
 ]

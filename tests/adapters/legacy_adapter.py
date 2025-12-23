@@ -125,29 +125,16 @@ def _create_training_config(params: Dict[str, Any]) -> TrainingConfig:
     return TrainingConfig(
         # Training schedule
         n_rollout=params["n_rollout"],
-        # Loss weights (base values before curriculum)
+        # Loss weights
         loss_weights_x=params["loss_weights_x"],
         loss_weights_p=params["loss_weights_p"],
         loss_weights_g=params["loss_weights_g"],
         loss_weights_reg_g=params["loss_weights_reg_g"],
         loss_weights_reg_p=params["loss_weights_reg_p"],
-        # Loss weight curriculum schedule
-        loss_weights_p_g_it=params["loss_weights_p_g_it"],
-        loss_weights_reg_p_it=params["loss_weights_reg_p_it"],
-        loss_weights_reg_g_it=params["loss_weights_reg_g_it"],
-        # Memory curriculum schedule
-        eta_it=params["eta_it"],
-        lambda_it=params["lambda_it"],
         # Learning rate schedule
         lr_max=params["lr_max"],
-        lr_min=params["lr_min"],
         lr_decay_rate=params["lr_decay_rate"],
         lr_decay_steps=params["lr_decay_steps"],
-        # Precision weighting schedule (p→g inference)
-        p2g_scale_offset=params.get("p2g_scale_offset", 0.0),
-        p2g_sig_val=params.get("p2g_sig_val", 10000.0),
-        p2g_sig_half_it=params.get("p2g_sig_half_it", 400),
-        p2g_sig_scale_it=params.get("p2g_sig_scale_it", 200),
     )
 
 

@@ -1,32 +1,16 @@
-"""Shiny object configuration and placement."""
+"""Shiny object placement and policy generation.
 
-from typing import List, Protocol
+This module intentionally does *not* define a separate ShinyConfig model.
+Shiny-related scalar parameters live in :class:`torch_tem.config.EnvironmentConfig`.
+"""
+
+from typing import List
 
 import numpy as np
 
-from torch_tem.config import EnvironmentConfig
+from torch_tem.config import EnvironmentConfig, ShinyPolicyConfig
 from torch_tem.data.environment import Environment, Location
 from torch_tem.data.policies import PolicyGenerator
-
-
-class ShinyParams(Protocol):
-    """Protocol for environment parameters needed by ShinyEnvironmentBuilder.
-
-    Defines the minimal interface required from environment objects to place
-    shiny objects and generate shiny-directed policies. Satisfied by Environment class.
-    """
-
-    n_locations: int
-    n_observations: int
-    locations: List[Location]
-
-    def shortest_paths(self) -> np.ndarray:
-        """Compute all-pairs shortest path distances.
-
-        Returns:
-            ndarray: [n_locations, n_locations] distance matrix
-        """
-        ...
 
 
 class ShinyEnvironmentBuilder:
@@ -36,16 +20,25 @@ class ShinyEnvironmentBuilder:
     observation deduplication, and shiny-directed policy generation.
     """
 
-    def __init__(self, environment: Environment, params: ShinyParams, policy_generator: PolicyGenerator):
+    def __init__(
+        self,
+        environment: Environment,
+        env_config: EnvironmentConfig,
+        policy_config: ShinyPolicyConfig,
+        policy_generator: PolicyGenerator,
+    ):
         """Initialize shiny environment builder.
 
         Args:
-            environment: Environment parameters implementing ShinyParams
-            params: Shiny object configuration
-            policy_generator: Policy generator for shiny-directed policies
+            environment: Runtime environment to augment.
+            env_config: Environment configuration (source of shiny parameters).
+            policy_config: Shiny policy configuration (currently only used for
+                placement constraints such as minimum separation).
+            policy_generator: Policy generator for shiny-directed policies.
         """
         self.env = environment
-        self.config = params
+        self._env_cfg = env_config
+        self._policy_cfg = policy_config
         self.policy_gen = policy_generator
 
     def place_shiny_objects(self) -> List[int]:
@@ -61,14 +54,18 @@ class ShinyEnvironmentBuilder:
         Raises:
             RuntimeError: If unable to place all shiny objects after max attempts
         """
+        n_shiny = int(self._env_cfg.shiny_n)
+        if n_shiny <= 0:
+            raise ValueError("shiny_n must be > 0 when using ShinyPolicyConfig")
+
         dist_matrix = self.env.shortest_paths()
         max_distance = np.max(dist_matrix)
-        min_distance_threshold = max_distance * self.config.min_separation
+        min_distance_threshold = max_distance * float(self._policy_cfg.min_separation)
 
         shiny_locations = []
         max_attempts = 1000
 
-        for _ in range(self.config.n):
+        for _ in range(n_shiny):
             attempts = 0
             while attempts < max_attempts:
                 # Sample candidate location
@@ -91,8 +88,8 @@ class ShinyEnvironmentBuilder:
 
             if attempts >= max_attempts:
                 raise RuntimeError(
-                    f"Could not place {self.config.n} shiny objects with "
-                    f"min_separation={self.config.min_separation} after {max_attempts} attempts. "
+                    f"Could not place {n_shiny} shiny objects with "
+                    f"min_separation={self._policy_cfg.min_separation} after {max_attempts} attempts. "
                     f"Try reducing n or min_separation."
                 )
 
@@ -148,4 +145,5 @@ class ShinyEnvironmentBuilder:
         Returns:
             List[List[Location]]: One policy per shiny object
         """
-        return [self.policy_gen.distance_policy(goal_locations=shiny_loc, beta=self.config.beta) for shiny_loc in shiny_locations]
+        beta = float(self._env_cfg.shiny_beta)
+        return [self.policy_gen.distance_policy(goal_locations=shiny_loc, beta=beta) for shiny_loc in shiny_locations]

@@ -28,8 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from torch_tem.config.policies import DistancePolicyConfig, MixedPolicyConfig, PolicyConfig, QLearningPolicyConfig, RandomPolicyConfig, ShinyPolicyConfig
-from torch_tem.config.shiny import ShinyConfig
+from torch_tem.config.datamodule import DistancePolicyConfig, EnvironmentConfig, MixedPolicyConfig, PolicyConfig, QLearningPolicyConfig, RandomPolicyConfig, ShinyPolicyConfig
 from torch_tem.data.environment import Environment, Location
 from torch_tem.data.policies import PolicyGenerator
 from torch_tem.data.shiny import ShinyEnvironmentBuilder
@@ -320,6 +319,7 @@ class WalkDatasetParams(Protocol):
     """
 
     policy: PolicyConfig
+    environment: EnvironmentConfig
     sequence_length: int
     seed: Optional[int]
 
@@ -348,6 +348,7 @@ class WalkDataset(Dataset[WalkSample]):
         self._policy_gen = policy_gen
         self._walk_gen = walk_gen
         self._policy_cfg = params.policy
+        self._env_cfg = params.environment
         self._sequence_length = int(params.sequence_length)
         self._seed = params.seed
 
@@ -380,13 +381,7 @@ class WalkDataset(Dataset[WalkSample]):
         policy_cfg = self._policy_cfg
 
         if isinstance(policy_cfg, ShinyPolicyConfig):
-            shiny_cfg = ShinyConfig(
-                n=policy_cfg.n,
-                returns=policy_cfg.returns,
-                beta=policy_cfg.beta,
-                min_separation=policy_cfg.min_separation,
-            )
-            builder = ShinyEnvironmentBuilder(self._env, shiny_cfg, self._policy_gen)
+            builder = ShinyEnvironmentBuilder(self._env, self._env_cfg, policy_cfg, self._policy_gen)
             shiny_locations = builder.place_shiny_objects()
             builder.mark_environment(shiny_locations)
             shiny_policies = builder.generate_shiny_policies(shiny_locations)
@@ -394,7 +389,7 @@ class WalkDataset(Dataset[WalkSample]):
                 walk_length=t_steps,
                 shiny_locations=shiny_locations,
                 shiny_policies=shiny_policies,
-                returns=policy_cfg.returns,
+                returns=self._env_cfg.shiny_returns,
             )
 
         policy = self._create_location_policy(self._policy_gen, policy_cfg)

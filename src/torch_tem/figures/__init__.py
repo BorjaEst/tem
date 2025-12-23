@@ -45,6 +45,7 @@ from torch_tem.figures.sensory import (
     plot_temporal_filtering,
 )
 from torch_tem.figures.simulation import plot_abstract_location_heatmap, plot_memory_formation_timeline, plot_prediction_accuracy
+from torch_tem.figures.training import plot_loss_curves
 
 __all__ = [
     # Data generation
@@ -93,4 +94,6 @@ __all__ = [
     "plot_abstract_location_heatmap",
     "plot_memory_formation_timeline",
     "plot_prediction_accuracy",
+    # Training diagnostics
+    "plot_loss_curves",
 ]

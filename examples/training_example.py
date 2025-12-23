@@ -67,7 +67,7 @@ When use_tensorboard=true, logs to logs/ for TensorBoard visualization:
 """
 
 from pathlib import Path
-from typing import List, Literal
+from typing import List
 
 import lightning as L
 import matplotlib.pyplot as plt
@@ -76,9 +76,8 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
-from torch_tem.config import EnvironmentConfig, ModelConfig, TrainingConfig
+from torch_tem.config import DataModuleConfig, TrainingConfig
 from torch_tem.core.model import TEMModel
-from torch_tem.data import TEMDataModule
 from torch_tem.training import TEMLightningModule
 
 
@@ -94,51 +93,30 @@ class ExampleConfig(BaseSettings):
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="training_example")
 
-    # Environment configuration
-    grid_size: int = Field(default=10, ge=5, le=15, description="Grid size for square environment")
-    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation assignment strategy")
+    # TrainingConfig knobs (mirrors torch_tem.config.TrainingConfig)
+    n_rollout: int = Field(default=TrainingConfig().n_rollout, ge=5, le=100, description="BPTT rollout length (steps per backward pass)")
+    lr_max: float = Field(default=TrainingConfig().lr_max, gt=0, description="Maximum learning rate")
+    lr_decay_rate: float = Field(default=TrainingConfig().lr_decay_rate, gt=0, le=1, description="StepLR decay factor (gamma)")
+    lr_decay_steps: int = Field(default=TrainingConfig().lr_decay_steps, ge=1, description="StepLR step_size (optimizer steps between decays)")
 
-    # Architecture configuration
-    f_initial: List[float] = Field(default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01], description="Initial frequencies for each spatial module")
-    n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 10, 8, 6, 6], description="Grid cells per frequency module")
-    n_x_c: int = Field(default=15, ge=2, le=30, description="Compressed sensory dimension (two-hot)")
+    loss_weights_x: float = Field(default=TrainingConfig().loss_weights_x, ge=0, description="Weight for sensory loss")
+    loss_weights_p: float = Field(default=TrainingConfig().loss_weights_p, ge=0, description="Weight for grounded location loss")
+    loss_weights_g: float = Field(default=TrainingConfig().loss_weights_g, ge=0, description="Weight for abstract location loss")
+    loss_weights_reg_g: float = Field(default=TrainingConfig().loss_weights_reg_g, ge=0, description="Weight for abstract location regularization")
+    loss_weights_reg_p: float = Field(default=TrainingConfig().loss_weights_reg_p, ge=0, description="Weight for grounded location regularization")
 
-    # Training configuration
-    max_steps: int = Field(default=100, ge=100, le=50000, description="Maximum training steps")
-    batch_size: int = Field(default=4, ge=1, le=64, description="Batch size for training")
-    n_rollout: int = Field(default=20, ge=5, le=100, description="BPTT rollout length (steps per backward pass)")
-
-    # Learning rate configuration
-    lr_max: float = Field(default=9.4e-4, gt=0, description="Maximum learning rate")
-    lr_decay_rate: float = Field(default=0.5, gt=0, le=1, description="Learning rate decay factor")
-    lr_decay_steps: int = Field(default=400, ge=1, description="Steps between LR decay")
-
-    # Walk generation
-    walk_length_min: int = Field(default=25, ge=10, le=100, description="Minimum walk length")
-    walk_length_max: int = Field(default=300, ge=50, le=1000, description="Maximum walk length")
-
-    # Loss weights
-    loss_weights_x: float = Field(default=1.0, ge=0, description="Weight for sensory loss")
-    loss_weights_p: float = Field(default=1.0, ge=0, description="Weight for grounded location loss")
-    loss_weights_g: float = Field(default=1.0, ge=0, description="Weight for abstract location loss")
-
-    # Memory configuration
-    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
-    kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
-
-    # Shiny objects (optional reward-based learning)
-    shiny_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Probability of shiny objects in environment")
+    # Trainer control (example-only)
+    max_steps: int = Field(default=10, ge=1, description="Maximum number of optimizer steps")
 
     # Logging and output
-    use_tensorboard: bool = Field(default=True, description="Enable TensorBoard logging")
     checkpoint_dir: Path = Field(default=Path("checkpoints/training"), description="Directory for model checkpoints")
     output_dir: Path = Field(default=Path("outputs/training"), description="Directory for plots")
     show_plots: bool = Field(default=True, description="Display plots interactively")
     save_plots: bool = Field(default=True, description="Save plots to output directory")
 
     # Debugging and monitoring
-    log_every_n_steps: int = Field(default=10, ge=1, description="Logging frequency")
-    val_check_interval: int = Field(default=50, ge=1, description="Validation check interval (number of batches)")
+    log_every_n_steps: int = Field(default=1, ge=1, description="Logging frequency")
+    val_check_interval: int = Field(default=10, ge=1, description="Validation check interval (number of batches)")
 
     @field_validator("checkpoint_dir", "output_dir")
     @classmethod
@@ -149,84 +127,27 @@ class ExampleConfig(BaseSettings):
 
 
 # ==============================================================================
-# Helper Functions
-# ==============================================================================
-def plot_loss_curves(trainer: L.Trainer, output_path: Path) -> plt.Figure:
-    """Plot training loss curves from trainer metrics.
-
-    Note: Only shows final values. For full training curves, use TensorBoard.
-
-    Args:
-        trainer: PyTorch Lightning trainer with logged metrics.
-        output_path: Path to save the figure.
-
-    Returns:
-        Matplotlib figure with loss summary.
-    """
-    # Extract final metrics from logger
-    metrics = trainer.logged_metrics
-
-    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-    fig.suptitle("Training Loss Summary (Final Values)", fontsize=16, fontweight="bold")
-
-    # Create bar plot of final loss components
-    loss_names = []
-    loss_values = []
-
-    if "train_loss" in metrics:
-        loss_names.append("Total")
-        loss_values.append(float(metrics["train_loss"]))
-    if "train_lx" in metrics:
-        loss_names.append("Sensory (L_x)")
-        loss_values.append(float(metrics["train_lx"]))
-    if "train_lg" in metrics:
-        loss_names.append("Abstract (L_g)")
-        loss_values.append(float(metrics["train_lg"]))
-    if "train_lp" in metrics:
-        loss_names.append("Grounded (L_p)")
-        loss_values.append(float(metrics["train_lp"]))
-
-    if loss_names:
-        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
-        bars = ax.bar(loss_names, loss_values, color=colors[: len(loss_names)])
-        ax.set_ylabel("Loss Value", fontsize=12)
-        ax.set_title("Loss Components at Final Step")
-        ax.grid(True, alpha=0.3, axis="y")
-
-        # Add value labels on bars
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height:.4f}", ha="center", va="bottom", fontsize=10)
-    else:
-        ax.text(0.5, 0.5, "No loss metrics available", ha="center", va="center", fontsize=14)
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-
-    ax.annotate("Note: For full training curves, view TensorBoard logs", xy=(0.5, -0.15), xycoords="axes fraction", ha="center", fontsize=9, style="italic")
-
-    plt.tight_layout()
-    return fig
-
-
-# ==============================================================================
 # Main Training Script
 # ==============================================================================
 if __name__ == "__main__":
     """Run complete TEM training pipeline with visualizations."""
-    config = ExampleConfig()
+    example_config = ExampleConfig()  # Load from CLI args if provided
+    dm_config = DataModuleConfig()  # Default Environment and DataModule settings
+    model_config = dm_config.build_model_config()
+    training_config = TrainingConfig.model_validate(example_config.model_dump())
 
     print("=" * 80)
     print("TEM Training Example")
     print("=" * 80)
-    print(f"\nConfiguration:")
-    print(f"  Environment: {config.grid_size}×{config.grid_size} grid ({config.observation_mode})")
-    print(f"  Architecture: {len(config.f_initial)} frequency modules")
-    print(f"  Grid cells: {config.n_g_subsampled}")
-    print(f"  Frequencies: {config.f_initial}")
-    print(f"  Batch size: {config.batch_size}")
-    print(f"  Max steps: {config.max_steps}")
-    print(f"  BPTT rollout: {config.n_rollout}")
-    print(f"  Learning rate: {config.lr_max}")
+    print("\nConfiguration:")
+    print(f"  BPTT rollout: {training_config.n_rollout}")
+    print(f"  Learning rate: {training_config.lr_max}")
+    print(f"  LR decay: gamma={training_config.lr_decay_rate}, step_size={training_config.lr_decay_steps}")
+    print(
+        "  Loss weights: "
+        f"x={training_config.loss_weights_x}, p={training_config.loss_weights_p}, g={training_config.loss_weights_g}, "
+        f"reg_g={training_config.loss_weights_reg_g}, reg_p={training_config.loss_weights_reg_p}"
+    )
     print()
 
     # =========================================================================
@@ -234,47 +155,15 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 1: Setting up environment and data generation...")
 
-    # Create environment configuration
-    env_config = EnvironmentConfig(
-        width=config.grid_size,
-        height=config.grid_size,
-        observation_mode=config.observation_mode,
-        shiny_rate=config.shiny_rate,
-    )
-
     # Create environment
-    env = data.Environment(env_config)
-    env.validate()
-    print(f"  Environment: {env.n_locations} locations, {env.n_observations} observations")
-
-    # Create data module (full-walk, time-major batches)
-    dm_config = DataModuleConfig(
-        environment=env_config,
-        batch_size=config.batch_size,
-        sequence_length=(config.walk_length_min + config.walk_length_max) // 2,  # Keep prior behavior
-    )
-    datamodule = TEMDataModule(dm_config, env=env)
+    datamodule = data.TEMDataModule(dm_config)
     print(f"  DataModule: batch_size={dm_config.batch_size}, walk_length={dm_config.sequence_length}")
+    datamodule.setup(stage=None)  # Setup all splits
 
     # =========================================================================
     # PHASE 2: Model Initialization
     # =========================================================================
     print("\nPhase 2: Initializing TEM model...")
-
-    # Calculate total actions
-    total_actions = env_config.n_actions + (1 if env_config.has_static_action else 0)
-
-    # Create model configuration
-    model_config = ModelConfig(
-        n_x=env.n_observations,
-        n_x_c=config.n_x_c,
-        n_g_subsampled=config.n_g_subsampled,
-        f_initial=config.f_initial,
-        n_actions=total_actions,
-        eta=config.eta,
-        kappa=config.kappa,
-        batch_size=config.batch_size,
-    )
 
     # Create TEM model
     tem_model = TEMModel(model_config)
@@ -283,28 +172,16 @@ if __name__ == "__main__":
     print(f"    - Compressed sensory: {model_config.n_x_c}")
     print(f"    - Grid cells (subsampled): {model_config.n_g_subsampled}")
     print(f"    - Place cells: {model_config.n_p}")
-    print(f"    - Actions: {total_actions}")
+    print(f"    - Actions: {model_config.n_actions}")
 
     # =========================================================================
     # PHASE 3: Training Configuration
     # =========================================================================
-    print("\nPhase 3: Configuring training...")
-
-    # Create training configuration
-    training_config = TrainingConfig(
-        n_rollout=config.n_rollout,
-        lr_max=config.lr_max,
-        lr_decay_rate=config.lr_decay_rate,
-        lr_decay_steps=config.lr_decay_steps,
-        loss_weights_x=config.loss_weights_x,
-        loss_weights_p=config.loss_weights_p,
-        loss_weights_g=config.loss_weights_g,
-    )
+    print("\nPhase 3: Initializing training...")
 
     # Wrap in Lightning module
     lightning_module = TEMLightningModule(tem_model, training_config)
     print(f"  Training configuration:")
-    print(f"    - Max steps: {config.max_steps}")
     print(f"    - BPTT rollout: {training_config.n_rollout}")
     print(f"    - Learning rate: {training_config.lr_max}")
     print(f"    - LR decay: {training_config.lr_decay_rate} every {training_config.lr_decay_steps} steps")
@@ -315,17 +192,13 @@ if __name__ == "__main__":
     print("\nPhase 4: Initializing PyTorch Lightning Trainer...")
 
     # Configure logger
-    if config.use_tensorboard:
-        logger = L.pytorch.loggers.TensorBoardLogger("logs", name="tem_training")
-        print(f"  TensorBoard logging enabled: logs/tem_training")
-    else:
-        logger = None
-        print(f"  Logging disabled")
+    logger = L.pytorch.loggers.TensorBoardLogger("logs", name=Path(__file__).stem)
+    print(f"  TensorBoard logging enabled: logs/tem_training")
 
     # Configure callbacks
     callbacks = [
         L.pytorch.callbacks.ModelCheckpoint(
-            dirpath=config.checkpoint_dir,
+            dirpath=example_config.checkpoint_dir,
             filename="tem-{epoch:02d}-{train_loss:.4f}",
             save_top_k=3,
             monitor="train_loss",
@@ -336,17 +209,20 @@ if __name__ == "__main__":
 
     # Create trainer
     trainer = L.Trainer(
-        max_steps=config.max_steps,
+        max_steps=example_config.max_steps,
         logger=logger,
         callbacks=callbacks,
-        log_every_n_steps=config.log_every_n_steps,
-        val_check_interval=config.val_check_interval,
+        log_every_n_steps=example_config.log_every_n_steps,
+        val_check_interval=example_config.val_check_interval,
         enable_progress_bar=True,
         enable_model_summary=True,
         accelerator="auto",  # Use GPU if available
         devices=1,
     )
-    print(f"  Trainer ready: max_steps={config.max_steps}")
+    print(f"  Trainer ready: max_steps={example_config.max_steps}")
+    print(f"    - Checkpoints: {example_config.checkpoint_dir}")
+    print(f"    - log_every_n_steps: {example_config.log_every_n_steps}")
+    print(f"    - val_check_interval: {example_config.val_check_interval}")
 
     # =========================================================================
     # PHASE 5: Training
@@ -366,16 +242,16 @@ if __name__ == "__main__":
     print("\nPhase 6: Generating visualizations...")
 
     # Plot environment
-    fig1 = figures.plot_environment_layout(env, title=f"Training Environment ({env.n_locations} locations)")
-    if config.save_plots:
-        fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {config.output_dir / '01_environment.png'}")
+    environment, n_locations = datamodule.environment, datamodule.environment.n_locations
+    fig1 = figures.plot_environment_layout(environment, title=f"Training Environment ({n_locations} locations)")
+    if example_config.save_plots:
+        fig1.savefig(example_config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: {example_config.output_dir / '01_environment.png'}")
 
     # Plot loss curves (simplified - use TensorBoard for detailed metrics)
-    fig2 = plot_loss_curves(trainer, config.output_dir / "02_loss_curves.png")
-    if config.save_plots:
-        fig2.savefig(config.output_dir / "02_loss_curves.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {config.output_dir / '02_loss_curves.png'}")
+    fig2 = figures.plot_loss_curves(trainer, example_config.output_dir / "02_loss_curves.png")
+    if example_config.save_plots:
+        print(f"  Saved: {example_config.output_dir / '02_loss_curves.png'}")
 
     # Generate test walk to visualize learned representations
     print("\n  Generating test walk for visualization...")
@@ -402,13 +278,13 @@ if __name__ == "__main__":
     # Plot abstract location snapshot
     fig3 = figures.plot_abstract_location_snapshot(
         state.mec.abstract_location,
-        config.f_initial,
+        model_config.f_initial,
         batch_idx=0,
         title="Abstract Location Snapshot (Final State)",
     )
-    if config.save_plots:
-        fig3.savefig(config.output_dir / "03_abstract_location.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {config.output_dir / '03_abstract_location.png'}")
+    if example_config.save_plots:
+        fig3.savefig(example_config.output_dir / "03_abstract_location.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: {example_config.output_dir / '03_abstract_location.png'}")
 
     # Plot memory structure
     M_gen = state.hpc.memory[0] if state.hpc.memory else None
@@ -422,24 +298,23 @@ if __name__ == "__main__":
             M_inf = M_inf[0]
 
         fig4 = figures.plot_memory_matrices(M_gen, M_inf, title="Final Hebbian Memory Matrices")
-        if config.save_plots:
-            fig4.savefig(config.output_dir / "04_memory_structure.png", dpi=150, bbox_inches="tight")
-            print(f"  Saved: {config.output_dir / '04_memory_structure.png'}")
+        if example_config.save_plots:
+            fig4.savefig(example_config.output_dir / "04_memory_structure.png", dpi=150, bbox_inches="tight")
+            print(f"  Saved: {example_config.output_dir / '04_memory_structure.png'}")
 
     print("\n" + "=" * 80)
     print("Summary:")
     print("=" * 80)
     print(f"  Training steps completed: {trainer.global_step}")
-    if config.use_tensorboard:
-        print(f"  TensorBoard logs: logs/tem_training")
-        print(f"    View detailed metrics with: tensorboard --logdir logs")
-    print(f"  Best checkpoint: {config.checkpoint_dir}")
-    if config.save_plots:
-        print(f"  Plots saved to: {config.output_dir}")
+    print(f"  TensorBoard logs: logs/tem_training")
+    print(f"    View detailed metrics with: tensorboard --logdir logs")
+    print(f"  Best checkpoint: {example_config.checkpoint_dir}")
+    if example_config.save_plots:
+        print(f"  Plots saved to: {example_config.output_dir}")
     print("=" * 80)
 
     # Show plots if requested
-    if config.show_plots:
+    if example_config.show_plots:
         plt.show()
     else:
         plt.close("all")

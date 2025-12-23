@@ -5,7 +5,7 @@ import torch
 from torch import Tensor, optim
 
 from torch_tem.core.model import TEMModel, TEMState
-from torch_tem.losses import LossOutput
+from torch_tem.losses import LossOutput, TEMLoss, TEMLossConfig
 from torch_tem.types import Observation
 
 from .config.training import TrainingConfig
@@ -34,6 +34,19 @@ class TEMLightningModule(L.LightningModule):
         super().__init__()
         self.model = model
         self.config = config
+
+        # Apply training-time loss weights to the model's loss aggregator.
+        # TEMModel defaults to TEMLoss() with TEMLossConfig defaults; without
+        # this wiring, TrainingConfig loss weights would have no effect.
+        self.model.loss_total_fn = TEMLoss(
+            TEMLossConfig(
+                w_x=self.config.loss_weights_x,
+                w_g=self.config.loss_weights_g,
+                w_p=self.config.loss_weights_p,
+                w_reg_g=self.config.loss_weights_reg_g,
+                w_reg_p=self.config.loss_weights_reg_p,
+            )
+        )
 
         # Save hyperparameters
         self.save_hyperparameters({**config.model_dump()})

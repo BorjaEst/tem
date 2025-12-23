@@ -11,7 +11,7 @@ from torch_tem.data.environment import Action, Environment, Location
 from torch_tem.data.memory import MemoryMatrixGenerator
 from torch_tem.data.patterns import GridCellPatternGenerator, OscillatoryGridGenerator, PairedPatternGenerator, PlaceCellPatternGenerator
 from torch_tem.data.policies import PolicyGenerator
-from torch_tem.data.shiny import ShinyEnvironmentBuilder, ShinyParams
+from torch_tem.data.shiny import ShinyEnvironmentBuilder
 from torch_tem.data.walks import Walk, WalkGenerator
 
 __all__ = [
@@ -22,7 +22,6 @@ __all__ = [
     # Policy Generation
     "PolicyGenerator",
     # Shiny Objects
-    "ShinyParams",
     "ShinyEnvironmentBuilder",
     # Walk Generation
     "Walk",

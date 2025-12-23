@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 from torch_tem.config.datamodule import DataModuleConfig
 from torch_tem.data.environment import Environment
 from torch_tem.data.policies import PolicyGenerator
-from torch_tem.data.walks import WalkDataset, WalkGenerator, collate_walk_samples
+from torch_tem.data.walks import WalkDataset, WalkGenerator
 
 
 class TEMDataModule(L.LightningDataModule):
@@ -51,7 +51,7 @@ class TEMDataModule(L.LightningDataModule):
         self.environment: Optional[Environment] = None
         self.policy_gen: Optional[PolicyGenerator] = None
         self.walk_gen: Optional[WalkGenerator] = None
-        self._datasets: dict[str, WalkDataset] = {}
+        self.datasets: dict[str, WalkDataset] = {}
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Build runtime objects and create datasets for the given stage.
@@ -70,13 +70,13 @@ class TEMDataModule(L.LightningDataModule):
             self.walk_gen = WalkGenerator(self.environment, repeat_bias=self.config.environment.explore_bias)
 
         if stage in (None, "fit"):
-            self._datasets["fit"] = self._make_dataset(n_batches=self.config.n_train_batches)
+            self.datasets["fit"] = self._make_dataset(n_batches=self.config.n_train_batches)
 
         if stage in (None, "fit", "validate"):
-            self._datasets["validate"] = self._make_dataset(n_batches=self.config.n_val_batches)
+            self.datasets["validate"] = self._make_dataset(n_batches=self.config.n_val_batches)
 
         if stage in (None, "test"):
-            self._datasets["test"] = self._make_dataset(n_batches=self.config.n_test_batches)
+            self.datasets["test"] = self._make_dataset(n_batches=self.config.n_test_batches)
 
     def _make_dataset(self, n_batches: int) -> WalkDataset:
         """Create a `WalkDataset` sized to yield exactly `n_batches` batches.
@@ -114,14 +114,15 @@ class TEMDataModule(L.LightningDataModule):
         Raises:
             RuntimeError: If `setup()` has not been called for the requested stage.
         """
-        dataset = self._datasets.get(stage)
+        dataset = self.datasets.get(stage)
         if dataset is None:
             raise RuntimeError(f"DataModule not set up for stage '{stage}'. Call setup() first.")
 
+        collate = functools.partial(WalkGenerator.collate, return_locations=self.config.return_locations)
         return DataLoader(
             dataset,
             batch_size=self.config.batch_size,
-            collate_fn=functools.partial(collate_walk_samples, return_locations=self.config.return_locations),
+            collate_fn=collate,
             num_workers=self.config.num_workers,
             pin_memory=self.config.pin_memory,
             drop_last=self.config.drop_last,

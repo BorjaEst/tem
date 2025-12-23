@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from scipy.sparse.csgraph import shortest_path
 
 
-class Action(BaseModel):
+class EnvAction(BaseModel):
     """Action with transition probabilities.
 
     Represents a single action available at a location with its
@@ -30,7 +30,7 @@ class Action(BaseModel):
         return v
 
 
-class Location(BaseModel):
+class EnvLocation(BaseModel):
     """Single location in the environment graph.
 
     Represents a discrete location with an observation, available actions,
@@ -39,12 +39,12 @@ class Location(BaseModel):
 
     id: int = Field(ge=0, description="Location identifier")
     observation: int = Field(ge=0, description="Observation ID at this location")
-    actions: List[Action] = Field(description="Available actions from this location")
+    actions: List[EnvAction] = Field(description="Available actions from this location")
     shiny: Optional[bool] = Field(default=None, description="Whether location has shiny object")
 
     @field_validator("actions")
     @classmethod
-    def validate_actions_nonempty(cls, v: List[Action]) -> List[Action]:
+    def validate_actions_nonempty(cls, v: List[EnvAction]) -> List[EnvAction]:
         """Ensure each location has at least one action."""
         if not v:
             raise ValueError("Location must have at least one action")
@@ -110,13 +110,13 @@ class Environment:
         n_directional = params.n_actions
         n_actions = n_directional + (1 if has_static else 0)
         adjacency: List[List[float]] = [[0.0] * n_locations for _ in range(n_locations)]
-        locations: List[Location] = []
+        locations: List[EnvLocation] = []
 
         for loc_id in range(n_locations):
             i = loc_id // width  # row
             j = loc_id % width  # column
 
-            actions: List[Action] = []
+            actions: List[EnvAction] = []
             action_id_offset = 1 if has_static else 0
             base_probability = 1.0 / n_actions
 
@@ -124,7 +124,7 @@ class Environment:
             if has_static:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
                 adjacency[loc_id][loc_id] = 1.0
-                actions.append(Action(id=0, probability=base_probability, transition=transition))
+                actions.append(EnvAction(id=0, probability=base_probability, transition=transition))
 
             # Up (action 0 or 1 depending on has_static)
             if i > 0:
@@ -133,7 +133,7 @@ class Environment:
                 transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
             else:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append(Action(id=action_id_offset + 0, probability=base_probability, transition=transition))
+            actions.append(EnvAction(id=action_id_offset + 0, probability=base_probability, transition=transition))
 
             # Right (action 1 or 2 depending on has_static)
             if j < width - 1:
@@ -142,7 +142,7 @@ class Environment:
                 transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
             else:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append(Action(id=action_id_offset + 1, probability=base_probability, transition=transition))
+            actions.append(EnvAction(id=action_id_offset + 1, probability=base_probability, transition=transition))
 
             # Down (action 2 or 3 depending on has_static)
             if i < height - 1:
@@ -151,7 +151,7 @@ class Environment:
                 transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
             else:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append(Action(id=action_id_offset + 2, probability=base_probability, transition=transition))
+            actions.append(EnvAction(id=action_id_offset + 2, probability=base_probability, transition=transition))
 
             # Left (action 3 or 4 depending on has_static)
             if j > 0:
@@ -160,9 +160,9 @@ class Environment:
                 transition = [1.0 if k == next_loc else 0.0 for k in range(n_locations)]
             else:
                 transition = [1.0 if k == loc_id else 0.0 for k in range(n_locations)]
-            actions.append(Action(id=action_id_offset + 3, probability=base_probability, transition=transition))
+            actions.append(EnvAction(id=action_id_offset + 3, probability=base_probability, transition=transition))
 
-            locations.append(Location(id=loc_id, observation=observations[loc_id], actions=actions, shiny=None))
+            locations.append(EnvLocation(id=loc_id, observation=observations[loc_id], actions=actions, shiny=None))
 
         # Store basic attributes
         self.n_locations = n_locations

@@ -9,7 +9,7 @@ from typing import List
 import numpy as np
 
 from torch_tem.config import EnvironmentConfig, ShinyPolicyConfig
-from torch_tem.data.environment import Environment, Location
+from torch_tem.data.environment import Environment, EnvLocation
 from torch_tem.data.policies import PolicyGenerator
 
 
@@ -134,7 +134,7 @@ class ShinyEnvironmentBuilder:
         self.env.locations = new_locations
         return self.env
 
-    def generate_shiny_policies(self, shiny_locations: List[int]) -> List[List[Location]]:
+    def generate_shiny_policies(self, shiny_locations: List[int]) -> List[List[EnvLocation]]:
         """Generate goal-directed policy for each shiny object.
 
         Creates one distance-based policy per shiny location for goal switching.
@@ -143,7 +143,7 @@ class ShinyEnvironmentBuilder:
             shiny_locations: List of shiny location IDs
 
         Returns:
-            List[List[Location]]: One policy per shiny object
+            List[List[EnvLocation]]: One policy per shiny object
         """
         beta = float(self._env_cfg.shiny_beta)
         return [self.policy_gen.distance_policy(goal_locations=shiny_loc, beta=beta) for shiny_loc in shiny_locations]

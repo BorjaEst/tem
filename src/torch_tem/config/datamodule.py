@@ -107,7 +107,7 @@ class RandomPolicyConfig(BaseModel):
     ensure adequate spatial sampling.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=False)
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -131,7 +131,7 @@ class DistancePolicyConfig(BaseModel):
     Uses shorter walk lengths since optimal paths reach goals efficiently.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=False)
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -163,7 +163,7 @@ class QLearningPolicyConfig(BaseModel):
     Uses shorter walk lengths since optimal policies reach goals efficiently.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=False)
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -201,7 +201,7 @@ class MixedPolicyConfig(BaseModel):
     to the weight distribution.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=False)
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -241,7 +241,7 @@ class ShinyPolicyConfig(BaseModel):
     a lingering period at each goal.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=False)
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     # ===================================================================================
     # POLICY TYPE
@@ -285,7 +285,7 @@ class DataModuleConfig(BaseModel):
     Defines how training/validation/test data is generated and delivered to the model.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=False)
+    model_config = ConfigDict(extra="ignore", strict=False)
 
     # ===================================================================================
     # ENVIRONMENT and POLICY

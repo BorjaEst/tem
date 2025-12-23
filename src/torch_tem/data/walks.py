@@ -29,10 +29,10 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from torch_tem.config.datamodule import DistancePolicyConfig, EnvironmentConfig, MixedPolicyConfig, PolicyConfig, QLearningPolicyConfig, RandomPolicyConfig, ShinyPolicyConfig
-from torch_tem.data.environment import Environment, Location
+from torch_tem.data.environment import Environment, EnvLocation
 from torch_tem.data.policies import PolicyGenerator
 from torch_tem.data.shiny import ShinyEnvironmentBuilder
-from torch_tem.types import Vector, WalkBatch, WalkSample
+from torch_tem.types import Action, Location, Observation, Vector, WalkBatch, WalkSample
 
 
 class Walk(BaseModel):
@@ -77,7 +77,7 @@ class WalkGenerator:
         self.env = environment
         self.repeat_bias = repeat_bias
 
-    def generate_walk(self, walk_length: int, policy: Optional[List[Location]] = None) -> Walk:
+    def generate_walk(self, walk_length: int, policy: Optional[List[EnvLocation]] = None) -> Walk:
         """Generate single walk from optional policy.
 
         Args:
@@ -147,7 +147,7 @@ class WalkGenerator:
 
         return Walk(observations=observations_tensor, actions=actions_tensor, locations=locations_tensor, shiny_markers=shiny_tensor if any(shiny_flags) else None)
 
-    def generate_walks(self, n_walks: int, walk_length: int, policy: Optional[List[Location]] = None) -> List[Walk]:
+    def generate_walks(self, n_walks: int, walk_length: int, policy: Optional[List[EnvLocation]] = None) -> List[Walk]:
         """Generate multiple independent walks.
 
         Args:
@@ -160,7 +160,7 @@ class WalkGenerator:
         """
         return [self.generate_walk(walk_length, policy) for _ in range(n_walks)]
 
-    def generate_shiny_walk(self, walk_length: int, shiny_locations: List[int], shiny_policies: List[List[Location]], returns: int) -> Walk:
+    def generate_shiny_walk(self, walk_length: int, shiny_locations: List[int], shiny_policies: List[List[EnvLocation]], returns: int) -> Walk:
         """Generate walk with automatic goal switching.
 
         Agent approaches shiny objects sequentially, switching goals after
@@ -247,7 +247,7 @@ class WalkGenerator:
 
         return Walk(observations=observations_tensor, actions=actions_tensor, locations=locations_tensor, shiny_markers=shiny_tensor)
 
-    def generate_shiny_walks(self, n_walks: int, walk_length: int, shiny_locations: List[int], shiny_policies: List[List[Location]], returns: int) -> List[Walk]:
+    def generate_shiny_walks(self, n_walks: int, walk_length: int, shiny_locations: List[int], shiny_policies: List[List[EnvLocation]], returns: int) -> List[Walk]:
         """Generate multiple shiny walks.
 
         Args:
@@ -262,7 +262,8 @@ class WalkGenerator:
         """
         return [self.generate_shiny_walk(walk_length, shiny_locations, shiny_policies, returns) for _ in range(n_walks)]
 
-    def batch_walks(self, walks: List[Walk]) -> Tuple[Vector, Vector, Vector]:
+    @staticmethod
+    def batch_walks(walks: List[Walk]) -> Tuple[Observation, Action, Location]:
         """Stack walks into batched tensors for TEM.
 
         Args:
@@ -280,29 +281,29 @@ class WalkGenerator:
 
         return observations, actions, locations
 
+    @staticmethod
+    def collate(samples: List[WalkSample], return_locations: bool = True) -> WalkBatch:
+        """Collate unbatched walks into a time-major TEM batch.
 
-def collate_walk_samples(samples: List[WalkSample], *, return_locations: bool) -> WalkBatch:
-    """Collate unbatched walks into a time-major TEM batch.
+        Each sample contains:
+            - observations: [T, n_observations]
+            - actions: [T]
+            - locations: [T]
 
-    Each sample contains:
-        - observations: [T, n_observations]
-        - actions: [T]
-        - locations: [T]
+        Returns:
+            - observations: [T, B, n_observations]
+            - actions: [T, B]
+            - locations: [T, B] (or zeros if return_locations=False)
+        """
 
-    Returns:
-        - observations: [T, B, n_observations]
-        - actions: [T, B]
-        - locations: [T, B] (or zeros if return_locations=False)
-    """
+        observations = torch.stack([s[0] for s in samples]).transpose(0, 1)
+        actions = torch.stack([s[1] for s in samples]).transpose(0, 1)
+        locations = torch.stack([s[2] for s in samples]).transpose(0, 1)
 
-    observations = torch.stack([s[0] for s in samples]).transpose(0, 1)
-    actions = torch.stack([s[1] for s in samples]).transpose(0, 1)
-    locations = torch.stack([s[2] for s in samples]).transpose(0, 1)
+        if not return_locations:
+            locations = torch.zeros_like(actions)
 
-    if not return_locations:
-        locations = torch.zeros_like(actions)
-
-    return observations, actions, locations
+        return observations, actions, locations
 
 
 class WalkDatasetParams(Protocol):
@@ -395,7 +396,7 @@ class WalkDataset(Dataset[WalkSample]):
         policy = self._create_location_policy(self._policy_gen, policy_cfg)
         return self._walk_gen.generate_walk(walk_length=t_steps, policy=policy)
 
-    def _create_location_policy(self, policy_gen: PolicyGenerator, policy_cfg: PolicyConfig) -> List[Location]:
+    def _create_location_policy(self, policy_gen: PolicyGenerator, policy_cfg: PolicyConfig) -> List[EnvLocation]:
         if isinstance(policy_cfg, RandomPolicyConfig):
             return policy_gen.random_policy()
 

@@ -21,6 +21,7 @@ from torch_tem.figures.data import (
     plot_location_visit_map,
     plot_policy_comparison,
     plot_split_location_visit_statistics,
+    plot_split_statistics,
     plot_walk_statistics,
     plot_walks,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "plot_batch_tensors_time_major",
     "plot_location_visit_map",
     "plot_split_location_visit_statistics",
+    "plot_split_statistics",
     # Pattern generation
     "plot_place_cell_patterns",
     "plot_grid_cell_patterns",

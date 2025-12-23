@@ -29,8 +29,6 @@ from pathlib import Path
 from typing import List, Literal
 
 import lightning as L
-import matplotlib.pyplot as plt
-import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

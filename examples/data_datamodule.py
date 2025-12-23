@@ -22,7 +22,6 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import config, data, figures
-from torch_tem.data.walks import Walk, WalkDataset
 
 
 # ==============================================================================
@@ -43,12 +42,12 @@ class ExampleConfig(BaseSettings):
 
     # Data splits
     n_train_batches: int = Field(default=5, ge=1, le=5, description="Number of training batches per epoch (capped to keep this example quick)")
-    n_val_batches: int = Field(default=1, ge=0, le=5, description="Number of validation batches (0 disables val plots)")
-    n_test_batches: int = Field(default=0, ge=0, le=5, description="Number of test batches")
+    n_val_batches: int = Field(default=1, ge=1, le=5, description="Number of validation batches (0 disables val plots)")
+    n_test_batches: int = Field(default=1, ge=1, le=5, description="Number of test batches")
     seed: Optional[int] = Field(default=None, description="Random seed for reproducible environment/walk generation")
 
     # Dataloader settings
-    batch_size: int = Field(default=16, ge=1, description="Number of walks per batch")
+    batch_size: int = Field(default=2, ge=1, description="Number of walks per batch")
     num_workers: int = Field(default=0, ge=0, description="Number of DataLoader worker processes (0 = main process only)")
     pin_memory: bool = Field(default=False, description="Pin memory for faster GPU transfer")
     drop_last: bool = Field(default=False, description="Drop last incomplete batch")
@@ -57,9 +56,6 @@ class ExampleConfig(BaseSettings):
     output_dir: Path = Field(default=Path("outputs/data_generation"), description="Directory for saving plots")
     show_plots: bool = Field(default=True, description="Display plots interactively")
     save_plots: bool = Field(default=True, description="Save plots to output directory")
-
-    # Demo controls
-    n_demo_walks: int = Field(default=2, ge=1, description="Number of single walks to generate for trajectory plots")
 
     @field_validator("output_dir")
     @classmethod
@@ -74,42 +70,36 @@ class ExampleConfig(BaseSettings):
 # ==============================================================================
 if __name__ == "__main__":
     """Run the data generation example with visualizations."""
-    cfg = ExampleConfig()
-
-    # DataModuleConfig is strict about unknown fields; ExampleConfig also contains
-    # plotting-only settings (e.g., output_dir). Filter to the DataModule surface.
-    cfg_dict = cfg.model_dump()
-    dm_payload = {k: v for k, v in cfg_dict.items() if k in config.DataModuleConfig.model_fields}
-    dm_cfg = config.DataModuleConfig.model_validate(dm_payload)
+    example_config = ExampleConfig()
+    dm_config = config.DataModuleConfig.model_validate(example_config.model_dump())
 
     print("=" * 80)
     print("TEM DataModule Example")
     print("=" * 80)
-    print(f"Grid: {dm_cfg.environment.width}×{dm_cfg.environment.height}")
-    print(f"Policy: {dm_cfg.policy.type}")
-    print(f"Sequence length (T): {dm_cfg.sequence_length}")
-    print(f"Batch size (B): {dm_cfg.batch_size}")
+    print(f"Grid: {dm_config.environment.width}×{dm_config.environment.height}")
+    print(f"Policy: {dm_config.policy.type}")
+    print(f"Sequence length (T): {dm_config.sequence_length}")
+    print(f"Batch size (B): {dm_config.batch_size}")
     print()
 
     # ------------------------------------------------------------------
     # Step 1: Instantiate TEMDataModule and build runtime objects
     # ------------------------------------------------------------------
-    datamodule = data.TEMDataModule(dm_cfg)
-    # Use `None` so all configured splits are available.
-    datamodule.setup(None)
+    datamodule = data.TEMDataModule(dm_config)
+    datamodule.setup(None)  # Use `None` so all configured splits are available.
 
-    env = datamodule.environment
-    policy_gen = datamodule.policy_gen
-    walk_gen = datamodule.walk_gen
-    if env is None or policy_gen is None or walk_gen is None:
-        raise RuntimeError("TEMDataModule.setup() did not initialize required components")
+    print("Step 1 → Environment and data generation setup complete.")
+    print(f"  Environment: {datamodule.environment}")
+    print(f"  Policy:      {datamodule.policy_gen}")
+    print(f"  Walk Gen.:   {datamodule.walk_gen}")
+    print()
 
     # ------------------------------------------------------------------
     # Step 2: Fetch a single time-major batch and print shapes
     # ------------------------------------------------------------------
     print("Step 2 → Inspecting a single batch (time-major tensors)")
-    train_loader = datamodule.train_dataloader()
-    obs, actions, locations = next(iter(train_loader))
+    val_loader = datamodule.val_dataloader()
+    walks = obs, actions, locations = next(iter(val_loader))
 
     print(f"  observations: shape={tuple(obs.shape)}, dtype={obs.dtype}")
     print(f"  actions:       shape={tuple(actions.shape)}, dtype={actions.dtype}")
@@ -118,62 +108,39 @@ if __name__ == "__main__":
     print()
 
     # ------------------------------------------------------------------
-    # Step 3: Optional visualizations (environment, policies, walks, batch)
+    # Step 3: Additonal visualizations (environment, policies, walks, batch)
     # ------------------------------------------------------------------
-    figs: list[tuple[str, plt.Figure]] = []
-    figs.append(("01_environment_layout.png", figures.plot_environment_layout(env, title=f"Environment ({env.n_locations} locations)")))
 
     # Note: we intentionally do NOT plot policy comparisons here.
     # The purpose of this example is to demonstrate how the configured policy
     # (from ExampleConfig → DataModuleConfig) drives data generation.
-    policy_cfg = dm_cfg.policy
+    train_dataset = datamodule.train_dataloader().dataset
+    val_dataset = datamodule.val_dataloader().dataset
+    test_dataset = datamodule.test_dataloader().dataset
 
-    # Sample a few walks directly from the same dataset configuration so we can
-    # visualize trajectories and statistics.
-    walk_dataset = WalkDataset(n_items=cfg.n_demo_walks, env=env, policy_gen=policy_gen, walk_gen=walk_gen, params=dm_cfg)
-    walks: list[Walk] = []
-    for i in range(cfg.n_demo_walks):
-        obs_i, act_i, loc_i = walk_dataset[i]
-        walks.append(Walk(observations=obs_i, actions=act_i, locations=loc_i))
+    figs: list[tuple[str, plt.Figure]] = []
+    env = datamodule.environment
+    figs.append(("01_environment_layout.png", figures.plot_environment_layout(env, title=f"Environment ({env.n_locations} locations)")))
 
-    def collect_split_locations(loader, n_batches: int) -> list:
-        collected = []
-        if n_batches <= 0:
-            return collected
-        for _, batch in zip(range(n_batches), loader):
-            _, _, locs_b = batch
-            collected.append(locs_b)
-        return collected
+    # The DataModule yields time-major tensors: observations [T,B,n_x], actions [T,B], locations [T,B].
+    # Pass the batch directly; the plotting utilities treat each batch column as one walk.
+    batch_walk = data.Walk(observations=obs, actions=actions, locations=locations)
+    policy_type = dm_config.policy.type
+    figs.append(("02_walk_trajectories.png", figures.plot_walks(env, [batch_walk], title=f"Val-Walks, policy={policy_type})")))
+    figs.append(("03_walk_statistics.png", figures.plot_walk_statistics([batch_walk])))
 
-    train_locations = collect_split_locations(datamodule.train_dataloader(), dm_cfg.n_train_batches)
-    val_locations_list = collect_split_locations(datamodule.val_dataloader(), dm_cfg.n_val_batches)
-    test_locations_list = collect_split_locations(datamodule.test_dataloader(), dm_cfg.n_test_batches)
-
-    figs.append(("02_walk_trajectories.png", figures.plot_walks(env, walks, title=f"{cfg.n_demo_walks} Walks (policy={policy_cfg.type})")))
-    figs.append(("03_walk_statistics.png", figures.plot_walk_statistics(walks)))
-
-    split_locations = {"train": train_locations}
-    if dm_cfg.n_val_batches > 0:
-        split_locations["val"] = val_locations_list
-    if dm_cfg.n_test_batches > 0:
-        split_locations["test"] = test_locations_list
-    figs.append(("04_split_visit_statistics.png", figures.plot_split_location_visit_statistics(env, split_locations)))
+    # Split statistics
+    figs.append(("04_split_statistics.png", figures.plot_split_statistics(env, datamodule.datasets)))
 
     # Batch tensors are time-major [T, B, ...] from the DataModule.
-    figs.append(("05_train_batch_tensors.png", figures.plot_batch_tensors_time_major(obs, actions, locations)))
+    figs.append(("05_batch_tensors.png", figures.plot_batch_tensors_time_major(obs, actions, locations)))
 
-    # Optional: visualize a single validation batch if configured.
-    if dm_cfg.n_val_batches > 0:
-        val_loader = datamodule.val_dataloader()
-        val_obs, val_actions, val_locations = next(iter(val_loader))
-        figs.append(("06_val_batch_tensors.png", figures.plot_batch_tensors_time_major(val_obs, val_actions, val_locations)))
-
-    if cfg.save_plots:
+    if example_config.save_plots:
         for filename, fig in figs:
-            fig.savefig(cfg.output_dir / filename, dpi=150, bbox_inches="tight")
-        print(f"Saved {len(figs)} figure(s) to: {cfg.output_dir}")
+            fig.savefig(example_config.output_dir / filename, dpi=150, bbox_inches="tight")
+        print(f"Saved {len(figs)} figure(s) to: {example_config.output_dir}")
 
-    if cfg.show_plots:
+    if example_config.show_plots:
         plt.show()
     else:
         plt.close("all")

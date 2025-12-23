@@ -5,7 +5,7 @@ from typing import List, Union
 
 import numpy as np
 
-from torch_tem.data.environment import Environment, Location
+from torch_tem.data.environment import Environment, EnvLocation
 
 
 class PolicyGenerator:
@@ -27,11 +27,11 @@ class PolicyGenerator:
         self.env = environment
         self.distance_cache = environment.shortest_paths()
 
-    def random_policy(self) -> List[Location]:
+    def random_policy(self) -> List[EnvLocation]:
         """Generate uniform distribution over valid actions at each location.
 
         Returns:
-            List[Location]: Locations with uniform action probabilities
+            List[EnvLocation]: Locations with uniform action probabilities
         """
         new_locations = []
 
@@ -61,7 +61,7 @@ class PolicyGenerator:
 
         return new_locations
 
-    def distance_policy(self, goal_locations: Union[int, List[int]], beta: float = 1.0) -> List[Location]:
+    def distance_policy(self, goal_locations: Union[int, List[int]], beta: float = 1.0) -> List[EnvLocation]:
         """Softmax policy based on graph distance to goals.
 
         Computes policy that favors actions leading toward goal locations
@@ -73,7 +73,7 @@ class PolicyGenerator:
             beta: Inverse temperature for softmax (higher = more deterministic)
 
         Returns:
-            List[Location]: Locations with distance-based action probabilities
+            List[EnvLocation]: Locations with distance-based action probabilities
         """
         # Ensure goal_locations is a list
         if isinstance(goal_locations, int):
@@ -130,9 +130,9 @@ class PolicyGenerator:
                 action.probability = float(prob)
 
         # Convert back to Pydantic models
-        return [Location(**loc.model_dump()) for loc in new_locations]
+        return [EnvLocation(**loc.model_dump()) for loc in new_locations]
 
-    def q_learning_policy(self, goal_locations: Union[int, List[int]], gamma: float = 0.9, beta: float = 1.0, n_iterations: int = 100) -> List[Location]:
+    def q_learning_policy(self, goal_locations: Union[int, List[int]], gamma: float = 0.9, beta: float = 1.0, n_iterations: int = 100) -> List[EnvLocation]:
         """Q-learned policy via value iteration.
 
         Computes optimal policy toward reward locations using value iteration
@@ -145,7 +145,7 @@ class PolicyGenerator:
             n_iterations: Value iteration steps (default 10 * n_locations)
 
         Returns:
-            List[Location]: Locations with Q-learned action probabilities
+            List[EnvLocation]: Locations with Q-learned action probabilities
         """
         # Ensure goal_locations is a list
         if isinstance(goal_locations, int):
@@ -209,11 +209,11 @@ class PolicyGenerator:
         result = []
         for loc in new_locations:
             loc_dict = loc.model_dump()
-            result.append(Location(**loc_dict))
+            result.append(EnvLocation(**loc_dict))
 
         return result
 
-    def mix_policies(self, policies: List[List[Location]], weights: List[float]) -> List[Location]:
+    def mix_policies(self, policies: List[List[EnvLocation]], weights: List[float]) -> List[EnvLocation]:
         """Combine multiple policies with weighted averaging.
 
         Args:
@@ -221,7 +221,7 @@ class PolicyGenerator:
             weights: Mixing weights (must sum to 1.0)
 
         Returns:
-            List[Location]: Mixed policy
+            List[EnvLocation]: Mixed policy
 
         Raises:
             ValueError: If policies have different lengths or weights don't sum to 1

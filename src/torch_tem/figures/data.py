@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch import Tensor
+from torch.utils.data import Dataset
 
 from torch_tem.types import Matrix, Vector
 from torch_tem.utils import compute_graph_layout
@@ -187,22 +188,26 @@ def plot_walks(env: EnvironmentProtocol, walks: List[WalkProtocol], title: str =
             if adj[i, j] > 0:
                 ax.plot([x[i], x[j]], [y[i], y[j]], "gray", alpha=0.1, linewidth=1, zorder=1)
 
-    # Plot each walk
-    colors = plt.cm.tab10(np.linspace(0, 1, len(walks)))
-    for walk_idx, walk in enumerate(walks):
-        # Extract location sequence
-        if isinstance(walk.locations, Tensor):
-            locs = walk.locations.tolist()
-        else:
-            locs = list(walk.locations)
+    # Expand input into per-walk sequences (supports batched [T,B] walks)
+    sequences: List[List[int]] = []
+    for walk in walks:
+        sequences.extend([locs for locs, _acts in _walk_sequences_time_major(walk)])
 
-        walk_x = [x[loc] for loc in locs]
-        walk_y = [y[loc] for loc in locs]
+    # Plot each walk
+    colors = plt.cm.tab10(np.linspace(0, 1, max(1, len(sequences))))
+    for walk_idx, locs in enumerate(sequences):
+        # Defensive: ignore invalid indices
+        locs_valid = [int(loc) for loc in locs if 0 <= int(loc) < n_locs]
+        if len(locs_valid) < 2:
+            continue
+
+        walk_x = [x[loc] for loc in locs_valid]
+        walk_y = [y[loc] for loc in locs_valid]
 
         # Plot walk trajectory
-        ax.plot(walk_x, walk_y, "-", color=colors[walk_idx], alpha=0.6, linewidth=2, zorder=5)
-        ax.scatter(walk_x[0], walk_y[0], s=200, c=[colors[walk_idx]], marker="o", edgecolors="black", linewidths=2, zorder=10, label=f"Walk {walk_idx+1} start")
-        ax.scatter(walk_x[-1], walk_y[-1], s=200, c=[colors[walk_idx]], marker="s", edgecolors="black", linewidths=2, zorder=10)
+        ax.plot(walk_x, walk_y, "-", color=colors[walk_idx % len(colors)], alpha=0.6, linewidth=2, zorder=5)
+        ax.scatter(walk_x[0], walk_y[0], s=200, c=[colors[walk_idx % len(colors)]], marker="o", edgecolors="black", linewidths=2, zorder=10)
+        ax.scatter(walk_x[-1], walk_y[-1], s=200, c=[colors[walk_idx % len(colors)]], marker="s", edgecolors="black", linewidths=2, zorder=10)
 
     # Plot location nodes
     ax.scatter(x, y, s=300, c="lightgray", edgecolors="black", linewidths=1.5, zorder=8, alpha=0.7)
@@ -223,6 +228,70 @@ def plot_walks(env: EnvironmentProtocol, walks: List[WalkProtocol], title: str =
 
     plt.tight_layout()
     return fig
+
+
+def _ensure_time_major(x: Tensor) -> Tensor:
+    """Heuristically ensure time-major layout for batched sequences.
+
+    The TEM DataModule yields time-major tensors: [T, B, ...].
+    Some legacy code may provide batch-major tensors: [B, T, ...].
+
+    This helper keeps [T, B, ...] unchanged and swaps the first two axes for
+    likely [B, T, ...] inputs.
+    """
+
+    if x.ndim < 2:
+        return x
+
+    t_dim = int(x.shape[0])
+    b_dim = int(x.shape[1])
+
+    # Common case: B is small, T is larger. If the first dim is small and the
+    # second dim is much larger, assume [B, T, ...] and transpose.
+    if t_dim <= 64 and b_dim > t_dim:
+        return x.transpose(0, 1)
+    return x
+
+
+def _walk_sequences_time_major(walk: WalkProtocol) -> List[Tuple[List[int], List[int]]]:
+    """Convert a WalkProtocol into a list of (locations, actions) sequences.
+
+    Supported inputs:
+    - Per-walk sequences: locations/actions shaped [T]
+    - Batched sequences:  locations/actions shaped [T, B] (preferred)
+      (also accepts [B, T] and transposes heuristically)
+    """
+
+    def _to_tensor(v: Vector) -> Tensor:
+        if isinstance(v, Tensor):
+            return v
+        return torch.as_tensor(v)
+
+    loc = _to_tensor(walk.locations)
+    act = _to_tensor(walk.actions)
+
+    if loc.ndim == 1:
+        return [(loc.detach().cpu().to(torch.int64).tolist(), act.detach().cpu().to(torch.int64).tolist())]
+
+    loc_tm = _ensure_time_major(loc)
+    act_tm = _ensure_time_major(act)
+
+    if loc_tm.ndim != 2 or act_tm.ndim != 2:
+        raise ValueError("Expected locations/actions to be [T], [T,B] (or [B,T])")
+
+    if loc_tm.shape[:2] != act_tm.shape[:2]:
+        raise ValueError(f"Locations/actions shape mismatch: {tuple(loc_tm.shape)} vs {tuple(act_tm.shape)}")
+
+    t_steps, batch_size = int(loc_tm.shape[0]), int(loc_tm.shape[1])
+    sequences: List[Tuple[List[int], List[int]]] = []
+    for b in range(batch_size):
+        locs_b = loc_tm[:, b].detach().cpu().to(torch.int64).tolist()
+        acts_b = act_tm[:, b].detach().cpu().to(torch.int64).tolist()
+        # Keep sequences length-consistent (defensive)
+        if len(locs_b) != t_steps or len(acts_b) != t_steps:
+            continue
+        sequences.append((locs_b, acts_b))
+    return sequences
 
 
 # ==============================================================================
@@ -248,15 +317,11 @@ def plot_walk_statistics(walks: List[WalkProtocol], figsize: Tuple[float, float]
     location_visits = []
     action_sequences = []
 
+    sequences_la: List[Tuple[List[int], List[int]]] = []
     for walk in walks:
-        # Handle both Tensor and list formats
-        if isinstance(walk.locations, Tensor):
-            locs = walk.locations.tolist()
-            acts = walk.actions.tolist()
-        else:
-            locs = list(walk.locations)
-            acts = list(walk.actions)
+        sequences_la.extend(_walk_sequences_time_major(walk))
 
+    for locs, acts in sequences_la:
         walk_lengths.append(len(locs))
         location_visits.extend(locs)
         action_sequences.extend(acts)
@@ -285,11 +350,7 @@ def plot_walk_statistics(walks: List[WalkProtocol], figsize: Tuple[float, float]
 
     # Plot 4: Action repeat analysis
     repeats = []
-    for walk in walks:
-        if isinstance(walk.actions, Tensor):
-            acts = walk.actions.tolist()
-        else:
-            acts = list(walk.actions)
+    for _locs, acts in sequences_la:
 
         current_repeat = 1
         for i in range(1, len(acts)):
@@ -412,6 +473,66 @@ def plot_location_visit_map(
 # ==============================================================================
 # Split-Level Visit Statistics (Geometry-Agnostic)
 # ==============================================================================
+def plot_split_statistics(
+    env: EnvironmentProtocol,
+    datasets: Dict[str, Dataset],
+    *,
+    title: str = "Split Visitation Statistics",
+    figsize: Tuple[float, float] = (14, 10),
+    max_items_per_split: Optional[int] = None,
+) -> plt.Figure:
+    """Plot split-level visitation statistics from DataModule datasets.
+
+    The `TEMDataModule` exposes `datamodule.datasets` as a mapping from split
+    name ("fit", "validate", "test") to a `WalkDataset`.
+
+    This convenience wrapper extracts the per-item location sequences from each
+    dataset and forwards them to :func:`plot_split_location_visit_statistics`.
+
+    Args:
+        env: Environment providing `n_locations`.
+        datasets: Mapping from split name to dataset. Each dataset item must
+            provide a location sequence either as:
+            - a tuple/list where the 3rd element is `locations`, or
+            - an object with a `locations` attribute.
+        title: Figure title.
+        figsize: Figure size.
+        max_items_per_split: Optional cap on how many dataset items to sample
+            per split (useful for large datasets).
+
+    Returns:
+        A matplotlib Figure object.
+    """
+
+    def _extract_locations(sample) -> Vector:
+        """Extract location sequence from a dataset sample."""
+        if isinstance(sample, (tuple, list)) and len(sample) >= 3:
+            return sample[2]
+        if hasattr(sample, "locations"):
+            return getattr(sample, "locations")
+        raise TypeError("Dataset sample must be (obs, actions, locations) or have a " "`.locations` attribute")
+
+    split_locations: Dict[str, List[Vector]] = {}
+    for split_name, dataset in datasets.items():
+        n_items = len(dataset)
+        if max_items_per_split is not None:
+            n_items = min(n_items, int(max_items_per_split))
+
+        locations_list: List[Vector] = []
+        for idx in range(n_items):
+            sample = dataset[idx]
+            locations_list.append(_extract_locations(sample))
+
+        split_locations[split_name] = locations_list
+
+    return plot_split_location_visit_statistics(
+        env,
+        split_locations,
+        title=title,
+        figsize=figsize,
+    )
+
+
 def plot_split_location_visit_statistics(
     env: EnvironmentProtocol,
     split_locations: Dict[str, Vector | List[Vector]],

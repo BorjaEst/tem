@@ -127,3 +127,15 @@ class TEMDataModule(L.LightningDataModule):
             pin_memory=self.config.pin_memory,
             drop_last=self.config.drop_last,
         )
+
+    def sample_batch(self, stage: str) -> tuple:
+        """Fetch a single batch from the specified stage's DataLoader.
+
+        Args:
+            stage: Dataset stage key ("fit", "validate", "test").
+
+        Returns:
+            A single batch tuple `(observations, actions, locations)`.
+        """
+        loader = self._dataloader_for(stage)
+        return next(iter(loader))

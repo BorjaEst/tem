@@ -1,73 +1,6 @@
-#!/usr/bin/env python3
-"""Complete TEM training example using PyTorch Lightning.
-
-This example demonstrates the full training pipeline for the Tolman-Eichenbaum Machine,
-showing how to:
-- Configure training hyperparameters and architecture
-- Initialize the TEM model and Lightning module
-- Set up data generation with environment and DataModule
-- Execute training with automatic checkpointing and logging
-- Visualize training progress and learned representations
-
-The training process implements Backpropagation Through Time (BPTT) with truncation
-to handle long temporal sequences while maintaining computational efficiency.
-
-Training Pipeline:
-------------------
-1. Environment Setup: Create grid world with observations
-2. Data Generation: TEMDataModule generates random walks
-3. Model Initialization: TEMModel with specified architecture
-4. Lightning Wrapper: TEMLightningModule handles optimization
-5. Training Loop: PyTorch Lightning Trainer with BPTT
-6. Visualization: Plot training metrics and learned representations
-
-Key Components:
----------------
-- EnvironmentConfig: Defines the spatial environment
-- ModelConfig: Specifies neural architecture (grid/place cells, frequencies)
-- TrainingConfig: Sets learning rates, loss weights, BPTT rollout
-- TEMDataModule: Generates training data (random walks)
-- TEMLightningModule: Handles training loop with manual BPTT
-- Trainer: PyTorch Lightning trainer with logging/checkpointing
-
-Usage Examples:
----------------
-    # Default: 10x10 grid, 1000 steps, save checkpoints
-    python examples/training_example.py
-
-    # Longer training with larger architecture
-    python examples/training_example.py --max_steps 5000 --grid_size 8
-
-    # Custom learning rate and batch size
-    python examples/training_example.py --lr_max 0.001 --batch_size 32
-
-    # Enable TensorBoard logging
-    python examples/training_example.py --use_tensorboard true
-
-    # Different frequency configuration
-    python examples/training_example.py --f_initial "[0.95, 0.7, 0.4, 0.2]"
-
-    # Full help
-    python examples/training_example.py --help
-
-Outputs:
---------
-When save_plots=true, generates visualizations in outputs/training/:
-    1. 01_environment.png - Grid layout and observation mapping
-    2. 02_loss_curves.png - Training loss over iterations
-    3. 03_grid_rate_maps.png - Learned grid cell firing patterns
-    4. 04_place_rate_maps.png - Learned place cell firing fields
-    5. 05_memory_structure.png - Final Hebbian memory matrices
-
-When use_tensorboard=true, logs to logs/ for TensorBoard visualization:
-    - Loss components (total, sensory, abstract, grounded)
-    - Learning rate schedule
-    - Gradient norms
-    - Model parameters
-"""
+"""Complete TEM training example using PyTorch Lightning."""
 
 from pathlib import Path
-from typing import List
 
 import lightning as L
 import matplotlib.pyplot as plt
@@ -199,9 +132,9 @@ if __name__ == "__main__":
     callbacks = [
         L.pytorch.callbacks.ModelCheckpoint(
             dirpath=example_config.checkpoint_dir,
-            filename="tem-{epoch:02d}-{train_loss:.4f}",
+            filename="tem-{epoch:02d}-{step:06d}",
             save_top_k=3,
-            monitor="train_loss",
+            monitor="train/loss",
             mode="min",
         ),
         L.pytorch.callbacks.LearningRateMonitor(logging_interval="step"),
@@ -230,6 +163,7 @@ if __name__ == "__main__":
     print("\nPhase 5: Starting training...")
     print("=" * 80)
 
+    # Start training
     trainer.fit(lightning_module, datamodule)
 
     print("\n" + "=" * 80)
@@ -249,7 +183,8 @@ if __name__ == "__main__":
         print(f"  Saved: {example_config.output_dir / '01_environment.png'}")
 
     # Plot loss curves (simplified - use TensorBoard for detailed metrics)
-    fig2 = figures.plot_loss_curves(trainer, example_config.output_dir / "02_loss_curves.png")
+    loss_curves_path = example_config.output_dir / "02_loss_curves.png" if example_config.save_plots else None
+    fig2 = figures.plot_loss_curves(trainer, loss_curves_path)
     if example_config.save_plots:
         print(f"  Saved: {example_config.output_dir / '02_loss_curves.png'}")
 
@@ -257,9 +192,13 @@ if __name__ == "__main__":
     print("\n  Generating test walk for visualization...")
     tem_model.eval()
     with torch.no_grad():
-        # Generate a single test walk
-        # Returns: observations [T, B, n_x], actions [T, B], locations [T, B]
-        test_obs, test_actions, test_locations = datamodule.generate_batch()
+        # Fetch a single time-major batch from the test DataLoader.
+        test_obs, test_actions, _ = datamodule.sample_batch("test")
+
+        # Keep tensors on the same device as the trained model.
+        model_device = next(tem_model.parameters()).device
+        test_obs = test_obs.to(model_device)
+        test_actions = test_actions.to(model_device)
 
         # Initialize state with first observation: [B, n_x]
         state = tem_model.init_state(test_obs[0])
@@ -267,12 +206,12 @@ if __name__ == "__main__":
         # Process through walk (limit to 100 steps)
         max_steps = min(100, test_obs.shape[0])
         batch_size = test_obs.shape[1]
-        step_locations = [{"shiny": None}] * batch_size
+        step_locations = lightning_module.create_step_locations(batch_size)
 
         for t in range(max_steps):
             # Extract observation and action for timestep t
             obs_t = test_obs[t]  # [B, n_x]
-            act_t = test_actions[t] if t > 0 else None  # [B] or None
+            act_t = test_actions[t]  # [B]
             state = tem_model(obs_t, step_locations, act_t, state)
 
     # Plot abstract location snapshot

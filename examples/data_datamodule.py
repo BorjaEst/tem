@@ -98,8 +98,7 @@ if __name__ == "__main__":
     # Step 2: Fetch a single time-major batch and print shapes
     # ------------------------------------------------------------------
     print("Step 2 → Inspecting a single batch (time-major tensors)")
-    val_loader = datamodule.val_dataloader()
-    walks = obs, actions, locations = next(iter(val_loader))
+    walks = obs, actions, locations = datamodule.sample_batch("validate")
 
     print(f"  observations: shape={tuple(obs.shape)}, dtype={obs.dtype}")
     print(f"  actions:       shape={tuple(actions.shape)}, dtype={actions.dtype}")

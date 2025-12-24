@@ -353,6 +353,20 @@ class WalkDataset(Dataset[WalkSample]):
         self._sequence_length = int(params.sequence_length)
         self._seed = params.seed
 
+        # Shiny environments should be stable across all walks in this dataset.
+        # We therefore place shiny objects once (per dataset instance) and reuse
+        # the resulting goal policies for every generated walk.
+        self._shiny_locations: Optional[List[int]] = None
+        self._shiny_policies: Optional[List[List[EnvLocation]]] = None
+
+        if isinstance(self._policy_cfg, ShinyPolicyConfig):
+            base_seed = 0 if self._seed is None else int(self._seed)
+            rng = np.random.default_rng(base_seed)
+            builder = ShinyEnvironmentBuilder(self._env, self._env_cfg, self._policy_cfg, self._policy_gen, rng=rng)
+            self._shiny_locations = builder.place_shiny_objects()
+            builder.mark_environment(self._shiny_locations)
+            self._shiny_policies = builder.generate_shiny_policies(self._shiny_locations)
+
     def __len__(self) -> int:  # type: ignore[override]
         return self._n_items
 
@@ -382,14 +396,12 @@ class WalkDataset(Dataset[WalkSample]):
         policy_cfg = self._policy_cfg
 
         if isinstance(policy_cfg, ShinyPolicyConfig):
-            builder = ShinyEnvironmentBuilder(self._env, self._env_cfg, policy_cfg, self._policy_gen)
-            shiny_locations = builder.place_shiny_objects()
-            builder.mark_environment(shiny_locations)
-            shiny_policies = builder.generate_shiny_policies(shiny_locations)
+            if self._shiny_locations is None or self._shiny_policies is None:
+                raise RuntimeError("Shiny placement not initialized; expected WalkDataset to initialize it in __init__.")
             return self._walk_gen.generate_shiny_walk(
                 walk_length=t_steps,
-                shiny_locations=shiny_locations,
-                shiny_policies=shiny_policies,
+                shiny_locations=self._shiny_locations,
+                shiny_policies=self._shiny_policies,
                 returns=self._env_cfg.shiny_returns,
             )
 

@@ -4,7 +4,7 @@ This module intentionally does *not* define a separate ShinyConfig model.
 Shiny-related scalar parameters live in :class:`torch_tem.config.EnvironmentConfig`.
 """
 
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -26,6 +26,7 @@ class ShinyEnvironmentBuilder:
         env_config: EnvironmentConfig,
         policy_config: ShinyPolicyConfig,
         policy_generator: PolicyGenerator,
+        rng: Optional[np.random.Generator] = None,
     ):
         """Initialize shiny environment builder.
 
@@ -40,6 +41,7 @@ class ShinyEnvironmentBuilder:
         self._env_cfg = env_config
         self._policy_cfg = policy_config
         self.policy_gen = policy_generator
+        self._rng = rng or np.random.default_rng()
 
     def place_shiny_objects(self) -> List[int]:
         """Place shiny objects with minimum separation constraint.
@@ -69,7 +71,7 @@ class ShinyEnvironmentBuilder:
             attempts = 0
             while attempts < max_attempts:
                 # Sample candidate location
-                candidate = np.random.randint(self.env.n_locations)
+                candidate = int(self._rng.integers(self.env.n_locations))
 
                 # Check separation from existing shiny locations
                 if not shiny_locations:
@@ -123,7 +125,7 @@ class ShinyEnvironmentBuilder:
 
             # If non-shiny location has shiny observation, replace it
             if not is_shiny and location.observation in shiny_objects:
-                new_observation = np.random.choice(non_shiny_objects)
+                new_observation = int(self._rng.choice(non_shiny_objects))
                 new_location = location.model_copy(update={"observation": new_observation, "shiny": False})
             else:
                 new_location = location.model_copy(update={"shiny": is_shiny})

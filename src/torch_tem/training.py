@@ -7,10 +7,11 @@ import lightning as L
 import torch
 from torch import Tensor, optim
 
+from torch_tem import losses
 from torch_tem.config import TrainingConfig
 from torch_tem.core import TEMModel, TEMState
 from torch_tem.data import Environment, TEMDataModule
-from torch_tem.losses import LossOutput, TEMLoss, TEMLossConfig
+from torch_tem.losses import LossOutput
 from torch_tem.types import Observation, WalkBatch
 
 
@@ -38,17 +39,18 @@ class TEMLightningModule(L.LightningModule):
         self.model = model
         self.config = config
 
-        # Apply training-time loss weights to the model's loss aggregator.
-        # TEMModel defaults to TEMLoss() with TEMLossConfig defaults; without
-        # this wiring, TrainingConfig loss weights would have no effect.
-        self.model.loss_total_fn = TEMLoss(config)
+        # Initialize loss components
+        self.loss_x_fn = losses.SensoryReconstructionLoss()
+        self.loss_p_fn = losses.GroundedLocationLoss()
+        self.loss_g_fn = losses.AbstractLocationLoss()
+        self.loss_reg_fn = losses.RegularizationLoss()
+        self.loss_total_fn = losses.TEMLoss(config.loss)
 
         # Save hyperparameters
         self.save_hyperparameters({**config.model_dump()})
         # self.save_hyperparameters({**model.config.model_dump()})
 
-        # Automatic optimization is disabled to handle BPTT manually if needed,
-        # Lightning's TBPTT is deprecated, so manual loop is preferred.
+        # Automatic optimization is disabled to handle BPTT manually
         self.automatic_optimization = False
 
     def configure_optimizers(self) -> Tuple[List[optim.Optimizer], List[optim.lr_scheduler._LRScheduler]]:
@@ -66,17 +68,6 @@ class TEMLightningModule(L.LightningModule):
 
         return [optimizer], [scheduler]
 
-    @property
-    def environment(self) -> Environment:
-        """Environment instance from the attached DataModule.
-
-        Returns:
-            Environment: The environment used for data generation.
-        """
-        datamodule: TEMDataModule = self.trainer.datamodule  # type: ignore[attr-defined]
-        assert datamodule is not None and datamodule.environment is not None, "DataModule or environment not set."
-        return datamodule.environment
-
     def forward(self, x: Observation, locations: List[Dict], a: Optional[Tensor], state: TEMState) -> Tuple[TEMState, LossOutput]:
         """Forward pass through the model and compute loss.
 
@@ -93,6 +84,44 @@ class TEMLightningModule(L.LightningModule):
         """
         state = self.model(x, locations, a, state)
         return state, self.model.loss(x, state)
+
+    def loss(self, x: Observation, state: TEMState) -> losses.LossOutput:
+        """Compute Evidence Lower Bound (ELBO) loss for TEM.
+
+        The total loss comprises three components following the TEM paper:
+        1. L_x: Sensory reconstruction loss (from three pathways)
+        2. L_p: Grounded location consistency loss
+        3. L_g: Abstract location KL divergence loss
+
+        Args:
+            x: Ground truth sensory observation.
+            state: Current TEM state with all pathway outputs.
+
+        Returns:
+            LossOutput containing total loss and individual components.
+        """
+        # Extract grounded locations from TEM state for loss computation
+        p_x, p_g, p = state.grounded
+        g_gen = self.model.mec.projection(state.mec.transition_stats.mean)  # Project predicted abstract location
+        p_gen = self.model.hpc.retrieve(g_gen, for_inference=False, state=state.hpc)  # Retrieve from generative memory
+
+        # L_x: Sensory reconstruction from three pathways (teacher forcing)
+        Lx = [
+            # self.loss_x_fn(prediction=self.lec.decode(p_x), target=x),  # From sensory retrieval
+            self.loss_x_fn(prediction=self.model.lec.decode(p_g), target=x),  # From abstract retrieval
+            self.loss_x_fn(prediction=self.model.lec.decode(p), target=x),  # From inference
+            self.loss_x_fn(prediction=self.model.lec.decode(p_gen), target=x),  # From generative prediction
+        ]
+        # L_p: Grounded location consistency (inference matches memory retrieval)
+        Lp = self.loss_p_fn(p=p, p_g=p_g, p_x=p_x)
+        # L_g: Abstract location KL divergence (posterior vs prior)
+        Lg = self.loss_g_fn(g=state.abstract_location, g_gen=state.transition_stats)
+
+        # Regularization losses
+        L_reg_g, L_reg_p = self.loss_reg_fn(g=state.abstract_location, p=p)
+
+        # Compute total ELBO
+        return self.loss_total_fn(sum(Lx), Lp, Lg, L_reg_g, L_reg_p)
 
     def training_step(self, batch: WalkBatch, batch_idx: int):
         """Execute one training step with manual BPTT over rollout chunks.
@@ -113,7 +142,7 @@ class TEMLightningModule(L.LightningModule):
         schedulers = self.lr_schedulers()
 
         # Explicit BPTT loop over rollout chunks
-        for loss_output, state in Rollout(self.model, batch, self.environment):
+        for loss_output, _ in Rollout(self, batch):
 
             # Optimization step
             self.manual_backward(loss_output.total)  # Backpropagate loss
@@ -125,7 +154,6 @@ class TEMLightningModule(L.LightningModule):
             # Log
             self.log_loss(loss_output, "train", on_step=True, on_epoch=False)
             self.log_learning_rate("train")
-            state = state.detach()
 
     def validation_step(self, batch: WalkBatch, batch_idx: int):
         """Execute one validation step.
@@ -139,7 +167,8 @@ class TEMLightningModule(L.LightningModule):
         """
         # Compute without gradient tracking
         with torch.no_grad():
-            loss_output, _ = list(Rollout(self.model, batch, self.environment))[-1]
+            # Use full sequence length for validation (no truncation)
+            loss_output, _ = list(Rollout(self, batch))[-1]
 
         # Log
         self.log_loss(loss_output, "val", on_step=False, on_epoch=True)
@@ -156,7 +185,9 @@ class TEMLightningModule(L.LightningModule):
         """
         # Compute without gradient tracking
         with torch.no_grad():
-            loss_output, _ = list(Rollout(self.model, batch, self.environment))[-1]
+            # Use full sequence length for test (no truncation)
+            walk_length = batch[0].shape[0]
+            loss_output, _ = list(Rollout(self, batch))[-1]
 
         # Log
         self.log_loss(loss_output, "test", on_step=False, on_epoch=True)
@@ -176,16 +207,16 @@ class TEMLightningModule(L.LightningModule):
         # Log total loss (convert Tensor to scalar for TensorBoard)
         self.log(f"{prefix}/loss", loss_output.total.item(), on_step=on_step, on_epoch=on_epoch, prog_bar=prog_bar)
 
-        # Log all components (as_dict() already converts to float, but ensure scalars)
+        # Log all components (as_dict() already converts to float scalars)
         for component_name in ["lx", "lg", "lp"]:
             value = components[component_name]
-            self.log(f"{prefix}/{component_name}", value.item(), on_step=on_step, on_epoch=on_epoch)
+            self.log(f"{prefix}/{component_name}", value, on_step=on_step, on_epoch=on_epoch)
 
         # Log regularization terms if present and non-zero
         for reg_name in ["l_reg_g", "l_reg_p"]:
             if (value := components[reg_name]) == 0.0:
                 continue
-            self.log(f"{prefix}/{reg_name}", value.item(), on_step=on_step, on_epoch=on_epoch)
+            self.log(f"{prefix}/{reg_name}", value, on_step=on_step, on_epoch=on_epoch)
 
     def log_learning_rate(self, prefix: str) -> None:
         """Log current learning rate to tensorboard.
@@ -199,65 +230,102 @@ class TEMLightningModule(L.LightningModule):
 
 
 class Rollout(Iterator[Tuple[LossOutput, TEMState]]):
-    """Iterator that yields (loss_output, state) tuples for each timestep.
+    """Iterator that yields accumulated (loss_output, state) for each rollout chunk.
 
-    Processes a walk sequence one timestep at a time, computing losses.
-    Each iteration returns the loss for that timestep and the updated state.
+    Processes a walk sequence in chunks of n_rollout timesteps, computing and
+    accumulating losses over each chunk. This implements truncated BPTT.
 
     Example:
-        >>> rollout = Rollout(model, batch)
+        >>> rollout = Rollout(model, batch, environment, n_rollout=20)
         >>> for loss_output, state in rollout:
         ...     optimizer.zero_grad()
         ...     loss_output.total.backward()
         ...     optimizer.step()
     """
 
-    def __init__(self, model: TEMModel, batch: WalkBatch, environment: Environment):
+    def __init__(self, module: TEMLightningModule, batch: WalkBatch):
         """Initialize rollout iterator.
 
         Args:
-            model: The TEM model to run.
+            module: TEMLightningModule containing model and loss.
             batch: Tuple of (observations, actions, locations) tensors.
                    observations: [walk_length, batch_size, obs_dim]
                    actions: [walk_length, batch_size]
                    locations: [walk_length, batch_size]
-            environment: Environment instance for location metadata lookup.
         """
-        self.model = model
+        self.module = module
         self.observations, self.actions, self.locations = batch
-        self.environment = environment
-
         self.walk_length = self.observations.shape[0]
         self.batch_size = self.observations.shape[1]
 
         # Initialize state and iteration position
-        self.state = model.init_state(self.observations[0])
+        self.state = module.model.init_state(self.observations[0])
         self.current_t = 0
 
     def __iter__(self) -> "Rollout":
         """Return self as iterator."""
         return self
 
-    def __next__(self) -> Tuple[LossOutput, TEMState]:
-        """Process next timestep and return (loss_output, state).
+    @property
+    def environment(self) -> Environment:
+        """Environment instance from the attached DataModule.
 
         Returns:
-            Tuple of (loss for current timestep, updated state).
+            Environment: The environment used for data generation.
+        """
+        datamodule: TEMDataModule = self.module.trainer.datamodule  # type: ignore[attr-defined]
+        assert datamodule is not None and datamodule.environment is not None, "DataModule or environment not set."
+        return datamodule.environment
+
+    @property
+    def model(self) -> TEMModel:
+        """TEM model from module."""
+        return self.module.model
+
+    @property
+    def n_rollout(self) -> int:
+        """Rollout length from module configuration."""
+        return self.module.config.n_rollout
+
+    def __next__(self) -> Tuple[LossOutput, TEMState]:
+        """Process next n_rollout timesteps and return accumulated (loss_output, state).
+
+        Returns:
+            Tuple of (accumulated loss for this chunk, final state after chunk).
 
         Raises:
             StopIteration: When the entire sequence has been processed.
         """
         if self.current_t >= self.walk_length:
             raise StopIteration
-        t = self.current_t
 
-        # Get step locations - convert tensor to list of dicts
-        step_locations = self._create_step_locations(t)
-        self.state = self.model(self.observations[t], step_locations, self.actions[t], self.state)
-        loss_output = self.model.loss(self.observations[t], self.state)
-        self.current_t += 1
+        # Determine chunk boundaries
+        chunk_start = self.current_t
+        chunk_end = min(chunk_start + self.n_rollout, self.walk_length)
 
-        return loss_output, self.state
+        # Accumulate losses over the chunk
+        accumulated_loss: Optional[LossOutput] = None
+
+        for t in range(chunk_start, chunk_end):
+            # Get step locations
+            step_locations = self._create_step_locations(t)
+
+            # Forward pass
+            self.state = self.model(self.observations[t], step_locations, self.actions[t], self.state)
+            loss_output = self.module.loss(self.observations[t], self.state)
+
+            # Accumulate loss
+            if accumulated_loss is None:
+                accumulated_loss = loss_output
+            else:
+                accumulated_loss = accumulated_loss + loss_output
+
+        self.current_t = chunk_end
+
+        # Detach state to prevent backprop through previous chunks
+        self.state = self.state.detach()
+
+        return accumulated_loss, self.state
 
     def _create_step_locations(self, t: int) -> List[Dict]:
         """Create location metadata for timestep t.

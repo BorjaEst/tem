@@ -19,7 +19,7 @@ from torch_tem.config.datamodule import (
     RandomPolicyConfig,
     ShinyPolicyConfig,
 )
-from torch_tem.config.training import TrainingConfig
+from torch_tem.config.training import LossConfig, TrainingConfig
 
 __all__ = [
     "ModelConfig",
@@ -31,5 +31,6 @@ __all__ = [
     "QLearningPolicyConfig",
     "ShinyPolicyConfig",
     "MixedPolicyConfig",
+    "LossConfig",
     "TrainingConfig",
 ]

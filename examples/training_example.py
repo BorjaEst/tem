@@ -1,5 +1,6 @@
 """Complete TEM training example using PyTorch Lightning."""
 
+import math
 from pathlib import Path
 
 import lightning as L
@@ -9,7 +10,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
-from torch_tem.config import DataModuleConfig, TrainingConfig
+from torch_tem.config import DataModuleConfig, LossConfig, TrainingConfig
 from torch_tem.core.model import TEMModel
 from torch_tem.training import TEMLightningModule
 
@@ -26,17 +27,16 @@ class ExampleConfig(BaseSettings):
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="training_example")
 
-    # TrainingConfig knobs (mirrors torch_tem.config.TrainingConfig)
+    # Training rollout length
     n_rollout: int = Field(default=TrainingConfig().n_rollout, ge=5, le=100, description="BPTT rollout length (steps per backward pass)")
+
+    # Learning rate schedule
     lr_max: float = Field(default=TrainingConfig().lr_max, gt=0, description="Maximum learning rate")
     lr_decay_rate: float = Field(default=TrainingConfig().lr_decay_rate, gt=0, le=1, description="StepLR decay factor (gamma)")
     lr_decay_steps: int = Field(default=TrainingConfig().lr_decay_steps, ge=1, description="StepLR step_size (optimizer steps between decays)")
 
-    loss_weights_x: float = Field(default=TrainingConfig().loss_weights_x, ge=0, description="Weight for sensory loss")
-    loss_weights_p: float = Field(default=TrainingConfig().loss_weights_p, ge=0, description="Weight for grounded location loss")
-    loss_weights_g: float = Field(default=TrainingConfig().loss_weights_g, ge=0, description="Weight for abstract location loss")
-    loss_weights_reg_g: float = Field(default=TrainingConfig().loss_weights_reg_g, ge=0, description="Weight for abstract location regularization")
-    loss_weights_reg_p: float = Field(default=TrainingConfig().loss_weights_reg_p, ge=0, description="Weight for grounded location regularization")
+    # Loss weights
+    loss: LossConfig = Field(default_factory=LossConfig, description="Loss weight configuration")
 
     # Trainer control (example-only)
     max_steps: int = Field(default=10, ge=1, description="Maximum number of optimizer steps")
@@ -76,11 +76,7 @@ if __name__ == "__main__":
     print(f"  BPTT rollout: {training_config.n_rollout}")
     print(f"  Learning rate: {training_config.lr_max}")
     print(f"  LR decay: gamma={training_config.lr_decay_rate}, step_size={training_config.lr_decay_steps}")
-    print(
-        "  Loss weights: "
-        f"x={training_config.loss_weights_x}, p={training_config.loss_weights_p}, g={training_config.loss_weights_g}, "
-        f"reg_g={training_config.loss_weights_reg_g}, reg_p={training_config.loss_weights_reg_p}"
-    )
+    print(f"  Loss weights: {training_config.loss}")
     print()
 
     # =========================================================================
@@ -141,21 +137,28 @@ if __name__ == "__main__":
     ]
 
     # Create trainer
+    steps_per_batch = math.ceil(dm_config.sequence_length / training_config.n_rollout)
+    target_batches = max(1, math.ceil(example_config.max_steps / steps_per_batch))
+    effective_val_check_interval = min(example_config.val_check_interval, target_batches)
     trainer = L.Trainer(
         max_steps=example_config.max_steps,
+        max_epochs=1,
+        limit_train_batches=target_batches,
         logger=logger,
         callbacks=callbacks,
         log_every_n_steps=example_config.log_every_n_steps,
-        val_check_interval=example_config.val_check_interval,
+        val_check_interval=effective_val_check_interval,
         enable_progress_bar=True,
         enable_model_summary=True,
         accelerator="auto",  # Use GPU if available
         devices=1,
     )
     print(f"  Trainer ready: max_steps={example_config.max_steps}")
+    print(f"    - steps_per_batch≈{steps_per_batch} (ceil(sequence_length / n_rollout))")
+    print(f"    - limit_train_batches={target_batches} (so progress bar reaches 100%)")
     print(f"    - Checkpoints: {example_config.checkpoint_dir}")
     print(f"    - log_every_n_steps: {example_config.log_every_n_steps}")
-    print(f"    - val_check_interval: {example_config.val_check_interval}")
+    print(f"    - val_check_interval: {effective_val_check_interval}")
 
     # =========================================================================
     # PHASE 5: Training
@@ -193,12 +196,13 @@ if __name__ == "__main__":
     tem_model.eval()
     with torch.no_grad():
         # Fetch a single time-major batch from the test DataLoader.
-        test_obs, test_actions, _ = datamodule.sample_batch("test")
+        test_obs, test_actions, test_locations = datamodule.sample_batch("test")
 
         # Keep tensors on the same device as the trained model.
         model_device = next(tem_model.parameters()).device
         test_obs = test_obs.to(model_device)
         test_actions = test_actions.to(model_device)
+        test_locations = test_locations.to(model_device)
 
         # Initialize state with first observation: [B, n_x]
         state = tem_model.init_state(test_obs[0])
@@ -206,12 +210,13 @@ if __name__ == "__main__":
         # Process through walk (limit to 100 steps)
         max_steps = min(100, test_obs.shape[0])
         batch_size = test_obs.shape[1]
-        step_locations = lightning_module.create_step_locations(batch_size)
-
         for t in range(max_steps):
             # Extract observation and action for timestep t
             obs_t = test_obs[t]  # [B, n_x]
             act_t = test_actions[t]  # [B]
+            # Convert location IDs to location metadata dicts
+            location_ids = test_locations[t].tolist()
+            step_locations = datamodule.environment.step_locations(location_ids)
             state = tem_model(obs_t, step_locations, act_t, state)
 
     # Plot abstract location snapshot

@@ -15,7 +15,6 @@ from typing import Dict, List, Optional, Tuple
 
 from torch import nn
 
-from torch_tem import losses
 from torch_tem.config import ModelConfig
 from torch_tem.core import hpc, lec, mec
 
@@ -121,23 +120,12 @@ class TEMModel(nn.Module):
             params: Configuration with all component parameters and training settings.
         """
         super().__init__()
+        self.config = params  # Store model configuration
 
         # Initialize components
         self.hpc = hpc.HPCModel(params)  # Hippocampus with memory and grounded inference
         self.lec = lec.LECModel(params)  # LEC pathway module
         self.mec = mec.MECModel(params)  # MEC pathway module
-
-        # Initialize loss components
-        self.loss_x_fn = losses.SensoryReconstructionLoss()
-        self.loss_p_fn = losses.GroundedLocationLoss()
-        self.loss_g_fn = losses.AbstractLocationLoss()
-        self.loss_reg_fn = losses.RegularizationLoss()
-        self.loss_total_fn = losses.TEMLoss()
-
-    # @property
-    # def config(self) -> ModelConfig:
-    #     """Return model configuration."""
-    #     return ModelConfig(lec=self.lec.config, mec=self.mec.config, hpc=self.hpc.config)
 
     def init_state(self, x: Observation) -> TEMState:
         """Initialize TEM state from first observation.
@@ -233,44 +221,6 @@ class TEMModel(nn.Module):
 
         # Decode to sensory prediction
         return self.lec.decode(p_g)
-
-    def loss(self, x: Observation, state: TEMState) -> losses.LossOutput:
-        """Compute Evidence Lower Bound (ELBO) loss for TEM.
-
-        The total loss comprises three components following the TEM paper:
-        1. L_x: Sensory reconstruction loss (from three pathways)
-        2. L_p: Grounded location consistency loss
-        3. L_g: Abstract location KL divergence loss
-
-        Args:
-            x: Ground truth sensory observation.
-            state: Current TEM state with all pathway outputs.
-
-        Returns:
-            LossOutput containing total loss and individual components.
-        """
-        # Extract grounded locations from TEM state for loss computation
-        p_x, p_g, p = state.grounded
-        g_gen = self.mec.projection(state.mec.transition_stats.mean)  # Project predicted abstract location
-        p_gen = self.hpc.retrieve(g_gen, for_inference=False, state=state.hpc)  # Retrieve from generative memory
-
-        # L_x: Sensory reconstruction from three pathways (teacher forcing)
-        Lx = [
-            # self.loss_x_fn(prediction=self.lec.decode(p_x), target=x),  # From sensory retrieval
-            self.loss_x_fn(prediction=self.lec.decode(p_g), target=x),  # From abstract retrieval
-            self.loss_x_fn(prediction=self.lec.decode(p), target=x),  # From inference
-            self.loss_x_fn(prediction=self.lec.decode(p_gen), target=x),  # From generative prediction
-        ]
-        # L_p: Grounded location consistency (inference matches memory retrieval)
-        Lp = self.loss_p_fn(p=p, p_g=p_g, p_x=p_x)
-        # L_g: Abstract location KL divergence (posterior vs prior)
-        Lg = self.loss_g_fn(g=state.abstract_location, g_gen=state.transition_stats)
-
-        # Regularization losses
-        L_reg_g, L_reg_p = self.loss_reg_fn(g=state.abstract_location, p=p)
-
-        # Compute total ELBO
-        return self.loss_total_fn(sum(Lx), Lp, Lg, L_reg_g, L_reg_p)
 
 
 class Simulation(Iterator[TEMState]):

@@ -7,6 +7,27 @@ training loop (see `torch_tem.training.TEMLightningModule`).
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class LossConfig(BaseModel):
+    """Loss weight configuration for TEM training.
+
+    This configuration encapsulates the weights assigned to each loss component
+    during training. These weights influence the relative importance of different
+    objectives such as reconstruction accuracy, location grounding, and regularization.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    # ===================================================================================
+    # LOSS WEIGHTS
+    # ===================================================================================
+
+    weights_x: float = Field(default=1.0, ge=0, description="Weight of reconstruction/prediction losses on x")
+    weights_p: float = Field(default=1.0, ge=0, description="Weight of grounded location losses on p")
+    weights_g: float = Field(default=1.0, ge=0, description="Weight of abstract location losses on g")
+    weights_reg_g: float = Field(default=0.01, ge=0, description="Weight of regularisation loss on abstract location")
+    weights_reg_p: float = Field(default=0.02, ge=0, description="Weight of regularisation loss on grounded location")
+
+
 class TrainingConfig(BaseModel):
     """Training and optimization configuration.
 
@@ -23,7 +44,7 @@ class TrainingConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
     # ===================================================================================
-    # TRAINING SCHEDULE
+    # ROLLOUT LENGTH
     # ===================================================================================
 
     n_rollout: int = Field(default=20, ge=1, description="Unroll length for BPTT (timesteps per optimisation step)")
@@ -37,11 +58,7 @@ class TrainingConfig(BaseModel):
     lr_decay_steps: int = Field(default=400, ge=1, description="StepLR step_size (number of optimizer steps between decays)")
 
     # ===================================================================================
-    # LOSS WEIGHTS
+    # LOSS
     # ===================================================================================
 
-    loss_weights_x: float = Field(default=1.0, ge=0, description="Weight of reconstruction/prediction losses on x")
-    loss_weights_p: float = Field(default=1.0, ge=0, description="Weight of grounded location losses on p")
-    loss_weights_g: float = Field(default=1.0, ge=0, description="Weight of abstract location losses on g")
-    loss_weights_reg_g: float = Field(default=0.01, ge=0, description="Weight of regularisation loss on abstract location")
-    loss_weights_reg_p: float = Field(default=0.02, ge=0, description="Weight of regularisation loss on grounded location")
+    loss: LossConfig = Field(default_factory=LossConfig, description="Loss weight configuration")

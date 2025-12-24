@@ -35,7 +35,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from torch_tem.config import TrainingConfig
+from torch_tem.config import LossConfig
 from torch_tem.types import AbstractLocation, GroundedLocation, SensoryPrediction, Transition
 
 
@@ -502,26 +502,26 @@ class TEMLoss(nn.Module):
     their contributions.
 
     The final objective is:
-        L_total = loss_weights_x * L_x + loss_weights_g * L_g + loss_weights_p * L_p + loss_weights_reg_g * L_reg_g + loss_weights_reg_p * L_reg_p
+        L_total = weights_x * L_x + weights_g * L_g + weights_p * L_p + weights_reg_g * L_reg_g + weights_reg_p * L_reg_p
 
     Weight Selection Guidelines:
-        - loss_weights_x: Typically 1.0 (baseline)
-        - loss_weights_g: Controls path integration accuracy (0.1 - 1.0)
-        - loss_weights_p: Controls memory consistency (0.1 - 1.0)
-        - loss_weights_reg_g: Prevents grid cell saturation (0.01 - 0.1)
-        - loss_weights_reg_p: Enforces place cell sparsity (0.01 - 0.1)
+        - weights_x: Typically 1.0 (baseline)
+        - weights_g: Controls path integration accuracy (0.1 - 1.0)
+        - weights_p: Controls memory consistency (0.1 - 1.0)
+        - weights_reg_g: Prevents grid cell saturation (0.01 - 0.1)
+        - weights_reg_p: Enforces place cell sparsity (0.01 - 0.1)
 
     These weights may require tuning based on environment complexity and model size.
     """
 
-    def __init__(self, config: TrainingConfig):
+    def __init__(self, config: Optional[LossConfig] = None):
         """Initialize TEM loss aggregator.
 
         Args:
-            config: Configuration object containing loss weights.
+            config: Configuration object containing loss weights. If None, uses default weights (all 1.0).
         """
         super().__init__()
-        self.config = config
+        self.config = config or LossConfig()
 
     def forward(self, lx: Tensor, lp: Tensor, lg: Tensor, l_reg_g: Optional[Tensor] = None, l_reg_p: Optional[Tensor] = None) -> LossOutput:
         """Compute weighted sum of all loss components.
@@ -539,13 +539,13 @@ class TEMLoss(nn.Module):
                 - Individual components for logging and monitoring
         """
         # Compute weighted sum of main ELBO components
-        total = self.config.loss_weights_x * lx + self.config.loss_weights_p * lp + self.config.loss_weights_g * lg
+        total = self.config.weights_x * lx + self.config.weights_p * lp + self.config.weights_g * lg
 
         # Add regularization terms if provided
         if l_reg_g is not None:
-            total += self.config.loss_weights_reg_g * l_reg_g
+            total += self.config.weights_reg_g * l_reg_g
 
         if l_reg_p is not None:
-            total += self.config.loss_weights_reg_p * l_reg_p
+            total += self.config.weights_reg_p * l_reg_p
 
         return LossOutput(total=total, lx=lx, lp=lp, lg=lg, l_reg_g=l_reg_g, l_reg_p=l_reg_p)

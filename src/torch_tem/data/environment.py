@@ -1,6 +1,6 @@
 """Graph-world environment structure and validation."""
 
-from typing import List, Literal, Optional, Protocol
+from typing import Dict, List, Literal, Optional, Protocol, Sequence
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -233,3 +233,22 @@ class Environment:
                     raise ValueError(f"Location {loc.id} action {action.id} transition has " f"{len(action.transition)} elements, expected {self.n_locations}")
 
         return True
+
+    def step_locations(self, location_ids: Sequence[int]) -> List[Dict[str, Optional[bool]]]:
+        """Build per-batch-item location metadata dictionaries for one timestep.
+
+        This is the canonical place to translate raw integer location IDs into
+        the `location_info` dictionaries expected by TEM model steps.
+
+        Args:
+            location_ids: Sequence of integer location IDs of length B.
+
+        Returns:
+            List[Dict[str, Optional[bool]]]: One dict per batch item.
+                Currently exposes only the shiny marker: {"shiny": bool|None}.
+        """
+        step_info: List[Dict[str, Optional[bool]]] = []
+        for loc_id in location_ids:
+            loc = self.locations[int(loc_id)]
+            step_info.append({"shiny": loc.shiny})
+        return step_info

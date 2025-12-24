@@ -35,26 +35,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from torch_tem.config import TrainingConfig
 from torch_tem.types import AbstractLocation, GroundedLocation, SensoryPrediction, Transition
-
-
-@dataclass
-class TEMLossConfig:
-    """Configuration for TEM loss weights.
-
-    Attributes:
-        w_x: Weight for sensory reconstruction loss (default: 1.0).
-        w_g: Weight for abstract location consistency loss (default: 1.0).
-        w_p: Weight for grounded location consistency loss (default: 1.0).
-        w_reg_g: Weight for grid cell L2 regularization (default: 0.1).
-        w_reg_p: Weight for place cell L1 regularization (default: 0.1).
-    """
-
-    w_x: float = 1.0
-    w_g: float = 1.0
-    w_p: float = 1.0
-    w_reg_g: float = 0.1
-    w_reg_p: float = 0.1
 
 
 @dataclass
@@ -520,19 +502,19 @@ class TEMLoss(nn.Module):
     their contributions.
 
     The final objective is:
-        L_total = w_x * L_x + w_g * L_g + w_p * L_p + w_reg_g * L_reg_g + w_reg_p * L_reg_p
+        L_total = loss_weights_x * L_x + loss_weights_g * L_g + loss_weights_p * L_p + loss_weights_reg_g * L_reg_g + loss_weights_reg_p * L_reg_p
 
     Weight Selection Guidelines:
-        - w_x: Typically 1.0 (baseline)
-        - w_g: Controls path integration accuracy (0.1 - 1.0)
-        - w_p: Controls memory consistency (0.1 - 1.0)
-        - w_reg_g: Prevents grid cell saturation (0.01 - 0.1)
-        - w_reg_p: Enforces place cell sparsity (0.01 - 0.1)
+        - loss_weights_x: Typically 1.0 (baseline)
+        - loss_weights_g: Controls path integration accuracy (0.1 - 1.0)
+        - loss_weights_p: Controls memory consistency (0.1 - 1.0)
+        - loss_weights_reg_g: Prevents grid cell saturation (0.01 - 0.1)
+        - loss_weights_reg_p: Enforces place cell sparsity (0.01 - 0.1)
 
     These weights may require tuning based on environment complexity and model size.
     """
 
-    def __init__(self, config: TEMLossConfig = TEMLossConfig()):
+    def __init__(self, config: TrainingConfig):
         """Initialize TEM loss aggregator.
 
         Args:
@@ -557,13 +539,13 @@ class TEMLoss(nn.Module):
                 - Individual components for logging and monitoring
         """
         # Compute weighted sum of main ELBO components
-        total = self.config.w_x * lx + self.config.w_p * lp + self.config.w_g * lg
+        total = self.config.loss_weights_x * lx + self.config.loss_weights_p * lp + self.config.loss_weights_g * lg
 
         # Add regularization terms if provided
         if l_reg_g is not None:
-            total += self.config.w_reg_g * l_reg_g
+            total += self.config.loss_weights_reg_g * l_reg_g
 
         if l_reg_p is not None:
-            total += self.config.w_reg_p * l_reg_p
+            total += self.config.loss_weights_reg_p * l_reg_p
 
         return LossOutput(total=total, lx=lx, lp=lp, lg=lg, l_reg_g=l_reg_g, l_reg_p=l_reg_p)

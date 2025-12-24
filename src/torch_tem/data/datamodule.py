@@ -90,19 +90,31 @@ class TEMDataModule(L.LightningDataModule):
         n_items = n_batches * self.config.batch_size
         return WalkDataset(n_items, self.environment, self.policy_gen, self.walk_gen, params=self.config)
 
+    def sample_batch(self, stage: str) -> tuple:
+        """Fetch a single batch from the specified stage's DataLoader.
+
+        Args:
+            stage: Dataset stage key ("fit", "validate", "test").
+
+        Returns:
+            A single batch tuple `(observations, actions, locations)`.
+        """
+        loader = self.dataloader_for(stage)
+        return next(iter(loader))
+
     def train_dataloader(self) -> DataLoader:
         """Return the training DataLoader."""
-        return self._dataloader_for("fit")
+        return self.dataloader_for("fit")
 
     def val_dataloader(self) -> DataLoader:
         """Return the validation DataLoader."""
-        return self._dataloader_for("validate")
+        return self.dataloader_for("validate")
 
     def test_dataloader(self) -> DataLoader:
         """Return the test DataLoader."""
-        return self._dataloader_for("test")
+        return self.dataloader_for("test")
 
-    def _dataloader_for(self, stage: str) -> DataLoader:
+    def dataloader_for(self, stage: str) -> DataLoader:
         """Create a DataLoader for a previously created dataset stage.
 
         Args:
@@ -127,15 +139,3 @@ class TEMDataModule(L.LightningDataModule):
             pin_memory=self.config.pin_memory,
             drop_last=self.config.drop_last,
         )
-
-    def sample_batch(self, stage: str) -> tuple:
-        """Fetch a single batch from the specified stage's DataLoader.
-
-        Args:
-            stage: Dataset stage key ("fit", "validate", "test").
-
-        Returns:
-            A single batch tuple `(observations, actions, locations)`.
-        """
-        loader = self._dataloader_for(stage)
-        return next(iter(loader))

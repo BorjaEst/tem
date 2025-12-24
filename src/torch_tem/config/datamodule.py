@@ -306,8 +306,8 @@ class DataModuleConfig(BaseModel):
     # ===================================================================================
 
     n_train_batches: int = Field(default=1000, ge=1, description="Number of training batches per epoch")
-    n_val_batches: int = Field(default=100, ge=0, description="Number of validation batches")
-    n_test_batches: int = Field(default=100, ge=0, description="Number of test batches")
+    n_val_batches: int = Field(default=10, ge=0, description="Number of validation batches")
+    n_test_batches: int = Field(default=10, ge=0, description="Number of test batches")
     seed: Optional[int] = Field(default=None, description="Random seed for reproducible environment/walk generation")
 
     # ===================================================================================

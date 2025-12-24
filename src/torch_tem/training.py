@@ -66,6 +66,17 @@ class TEMLightningModule(L.LightningModule):
 
         return [optimizer], [scheduler]
 
+    @property
+    def environment(self) -> Environment:
+        """Environment instance from the attached DataModule.
+
+        Returns:
+            Environment: The environment used for data generation.
+        """
+        datamodule: TEMDataModule = self.trainer.datamodule  # type: ignore[attr-defined]
+        assert datamodule is not None and datamodule.environment is not None, "DataModule or environment not set."
+        return datamodule.environment
+
     def forward(self, x: Observation, locations: List[Dict], a: Optional[Tensor], state: TEMState) -> Tuple[TEMState, LossOutput]:
         """Forward pass through the model and compute loss.
 
@@ -102,7 +113,7 @@ class TEMLightningModule(L.LightningModule):
         schedulers = self.lr_schedulers()
 
         # Explicit BPTT loop over rollout chunks
-        for loss_output, state in Rollout(self.model, batch):
+        for loss_output, state in Rollout(self.model, batch, self.environment):
 
             # Optimization step
             self.manual_backward(loss_output.total)  # Backpropagate loss
@@ -128,7 +139,7 @@ class TEMLightningModule(L.LightningModule):
         """
         # Compute without gradient tracking
         with torch.no_grad():
-            loss_output, state = list(Rollout())[-1]
+            loss_output, _ = list(Rollout(self.model, batch, self.environment))[-1]
 
         # Log
         self.log_loss(loss_output, "val", on_step=False, on_epoch=True)
@@ -145,7 +156,7 @@ class TEMLightningModule(L.LightningModule):
         """
         # Compute without gradient tracking
         with torch.no_grad():
-            loss_output, state = list(Rollout())[-1]
+            loss_output, _ = list(Rollout(self.model, batch, self.environment))[-1]
 
         # Log
         self.log_loss(loss_output, "test", on_step=False, on_epoch=True)
@@ -163,7 +174,7 @@ class TEMLightningModule(L.LightningModule):
         components = loss_output.as_dict()
 
         # Log total loss (convert Tensor to scalar for TensorBoard)
-        elf.log(f"{prefix}/loss", loss_output.total.item(), on_step=on_step, on_epoch=on_epoch, prog_bar=prog_bar)
+        self.log(f"{prefix}/loss", loss_output.total.item(), on_step=on_step, on_epoch=on_epoch, prog_bar=prog_bar)
 
         # Log all components (as_dict() already converts to float, but ensure scalars)
         for component_name in ["lx", "lg", "lp"]:
@@ -201,7 +212,7 @@ class Rollout(Iterator[Tuple[LossOutput, TEMState]]):
         ...     optimizer.step()
     """
 
-    def __init__(self, model: TEMModel, batch: WalkBatch):
+    def __init__(self, model: TEMModel, batch: WalkBatch, environment: Environment):
         """Initialize rollout iterator.
 
         Args:
@@ -210,9 +221,11 @@ class Rollout(Iterator[Tuple[LossOutput, TEMState]]):
                    observations: [walk_length, batch_size, obs_dim]
                    actions: [walk_length, batch_size]
                    locations: [walk_length, batch_size]
+            environment: Environment instance for location metadata lookup.
         """
         self.model = model
         self.observations, self.actions, self.locations = batch
+        self.environment = environment
 
         self.walk_length = self.observations.shape[0]
         self.batch_size = self.observations.shape[1]
@@ -247,4 +260,20 @@ class Rollout(Iterator[Tuple[LossOutput, TEMState]]):
         return loss_output, self.state
 
     def _create_step_locations(self, t: int) -> List[Dict]:
-        raise NotImplementedError("Location metadata processing not implemented.")
+        """Create location metadata for timestep t.
+
+        Args:
+            t: Timestep index.
+
+        Returns:
+            List of location dicts, one per batch item.
+        """
+        if self.locations is None:
+            return [{"shiny": None} for _ in range(self.batch_size)]
+
+        # Extract location IDs for timestep t: tensor of shape (batch_size,)
+        location_ids_t = self.locations[t]
+        # Convert to list of integers
+        location_ids = location_ids_t.tolist()
+        # Use environment to map IDs to location metadata dicts
+        return self.environment.step_locations(location_ids)

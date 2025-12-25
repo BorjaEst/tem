@@ -70,8 +70,8 @@ class LossOutput:
     lx: Tensor
     lg: Tensor
     lp: Tensor
-    l_reg_g: Optional[Tensor] = None
-    l_reg_p: Optional[Tensor] = None
+    l_reg_g: Tensor
+    l_reg_p: Tensor
 
     @staticmethod
     def zero() -> "LossOutput":
@@ -110,26 +110,13 @@ class LossOutput:
         Example:
             >>> loss_sum = loss1 + loss2 + loss3
         """
-        # Add optional regularization terms (treat None as 0)
-        l_reg_g = None
-        if self.l_reg_g is not None or other.l_reg_g is not None:
-            self_reg_g = self.l_reg_g if self.l_reg_g is not None else torch.tensor(0.0)
-            other_reg_g = other.l_reg_g if other.l_reg_g is not None else torch.tensor(0.0)
-            l_reg_g = self_reg_g + other_reg_g
-
-        l_reg_p = None
-        if self.l_reg_p is not None or other.l_reg_p is not None:
-            self_reg_p = self.l_reg_p if self.l_reg_p is not None else torch.tensor(0.0)
-            other_reg_p = other.l_reg_p if other.l_reg_p is not None else torch.tensor(0.0)
-            l_reg_p = self_reg_p + other_reg_p
-
         return LossOutput(
             total=self.total + other.total,
             lx=self.lx + other.lx,
             lg=self.lg + other.lg,
             lp=self.lp + other.lp,
-            l_reg_g=l_reg_g,
-            l_reg_p=l_reg_p,
+            l_reg_g=self.l_reg_g + other.l_reg_g,
+            l_reg_p=self.l_reg_p + other.l_reg_p,
         )
 
     def __truediv__(self, divisor: int | float) -> "LossOutput":
@@ -157,8 +144,8 @@ class LossOutput:
             lx=self.lx / divisor,
             lg=self.lg / divisor,
             lp=self.lp / divisor,
-            l_reg_g=self.l_reg_g / divisor if self.l_reg_g is not None else None,
-            l_reg_p=self.l_reg_p / divisor if self.l_reg_p is not None else None,
+            l_reg_g=self.l_reg_g / divisor,
+            l_reg_p=self.l_reg_p / divisor,
         )
 
     def as_dict(self) -> dict:
@@ -171,8 +158,8 @@ class LossOutput:
             "lx": self.lx.item(),
             "lg": self.lg.item(),
             "lp": self.lp.item(),
-            "l_reg_g": self.l_reg_g.item() if self.l_reg_g is not None else 0.0,
-            "l_reg_p": self.l_reg_p.item() if self.l_reg_p is not None else 0.0,
+            "l_reg_g": self.l_reg_g.item(),
+            "l_reg_p": self.l_reg_p.item(),
         }
 
 
@@ -541,11 +528,8 @@ class TEMLoss(nn.Module):
         # Compute weighted sum of main ELBO components
         total = self.config.weights_x * lx + self.config.weights_p * lp + self.config.weights_g * lg
 
-        # Add regularization terms if provided
-        if l_reg_g is not None:
-            total += self.config.weights_reg_g * l_reg_g
-
-        if l_reg_p is not None:
-            total += self.config.weights_reg_p * l_reg_p
+        # Add regularization terms
+        total += self.config.weights_reg_g * l_reg_g
+        total += self.config.weights_reg_p * l_reg_p
 
         return LossOutput(total=total, lx=lx, lp=lp, lg=lg, l_reg_g=l_reg_g, l_reg_p=l_reg_p)

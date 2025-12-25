@@ -83,7 +83,7 @@ class TEMLightningModule(L.LightningModule):
                 - LossOutput with all loss components
         """
         state = self.model(x, locations, a, state)
-        return state, self.model.loss(x, state)
+        return state, self.loss(x, state)
 
     def loss(self, x: Observation, state: TEMState) -> losses.LossOutput:
         """Compute Evidence Lower Bound (ELBO) loss for TEM.
@@ -299,32 +299,20 @@ class Rollout(Iterator[Tuple[LossOutput, TEMState]]):
         if self.current_t >= self.walk_length:
             raise StopIteration
 
-        # Determine chunk boundaries
+        # Determine chunk boundaries and initialize accumulated loss
         chunk_start = self.current_t
         chunk_end = min(chunk_start + self.n_rollout, self.walk_length)
+        accumulated_loss = LossOutput.zero()
 
-        # Accumulate losses over the chunk
-        accumulated_loss: Optional[LossOutput] = None
-
+        # Forward pass
         for t in range(chunk_start, chunk_end):
-            # Get step locations
             step_locations = self._create_step_locations(t)
-
-            # Forward pass
-            self.state = self.model(self.observations[t], step_locations, self.actions[t], self.state)
-            loss_output = self.module.loss(self.observations[t], self.state)
-
-            # Accumulate loss
-            if accumulated_loss is None:
-                accumulated_loss = loss_output
-            else:
-                accumulated_loss = accumulated_loss + loss_output
-
+            self.state, loss_output = self.module(self.observations[t], step_locations, self.actions[t], self.state)
+            accumulated_loss = accumulated_loss + loss_output
         self.current_t = chunk_end
 
-        # Detach state to prevent backprop through previous chunks
+        # Detach state to prevent backprop and return
         self.state = self.state.detach()
-
         return accumulated_loss, self.state
 
     def _create_step_locations(self, t: int) -> List[Dict]:

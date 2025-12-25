@@ -16,16 +16,24 @@ with gradual decay (forgetting) over time.
 from typing import List, Protocol
 
 import torch
+from pydantic import BaseModel, ConfigDict, Field
 
 from torch_tem.types import Matrix, Vector
 
 
-class StorageParams(Protocol):
-    n_p: List[int]  # Dimensions of grounded location per frequency
-    lambda_: float  # Memory retention factor
-    eta: float  # Learning rate for memory updates
-    common_memory: bool  # Whether to use a common memory for inference and generation
-    batch_size: int  # Number of parallel environments / memory instances
+class StorageConfig(BaseModel):
+    """Memory storage configuration parameters."""
+
+    model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
+
+    lambda_: float = Field(default=0.9, ge=0, le=1, description="Memory retention factor (λ in memory decay)")
+    eta: float = Field(default=0.5, ge=0, le=1, description="Learning rate for memory updates (η in memory update)")
+
+
+class StorageContext(Protocol):
+    """Protocol for memory storage context providing architecture parameters."""
+
+    update_mask: Matrix  # Mask for memory updates
 
 
 class MemoryStorage:
@@ -35,25 +43,39 @@ class MemoryStorage:
     All operations are vectorized using batch matrix operations.
     """
 
-    def __init__(self, params: StorageParams, p_update_mask: Matrix):
-        self.n_p = params.n_p
-        self.lambda_ = params.lambda_
-        self.eta = params.eta
-        self.use_dual_memory = not params.common_memory
-        self.p_update_mask = p_update_mask
-        self.batch_size = params.batch_size
+    def __init__(self, context: StorageContext, config: StorageConfig):
+        """Initialize memory storage with context and configuration.
+
+        Args:
+            context (StorageContext): Architectural context providing update masks.
+            config (StorageConfig): Hyperparameters for Hebbian learning.
+        """
+        super().__init__()
+        self._config = config
+        self.p_update_mask = context.update_mask
+
+    @property
+    def config(self) -> StorageConfig:
+        """Return the storage configuration.
+
+        Returns:
+            StorageConfig: Hebbian learning hyperparameters.
+        """
+        return self._config
 
     def update(self, p_inferred: Vector, p_generated: Vector, M: Matrix) -> Matrix:
         """Update memory matrix using Hebbian plasticity (functional interface).
 
         Args:
-            p_inferred: Inferred grounded locations [B, N]
-            p_generated: Generated grounded locations [B, N]
-            M: Current memory matrix [B, N, N]
+            p_inferred (Vector): Inferred grounded locations [B, N].
+            p_generated (Vector): Generated grounded locations [B, N].
+            M (Matrix): Current memory matrix [B, N, N].
 
         Returns:
-            Updated memory matrix [B, N, N]
+            Matrix: Updated memory matrix [B, N, N].
         """
+        lambda_, eta = self.config.lambda_, self.config.eta
+
         # Move mask to same device
         mask = self.p_update_mask.to(p_inferred.device)
         M = M.to(p_inferred.device)
@@ -65,7 +87,7 @@ class MemoryStorage:
 
         # Apply mask only to generative memory (inference memory uses full outer product)
         update_term = outer * mask if mask is not None else outer
-        return torch.clamp(self.lambda_ * M + self.eta * update_term, min=-1.0, max=1.0)
+        return torch.clamp(lambda_ * M + eta * update_term, min=-1.0, max=1.0)
 
 
 # ======================================================================================
@@ -73,55 +95,67 @@ class MemoryStorage:
 # ======================================================================================
 
 if __name__ == "__main__":
-    """Simple example demonstrating Hebbian memory storage and updates.
+    """Memory storage example: Hebbian learning.
 
-    This example shows how the memory system learns associations between grounded
-    locations through repeated co-activation patterns during simulated navigation.
+    Demonstrates how memory matrices learn associations between grounded
+    locations through repeated Hebbian updates.
     """
-    from torch_tem.config.architecture import ModelConfig
+    from dataclasses import dataclass
 
-    # Create configuration with 3 frequency modules
-    params = ModelConfig(
-        n_g_subsampled=[10, 8, 6],  # 3 frequency modules (coarse to fine)
-        n_x_c=5,  # 5 compressed sensory dimensions
-        lambda_=0.95,  # 95% memory retention (slow forgetting)
-        eta=0.3,  # 30% learning rate (moderate remembering)
-        common_memory=False,  # Separate matrices for inference/generation
-    )
+    print("=" * 80)
+    print("Memory Storage Example - Hebbian Plasticity")
+    print("=" * 80)
 
-    # Initialize memory storage
-    storage = MemoryStorage(params)
+    # Configuration
+    n_p_total = 40  # Total place cells
+    batch_size = 4
+    n_steps = 5
 
-    print(f"Memory dimensions: {sum(params.n_p)} place cells total")
-    print(f"  Per frequency: {params.n_p}")
-    print(f"Dual memory mode: {storage.use_dual_memory}")
+    print(f"\nConfiguration:")
+    print(f"  Place cells: {n_p_total}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Training steps: {n_steps}")
 
-    # Simulate a sequence of grounded locations during navigation
-    batch_size = 8
-    n_p_total = sum(params.n_p)
+    # Create simple context
+    @dataclass
+    class SimpleStorageContext:
+        """Minimal context for demonstration."""
 
-    # Simulate 5 timesteps of navigation
-    for t in range(5):
-        # Generate random grounded locations (in practice, computed by model)
+        update_mask: torch.Tensor
+
+    # Create update mask (allow all connections)
+    ctx = SimpleStorageContext(update_mask=torch.ones(n_p_total, n_p_total))
+
+    # Create configuration and storage
+    config = StorageConfig(lambda_=0.9, eta=0.5)
+    storage = MemoryStorage(ctx, config)
+    print(f"\n✓ Memory storage initialized (λ={config.lambda_}, η={config.eta})")
+
+    # Initialize memory matrix
+    M = torch.zeros(batch_size, n_p_total, n_p_total)
+    print(f"✓ Memory matrix: {M.shape}")
+
+    # Simulate learning sequence
+    print(f"\nTraining:")
+    for t in range(n_steps):
+        # Generate random grounded locations
         p_inferred = torch.randn(batch_size, n_p_total).softmax(dim=1)
         p_generated = torch.randn(batch_size, n_p_total).softmax(dim=1)
 
-        # Update memory with Hebbian rule
-        storage.update(p_inferred, p_generated, eta=params.eta)
+        # Hebbian update
+        M = storage.update(p_inferred, p_generated, M)
 
-        # Check memory strength (Frobenius norm)
-        m_gen_strength = torch.norm(storage.M_gen)
-        print(f"Timestep {t+1}: M_gen strength = {m_gen_strength:.4f}")
+        # Check memory strength
+        strength = M.abs().mean().item()
+        print(f"  Step {t+1}/{n_steps}: memory strength = {strength:.4f}")
 
-    # Retrieve memory for use in attractor dynamics
-    M_gen = storage.get_memory(for_inference=False)
-    M_inf = storage.get_memory(for_inference=True)
+    print(f"\n✓ Training complete")
 
-    print(f"\nFinal memory matrices:")
-    print(f"  M_gen shape: {M_gen.shape}, mean: {M_gen.mean():.6f}")
-    print(f"  M_inf shape: {M_inf.shape}, mean: {M_inf.mean():.6f}")
-    print(f"  Difference: {(M_gen - M_inf).abs().mean():.6f}")
+    # Memory statistics
+    print(f"\nFinal memory matrix:")
+    print(f"  Shape: {M.shape}")
+    print(f"  Mean: {M.mean():.6f}")
+    print(f"  Std: {M.std():.6f}")
+    print(f"  Range: [{M.min():.3f}, {M.max():.3f}]")
 
-    # Save and restore memory state
-    saved_memories = storage.get_all_memories()
-    print(f"\nSaved {len(saved_memories)} memory matrices for checkpointing")
+    print("\n" + "=" * 80)

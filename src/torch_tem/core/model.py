@@ -123,9 +123,9 @@ class TEMModel(nn.Module):
         self._config = params  # Store model configuration
 
         # Initialize components
-        self.hpc = hpc.HPCModel(params)  # Hippocampus with memory and grounded inference
-        self.lec = lec.LECModel(params)  # LEC pathway module
-        self.mec = mec.MECModel(params)  # MEC pathway module
+        self.hpc = hpc.HPCModel(params.hpc)  # Hippocampus with memory and grounded inference
+        self.lec = lec.LECModel(params.lec)  # LEC pathway module
+        self.mec = mec.MECModel(params.mec)  # MEC pathway module
 
     @property
     def config(self) -> ModelConfig:

@@ -67,7 +67,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import figures, hpc, utils
-from torch_tem.config import ModelConfig
+from torch_tem.config.architecture import AttractorConfig, GroundedConfig, HPCConfig, StorageConfig
 
 
 # ==============================================================================
@@ -80,17 +80,13 @@ class ExampleConfig(BaseSettings):
     in isolation using entirely synthetic data (random place cell patterns).
     """
 
-    model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="hpc_components")
+    hpc_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="hpc_components")
 
-    # Architecture configuration
-    f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
-    n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
-    n_x_c: int = Field(default=10, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
-
-    # Memory configuration
-    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
-    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
-    kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
+    # Memory structure parameters
+    common_memory: bool = Field(default=False, description="Use shared memory for inference and generation")
+    attractor: AttractorConfig = Field(default_factory=AttractorConfig, description="Attractor dynamics configuration")
+    grounded: GroundedConfig = Field(default_factory=GroundedConfig, description="Grounded location inference configuration")
+    storage: StorageConfig = Field(default_factory=StorageConfig, description="Memory storage configuration")
 
     # Training configuration
     n_training_steps: int = Field(default=50, ge=10, le=500, description="Number of Hebbian updates")
@@ -126,23 +122,14 @@ if __name__ == "__main__":
       4. Generate visualizations of the complete HPC system
     """
     config = ExampleConfig()
-
-    # Create model config
-    model_config = ModelConfig(
-        n_x_c=config.n_x_c,
-        n_g_subsampled=config.n_g_subsampled,
-        f_initial=config.f_initial,
-        eta=config.eta,
-        kappa=config.kappa,
-        batch_size=config.batch_size,
-    )
+    hpc_config = HPCConfig(config.model_dump())
 
     print("=" * 80)
     print("Hippocampal Memory Components")
     print("=" * 80)
     print(f"Configuration:")
-    print(f"  Frequencies: {model_config.n_f} ({model_config.f_initial[0]:.2f} to {model_config.f_initial[-1]:.2f})")
-    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_x_c={model_config.n_x_c}")
+    print(f"  Frequencies: {hpc_config.n_f} ({hpc_config.f_initial[0]:.2f} to {hpc_config.f_initial[-1]:.2f})")
+    print(f"  Architecture: n_g={hpc_config.n_g}, n_p={hpc_config.n_p}, n_x_c={hpc_config.n_x_c}")
     print(f"  Memory: η={config.eta}, λ={config.lambda_}, κ={config.kappa}")
     print(f"  Training: {config.n_training_steps} steps, batch_size={config.batch_size}")
     print(f"  Testing: {config.n_test_queries} queries, noise_level={config.noise_level}")
@@ -157,29 +144,29 @@ if __name__ == "__main__":
     # p_update_mask: Hierarchical mask for Hebbian learning
     # mask_inf: Conservative retrieval masks for stable inference
     # mask_gen: Flexible retrieval masks for generation
-    p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f_g, model_config.n_f_ovc, model_config.f_extended)
-    mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
-    mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
+    p_update_mask = utils.create_p_update_mask(hpc_config.n_p, hpc_config.n_f, hpc_config.n_f_g, hpc_config.n_f_ovc, hpc_config.f_extended)
+    mask_inf = utils.create_p_retrieve_mask(hpc_config.n_p, hpc_config.i_attractor, hpc_config.max_freq_inf)
+    mask_gen = utils.create_p_retrieve_mask(hpc_config.n_p, hpc_config.i_attractor, hpc_config.max_freq_gen)
 
     # HPC MemoryStorage: Hebbian plasticity
     # Manages M_gen (generative) and M_inf (inference) memory matrices
     # Update rule: M = λ*M + η*outer(p_inf + p_gen, p_inf - p_gen) * mask
-    mem_storage = hpc.storage.MemoryStorage(model_config, p_update_mask)
+    mem_storage = hpc.storage.MemoryStorage(hpc_config.storage, p_update_mask)
 
     # HPC AttractorDynamics: Iterative pattern completion
     # Refines noisy queries using hierarchical coarse-to-fine retrieval
     # Update rule: p[t+1] = mask[t] * activation(κ*p[t] + M@p[t]) + (1-mask[t])*p[t]
-    mem_attractor = hpc.attractor.AttractorDynamics(model_config, mask_inf, mask_gen)
+    mem_attractor = hpc.attractor.AttractorDynamics(hpc_config.attractor, mask_inf, mask_gen)
 
-    n_p_total = sum(model_config.n_p)
+    n_p_total = sum(hpc_config.n_p)
 
     # Initialize memory state externally (functional interface)
-    M_gen = utils.create_initial_memory(n_p_total, config.batch_size, dual_memory=not model_config.common_memory, device=torch.device("cpu"))[0]
-    M_inf = utils.create_initial_memory(n_p_total, config.batch_size, dual_memory=not model_config.common_memory, device=torch.device("cpu"))[1]
+    M_gen = utils.create_initial_memory(n_p_total, config.batch_size, dual_memory=not hpc_config.common_memory, device=torch.device("cpu"))[0]
+    M_inf = utils.create_initial_memory(n_p_total, config.batch_size, dual_memory=not hpc_config.common_memory, device=torch.device("cpu"))[1]
 
     print(f"  ✓ MemoryStorage: {n_p_total}×{n_p_total} Hebbian matrix")
-    print(f"    Dual memory: {not model_config.common_memory}")
-    print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
+    print(f"    Dual memory: {not hpc_config.common_memory}")
+    print(f"  ✓ AttractorDynamics: {hpc_config.i_attractor} iterations with hierarchical masking")
     print()
 
     # =========================================================================
@@ -251,8 +238,8 @@ if __name__ == "__main__":
     print(f"  Signal-to-noise ratio: {snr_db:.2f} dB")
 
     # Convert to per-frequency format for attractor
-    test_queries_list = utils.split_to_frequencies(test_queries, model_config.n_p)
-    test_targets_list = utils.split_to_frequencies(test_targets, model_config.n_p)
+    test_queries_list = utils.split_to_frequencies(test_queries, hpc_config.n_p)
+    test_targets_list = utils.split_to_frequencies(test_targets, hpc_config.n_p)
 
     # Run attractor dynamics
     M_for_retrieval = M_inf if M_inf is not None else M_gen
@@ -286,7 +273,7 @@ if __name__ == "__main__":
         # Generate noisy queries from same targets
         noise = torch.randn_like(target_logits) * noise_level
         noisy_queries = (target_logits + noise).softmax(dim=1)
-        noisy_queries_list = utils.split_to_frequencies(noisy_queries, model_config.n_p)
+        noisy_queries_list = utils.split_to_frequencies(noisy_queries, hpc_config.n_p)
 
         # Test inference mode
         M_for_inf = M_inf if M_inf is not None else M_gen
@@ -336,7 +323,7 @@ if __name__ == "__main__":
     fig1 = figures.plot_memory_matrices(
         M_gen[0],  # Use first batch element for visualization
         M_for_analysis[0],
-        n_p_per_freq=model_config.n_p,
+        n_p_per_freq=hpc_config.n_p,
         n_training_steps=config.n_training_steps,
     )
     if config.save_plots:
@@ -346,7 +333,7 @@ if __name__ == "__main__":
     # Plot 2: Learning dynamics
     fig2 = figures.plot_learning_curve(
         memory_strengths,
-        cosine_sims if not model_config.common_memory else None,
+        cosine_sims if not hpc_config.common_memory else None,
     )
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_learning_dynamics.png", dpi=150, bbox_inches="tight")
@@ -357,8 +344,8 @@ if __name__ == "__main__":
     fig3 = figures.plot_hierarchical_masks(
         mem_attractor.p_retrieve_mask_inf,
         mem_attractor.p_retrieve_mask_gen,
-        n_p_per_freq=model_config.n_p,
-        f_initial=model_config.f_initial,
+        n_p_per_freq=hpc_config.n_p,
+        f_initial=hpc_config.f_initial,
         title="Hierarchical Mask Schedule: Inference vs Generative Modes",
     )
     if config.save_plots:
@@ -370,7 +357,7 @@ if __name__ == "__main__":
         test_queries_list,
         test_retrievals_list,
         test_targets_list,
-        n_p_per_freq=model_config.n_p,
+        n_p_per_freq=hpc_config.n_p,
     )
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_attractor_convergence.png", dpi=150, bbox_inches="tight")
@@ -399,7 +386,7 @@ if __name__ == "__main__":
     # Block structure (within vs between frequency)
     block_stats = []
     start_idx = 0
-    for freq_idx, n_p in enumerate(model_config.n_p):
+    for freq_idx, n_p in enumerate(hpc_config.n_p):
         end_idx = start_idx + n_p
         within_block = M_gen[0, start_idx:end_idx, start_idx:end_idx]
         within_strength = torch.norm(within_block).item()
@@ -441,12 +428,12 @@ if __name__ == "__main__":
     print(f"  Output: Memory matrices M_gen, M_inf - [batch, {n_p_total}, {n_p_total}]")
     print(f"  Training: {config.n_training_steps} steps")
     print(f"  Final strength: {memory_strengths[-1]:.4f}")
-    if not model_config.common_memory:
+    if not hpc_config.common_memory:
         print(f"  M_gen/M_inf similarity: {cosine_sims[-1]:.4f}")
     print("\nRETRIEVAL (Attractor Dynamics):")
-    print(f"  Input: p_query (noisy) - List[{model_config.n_f}] of [batch, n_p[f]]")
-    print(f"    ↓ Attractor iterations (κ={config.kappa}, {model_config.i_attractor} steps)")
-    print(f"  Output: p_retrieved (refined) - List[{model_config.n_f}] of [batch, n_p[f]]")
+    print(f"  Input: p_query (noisy) - List[{hpc_config.n_f}] of [batch, n_p[f]]")
+    print(f"    ↓ Attractor iterations (κ={config.kappa}, {hpc_config.i_attractor} steps)")
+    print(f"  Output: p_retrieved (refined) - List[{hpc_config.n_f}] of [batch, n_p[f]]")
     print(f"  Retrieval improvement: {avg_improvement:.1f}%")
     print(f"  SNR: {snr_db:.2f} dB")
     print("=" * 80)

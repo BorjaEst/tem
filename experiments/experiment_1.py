@@ -33,7 +33,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
-from torch_tem.config import EnvironmentConfig, ModelConfig, TrainingConfig
+from torch_tem.config import EnvironmentConfig, ModelConfig, PolicyConfig, RandomPolicyConfig, TrainingConfig
 from torch_tem.core.model import TEMModel
 from torch_tem.data import TEMDataModule
 from torch_tem.training import TEMLightningModule
@@ -46,9 +46,9 @@ class ExperimentConfig(BaseSettings):
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name=Path(__file__).stem)
 
-    # Environment configuration
-    grid_size: int = Field(default=10, ge=5, le=15, description="Grid size for square environment")
-    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation assignment strategy")
+    # Environment configuration and policy
+    environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig, description="Environment configuration")
+    policy: PolicyConfig = Field(default_factory=RandomPolicyConfig, description="Policy configuration for walk generation")
 
     # Architecture configuration
     f_initial: List[float] = Field(default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01], description="Initial frequencies for each spatial module")

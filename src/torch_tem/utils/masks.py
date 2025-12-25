@@ -9,7 +9,7 @@ from torch import Tensor
 from torch_tem.types import Matrix
 
 
-def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_initial: List[float]) -> Matrix:
+def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, f_extended: List[float]) -> Matrix:
     """Create hierarchical mask for memory updates.
 
     Set connections when forming Hebbian memory of grounded locations:
@@ -18,10 +18,9 @@ def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_i
 
     Args:
         n_p: Grounded location dimensions per frequency
-        n_f: Total number of frequency modules
+        n_f: Total number of frequency modules (grid + OVC)
         n_f_g: Number of grid cell frequency modules
-        n_f_ovc: Number of OVC frequency modules
-        f_initial: Initial frequencies for each module
+        f_extended: Frequency values for ALL modules (grid + OVC) [n_f]
 
     Returns:
         Binary mask tensor [sum(n_p), sum(n_p)]
@@ -35,14 +34,14 @@ def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, n_f_ovc: int, f_i
             if f_from >= n_f_g or f_to >= n_f_g:
                 # Connection between object vector modules: hierarchical
                 if f_from >= n_f_g and f_to >= n_f_g:
-                    if f_initial[f_from] <= f_initial[f_to]:
+                    if f_extended[f_from] <= f_extended[f_to]:
                         p_update_mask[n_p_cumsum[f_from] : n_p_cumsum[f_from + 1], n_p_cumsum[f_to] : n_p_cumsum[f_to + 1]] = 1.0
                 # Connection between OVC and normal modules: allow any
                 else:
                     p_update_mask[n_p_cumsum[f_from] : n_p_cumsum[f_from + 1], n_p_cumsum[f_to] : n_p_cumsum[f_to + 1]] = 1.0
             # Connection between grid modules: hierarchical only
             else:
-                if f_initial[f_from] <= f_initial[f_to]:
+                if f_extended[f_from] <= f_extended[f_to]:
                     p_update_mask[n_p_cumsum[f_from] : n_p_cumsum[f_from + 1], n_p_cumsum[f_to] : n_p_cumsum[f_to + 1]] = 1.0
 
     return p_update_mask
@@ -76,26 +75,27 @@ def create_p_retrieve_mask(n_p: List[int], i_attractor: int, max_freq: List[int]
     return p_retrieve_mask
 
 
-def create_g_connections(n_f: int, n_f_g: int, n_f_ovc: int, f_initial: List[float]) -> List[List[bool]]:
+def create_g_connections(n_f: int, n_f_g: int, f_extended: List[float]) -> List[List[bool]]:
     """Create hierarchical connections between frequency modules for transitions.
 
     Abstract location frequency modules can influence the transition of other
     modules hierarchically (low to high frequency).
 
     Args:
-        n_f: Total number of frequency modules
+        n_f: Total number of frequency modules (grid + OVC)
         n_f_g: Number of grid cell frequency modules
-        n_f_ovc: Number of OVC frequency modules
-        f_initial: Initial frequencies for each module
+        f_extended: Frequency values for ALL modules (grid + OVC) [n_f]
 
     Returns:
         List[n_f][n_f] of boolean connections. connections[f_to][f_from]
         indicates if f_from connects to f_to.
     """
+    n_f_ovc = n_f - n_f_g  # Derived: number of OVC modules
+
     # Grid cell connections: hierarchical
-    g_connections = [[f_initial[f_from] <= f_initial[f_to] for f_from in range(n_f_g)] + [False for _ in range(n_f_ovc)] for f_to in range(n_f_g)]
+    g_connections = [[f_extended[f_from] <= f_extended[f_to] for f_from in range(n_f_g)] + [False for _ in range(n_f_ovc)] for f_to in range(n_f_g)]
 
     # OVC connections: only between OVC modules, also hierarchical
-    g_connections += [[False for _ in range(n_f_g)] + [f_initial[f_from] <= f_initial[f_to] for f_from in range(n_f_g, n_f)] for f_to in range(n_f_g, n_f)]
+    g_connections += [[False for _ in range(n_f_g)] + [f_extended[f_from] <= f_extended[f_to] for f_from in range(n_f_g, n_f)] for f_to in range(n_f_g, n_f)]
 
     return g_connections

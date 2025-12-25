@@ -57,7 +57,6 @@ from pathlib import Path
 from typing import List, Literal
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict

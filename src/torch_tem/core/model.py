@@ -120,12 +120,17 @@ class TEMModel(nn.Module):
             params: Configuration with all component parameters and training settings.
         """
         super().__init__()
-        self.config = params  # Store model configuration
+        self._config = params  # Store model configuration
 
         # Initialize components
         self.hpc = hpc.HPCModel(params)  # Hippocampus with memory and grounded inference
         self.lec = lec.LECModel(params)  # LEC pathway module
         self.mec = mec.MECModel(params)  # MEC pathway module
+
+    @property
+    def config(self) -> ModelConfig:
+        """Return the TEM model configuration."""
+        return self._config
 
     def init_state(self, x: Observation) -> TEMState:
         """Initialize TEM state from first observation.

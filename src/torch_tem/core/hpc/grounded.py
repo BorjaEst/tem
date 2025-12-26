@@ -20,8 +20,23 @@ Reference: Whittington et al. (2020). Cell, 183(5), 1249-1263.
 
 import torch
 import torch.nn as nn
+from pydantic import BaseModel, ConfigDict, Field
 
+from torch_tem import utils
 from torch_tem.types import GroundedLocation, MultiScaleCode
+
+
+class GroundedLocConfig(BaseModel):
+    """Grounded location inference parameters."""
+
+    model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
+
+    # Activation function
+    activation: str = Field(default="leaky_relu", description="Activation function for location inference")
+
+    # Clamping range
+    clamp_min: float = Field(default=-1.0, description="Minimum clamp value for grounded location")
+    clamp_max: float = Field(default=1.0, description="Maximum clamp value for grounded location")
 
 
 class GroundedLocInference(nn.Module):
@@ -38,6 +53,47 @@ class GroundedLocInference(nn.Module):
         >>> p = grounded(g_expanded, x_expanded)
     """
 
+    def __init__(self, config: GroundedLocConfig):
+        """Initialize grounded location inference module.
+
+        Args:
+            config: Grounded location inference configuration parameters.
+        """
+        super().__init__()
+        self._config = config
+        self._activation = utils.get_activation_function(config.activation)
+
+    @property
+    def activation(self) -> str:
+        """Activation function for location inference."""
+        return self._config.activation
+
+    @activation.setter
+    def activation(self, value: str):
+        """Set activation function for location inference."""
+        self._activation = utils.get_activation_function(value)
+        self._config.activation = value
+
+    @property
+    def clamp_min(self) -> float:
+        """Minimum clamp value for grounded location."""
+        return self._config.clamp_min
+
+    @clamp_min.setter
+    def clamp_min(self, value: float):
+        """Set minimum clamp value for grounded location."""
+        self._config.clamp_min = value
+
+    @property
+    def clamp_max(self) -> float:
+        """Maximum clamp value for grounded location."""
+        return self._config.clamp_max
+
+    @clamp_max.setter
+    def clamp_max(self, value: float):
+        """Set maximum clamp value for grounded location."""
+        self._config.clamp_max = value
+
     def forward(self, g_expanded: MultiScaleCode, x_expanded: MultiScaleCode) -> GroundedLocation:
         """Compute grounded location via element-wise product of expanded inputs.
 
@@ -52,10 +108,10 @@ class GroundedLocInference(nn.Module):
             p[f] = leaky_relu(clamp(g_expanded[f] ⊙ x_expanded[f], -1, 1))
         """
         p = []
-        for f in range(len(g_expanded)):
-            # Element-wise product and activation
+        for f in range(len(g_expanded)):  # Element-wise product and activation
             p_f = g_expanded[f] * x_expanded[f]
-            p_f = torch.nn.functional.leaky_relu(torch.clamp(p_f, min=-1.0, max=1.0))
+            p_f = torch.clamp(p_f, min=self.clamp_min, max=self.clamp_max)
+            p_f = self._activation(p_f)
             p.append(p_f)
         return p
 

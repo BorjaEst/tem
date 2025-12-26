@@ -26,11 +26,10 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field
 from torch import nn
 
+from torch_tem.core.hpc.attractor import AttractorConfig, AttractorDynamics
+from torch_tem.core.hpc.grounded import GroundedLocConfig, GroundedLocInference
+from torch_tem.core.hpc.storage import MemoryStorage, StorageConfig
 from torch_tem.types import BatchedMemory, GroundedLocation, MultiScaleCode
-
-from .attractor import AttractorConfig, AttractorDynamics
-from .grounded import GroundedLocInference
-from .storage import MemoryStorage, StorageConfig
 
 
 class HPCConfig(BaseModel):
@@ -43,21 +42,22 @@ class HPCConfig(BaseModel):
 
     # Submodule configurations
     attractor: AttractorConfig = Field(default_factory=AttractorConfig, description="Attractor dynamics configuration")
+    grounded: GroundedLocConfig = Field(default_factory=GroundedLocConfig, description="Grounded location inference configuration")
     storage: StorageConfig = Field(default_factory=StorageConfig, description="Memory storage configuration")
 
 
 class HPCContext(Protocol):
-    """Protocol for HPC context providing architecture parameters."""
+    """Protocol for HPC context providing architecture parameters.
 
-    # Dimensions
-    n_p: List[int]  # Place cell dimensions per frequency
+    Attributes:
+        mask_inference: Hierarchical masks for inference retrieval [i_attractor] of (sum(n_p),)
+        mask_generative: Hierarchical masks for generative retrieval [i_attractor] of (sum(n_p),)
+        update_mask: Mask for Hebbian memory updates (sum(n_p), sum(n_p))
+    """
 
-    # Attractor dynamics
-    mask_inference: List[torch.Tensor]  # Hierarchical masks for inference retrieval
-    mask_generative: List[torch.Tensor]  # Hierarchical masks for generative retrieval
-
-    # Memory storage
-    update_mask: torch.Tensor  # Mask for memory updates
+    mask_inference: List[torch.Tensor]
+    mask_generative: List[torch.Tensor]
+    update_mask: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -102,19 +102,20 @@ class HPCModel(nn.Module):
         """
         super().__init__()
         self._config = config
-        self.attractor = AttractorDynamics(context, config.attractor)
-        self.grounded = GroundedLocInference()  # Pure functional
+
+        self.attractor = AttractorDynamics(context.mask_inference, context.mask_generative, config.attractor)
+        self.grounded = GroundedLocInference(config.grounded)
         self.storage = MemoryStorage(context, config.storage)
-        self._size = sum(context.n_p)  # Inmutable size for place cells
 
     @property
-    def config(self) -> HPCConfig:
-        """Return the HPC model configuration.
+    def common_memory(self) -> bool:
+        """Whether generative and inference networks share a common memory."""
+        return self._config.common_memory
 
-        Returns:
-            HPCConfig: Model hyperparameters.
-        """
-        return self._config
+    @property
+    def size(self) -> int:
+        """Total size of grounded location representation (sum of place cell dimensions)."""
+        return sum(self.attractor.n_p)
 
     def init_state(self, batch_size: int, device: torch.device) -> HPCState:
         """Initialize HPC state with zero grounded locations and memory matrices.
@@ -126,11 +127,11 @@ class HPCModel(nn.Module):
         Returns:
             HPCState: Initial state with zero activations and memories.
         """
-        p = torch.zeros([batch_size, self._size], dtype=torch.float, device=device)
-        M_gen = torch.zeros(batch_size, self._size, self._size, device=device)
-        if self.config.common_memory:
+        p = torch.zeros([batch_size, self.size], dtype=torch.float, device=device)
+        M_gen = torch.zeros(batch_size, self.size, self.size, device=device)
+        if self.common_memory:
             return HPCState(grounded_location=p, memory=[M_gen])
-        M_inf = torch.zeros(batch_size, self._size, self._size, device=device)
+        M_inf = torch.zeros(batch_size, self.size, self.size, device=device)
         return HPCState(grounded_location=p, memory=[M_gen, M_inf])
 
     def forward(self, g_: MultiScaleCode, x_: MultiScaleCode, p_generated: GroundedLocation, state: HPCState) -> HPCState:
@@ -160,7 +161,7 @@ class HPCModel(nn.Module):
         Returns:
             MultiScaleCode: Refined grounded location after attractor convergence.
         """
-        M = state.memory[1] if (for_inference and not self.config.common_memory) else state.memory[0]
+        M = state.memory[1] if (for_inference and not self.common_memory) else state.memory[0]
         return self.attractor(query, M, for_inference=for_inference)
 
     def update(self, p_inferred: MultiScaleCode, p_generated: MultiScaleCode, state: HPCState) -> List[BatchedMemory]:
@@ -181,7 +182,7 @@ class HPCModel(nn.Module):
         # Update generative memory
         M_gen = self.storage.update(p_inferred_flat, p_generated_flat, state.memory[0])
 
-        if self.config.common_memory:
+        if self.common_memory:
             return [M_gen, None]
 
         # Update inference memory (without mask for full connectivity)

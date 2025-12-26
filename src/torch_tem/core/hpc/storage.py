@@ -52,16 +52,27 @@ class MemoryStorage:
         """
         super().__init__()
         self._config = config
-        self.p_update_mask = context.update_mask
+        self._update_mask = context.update_mask
 
     @property
-    def config(self) -> StorageConfig:
-        """Return the storage configuration.
+    def lambda_(self) -> float:
+        """Memory retention factor."""
+        return self._config.lambda_
 
-        Returns:
-            StorageConfig: Hebbian learning hyperparameters.
-        """
-        return self._config
+    @lambda_.setter
+    def lambda_(self, value: float):
+        """Set memory retention factor."""
+        self._config.lambda_ = value
+
+    @property
+    def eta(self) -> float:
+        """Learning rate for memory updates."""
+        return self._config.eta
+
+    @eta.setter
+    def eta(self, value: float):
+        """Set learning rate for memory updates."""
+        self._config.eta = value
 
     def update(self, p_inferred: Vector, p_generated: Vector, M: Matrix) -> Matrix:
         """Update memory matrix using Hebbian plasticity (functional interface).
@@ -74,10 +85,8 @@ class MemoryStorage:
         Returns:
             Matrix: Updated memory matrix [B, N, N].
         """
-        lambda_, eta = self.config.lambda_, self.config.eta
-
         # Move mask to same device
-        mask = self.p_update_mask.to(p_inferred.device)
+        mask = self._update_mask.to(p_inferred.device)
         M = M.to(p_inferred.device)
 
         # Hebbian update: M_new = λ*M + η*(p_inf + p_gen) ⊗ (p_inf - p_gen)
@@ -87,7 +96,7 @@ class MemoryStorage:
 
         # Apply mask only to generative memory (inference memory uses full outer product)
         update_term = outer * mask if mask is not None else outer
-        return torch.clamp(lambda_ * M + eta * update_term, min=-1.0, max=1.0)
+        return torch.clamp(self.lambda_ * M + self.eta * update_term, min=-1.0, max=1.0)
 
 
 # ======================================================================================

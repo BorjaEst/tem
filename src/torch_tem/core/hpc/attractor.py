@@ -11,7 +11,7 @@ associations between these grounded locations via Hebbian learning, enabling rec
 spatial relationships and predictive inference.
 """
 
-from typing import List, Protocol
+from typing import List
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,16 +24,7 @@ class AttractorConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
 
-    i_attractor: int = Field(default=3, ge=1, description="Number of attractor iterations")
     kappa: float = Field(default=0.8, ge=0, le=1, description="Decay factor for attractor updates (κ in attractor update)")
-
-
-class AttractorContext(Protocol):
-    """Protocol for attractor dynamics context providing architecture parameters."""
-
-    n_p: List[int]  # Place cell dimensions per frequency
-    mask_inference: List[Matrix]  # Hierarchical masks for inference retrieval
-    mask_generative: List[Matrix]  # Hierarchical masks for generative retrieval
 
 
 class AttractorDynamics:
@@ -48,29 +39,41 @@ class AttractorDynamics:
         p_new = mask * activation(κ * p_old + M @ p_old) + (1-mask) * p_old
 
     where mask progressively enables higher frequencies across iterations.
+    ...
     """
 
-    def __init__(self, context: AttractorContext, config: AttractorConfig):
+    def __init__(self, mask_inf: List[Matrix], mask_gen: List[Matrix], config: AttractorConfig):
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:
-            context (AttractorContext): Architectural context providing masks and dimensions.
-            config (AttractorConfig): Hyperparameters for attractor dynamics.
+            mask_inf: Hierarchical masks for inference retrieval [i_attractor] of (sum(n_p),)
+            mask_gen: Hierarchical masks for generative retrieval [i_attractor] of (sum(n_p),)
+            config: Hyperparameters for attractor dynamics (kappa decay factor)
         """
         super().__init__()
         self._config = config
-        self.p_retrieve_mask_inf = context.mask_inference
-        self.p_retrieve_mask_gen = context.mask_generative
-        self._n_p = context.n_p  # Inmutable place cell dimensions
+        self._retrieve_mask_inf = mask_inf
+        self._retrieve_mask_gen = mask_gen
 
     @property
-    def config(self) -> AttractorConfig:
-        """Return the attractor dynamics configuration.
+    def i_attractor(self) -> int:
+        """Number of attractor iterations (inferred from mask count)."""
+        return len(self._retrieve_mask_inf)
 
-        Returns:
-            AttractorConfig: Attractor hyperparameters.
-        """
-        return self._config
+    @property
+    def n_p(self) -> List[int]:
+        """Place cell dimensions per frequency."""
+        return [mask.shape[0] for mask in self._retrieve_mask_inf[0]]
+
+    @property
+    def kappa(self) -> float:
+        """Decay factor for attractor updates."""
+        return self._config.kappa
+
+    @kappa.setter
+    def kappa(self, value: float):
+        """Set decay factor for attractor updates."""
+        self._config.kappa = value
 
     def __call__(self, p_query: MultiScaleCode, M: Matrix, for_inference: bool = False) -> MultiScaleCode:
         """Retrieve refined grounded location from memory via attractor dynamics.
@@ -88,7 +91,7 @@ class AttractorDynamics:
             first, providing a stable foundation for high-frequency (fine) refinement.
         """
         # Select appropriate hierarchical masks based on retrieval mode
-        retrieve_mask = self.p_retrieve_mask_inf if for_inference else self.p_retrieve_mask_gen
+        retrieve_mask = self._retrieve_mask_inf if for_inference else self._retrieve_mask_gen
 
         # Concatenate per-frequency query into single vector
         p = torch.cat(p_query, dim=1)
@@ -96,14 +99,14 @@ class AttractorDynamics:
         # Apply activation to initial query (stability)
         p = torch.nn.functional.leaky_relu(torch.clamp(p, min=-1.0, max=1.0))
 
-        for tau in range(self.config.i_attractor):
+        for tau in range(self.i_attractor):
             # Memory readout: Query the Hebbian matrix (associative recall)
             # Matrix multiply retrieves patterns associated with current state
             # Handle batched [B, n_p, n_p] memory
             p_readout = torch.matmul(p.unsqueeze(1), M.to(p.device)).squeeze(1)
 
             # Calculate candidate update with decay and activation
-            p_candidate = self.config.kappa * p + p_readout
+            p_candidate = self._config.kappa * p + p_readout
             p_candidate = torch.nn.functional.leaky_relu(torch.clamp(p_candidate, min=-1.0, max=1.0))
 
             # Apply hierarchical mask for coarse-to-fine refinement
@@ -160,12 +163,11 @@ if __name__ == "__main__":
 
     # Simple hierarchical masks (all frequencies active at all iterations)
     masks = [torch.ones(n_p_total) for _ in range(i_attractor)]
-    ctx = SimpleAttractorContext(n_p=n_p, mask_inference=masks, mask_generative=masks)
 
     # Create configuration and attractor
-    config = AttractorConfig(i_attractor=i_attractor, kappa=0.8)
-    attractor = AttractorDynamics(ctx, config)
-    print(f"\n✓ Attractor initialized (κ={config.kappa})")
+    config = AttractorConfig(kappa=0.8)
+    attractor = AttractorDynamics(masks, masks, n_p, config)
+    print(f"\n✓ Attractor initialized (κ={config.kappa}, iterations={attractor.i_attractor})")
 
     # Create memory matrix (normally learned via Hebbian updates)
     M = torch.randn(batch_size, n_p_total, n_p_total) * 0.01

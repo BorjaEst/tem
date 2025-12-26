@@ -71,16 +71,18 @@ When save_plots=true, generates 7 visualizations in outputs/lec_components/:
     7. 07_reconstruction_quality.png - Comparison of original vs decoded observations
 """
 
+import math
 from pathlib import Path
-from typing import List, Literal
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import torch
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import data, figures, lec, utils
-from torch_tem.config import EnvironmentConfig, ModelConfig
+from torch_tem import data, figures, utils
+from torch_tem.core import lec
+from torch_tem.core.lec import DecoderConfig, EncoderConfig, ProcessorConfig, ProjectionConfig
 
 
 # ==============================================================================
@@ -92,31 +94,17 @@ class ExampleConfig(BaseSettings):
     Defines environment setup, walk generation, and architecture parameters
     for demonstrating LEC components in isolation with real environment data.
 
-    Attributes:
-        grid_size: Size of the square grid environment (grid_size × grid_size)
-        observation_mode: How observations are generated ("unique", "tiled", "random")
-        walk_length: Number of timesteps in the generated trajectory
-        f_initial: Base frequency values for each temporal filtering module
-        n_g_subsampled: Number of grid cells per frequency module (unused in this example)
-        n_x_c: Dimension of compressed sensory representation (two-hot encoding)
-        output_dir: Directory for saving visualization outputs
-        show_plots: Whether to display plots interactively
-        save_plots: Whether to save plots to disk
+    ....
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="lec_components")
 
-    # Environment configuration
-    grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for synthetic environment")
-    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
-
-    # Walk generation
-    walk_length: int = Field(default=100, ge=20, le=500, description="Steps in the walk sequence")
-
-    # Architecture configuration
-    f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
-    n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 8, 6], description="Subsampled grid cells per frequency module")
-    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
+    # Lateral Entorhinal Cortex (LEC) parameters
+    learn_W_tile: bool = Field(default=False, description="If True, tiling matrices W_tile are learnable")
+    decoder: DecoderConfig = Field(default_factory=DecoderConfig, description="Decoder configuration")
+    encoder: EncoderConfig = Field(default_factory=EncoderConfig, description="Encoder configuration")
+    processor: ProcessorConfig = Field(default_factory=ProcessorConfig, description="Processor configuration")
+    projection: ProjectionConfig = Field(default_factory=ProjectionConfig, description="Projection configuration")
 
     # Output
     output_dir: Path = Field(default=Path("outputs/lec_components"), description="Directory for saving plots")
@@ -130,10 +118,16 @@ class ExampleConfig(BaseSettings):
         v.mkdir(parents=True, exist_ok=True)
         return v
 
-    @computed_field(description="Number of observation neurons (grid_size^2)")
-    @property
-    def n_x(self) -> int:
-        return self.grid_size * self.grid_size
+
+# Model architecture; not configurable via CLI
+N_X = 25  # Observation space size (5x5, one per cell)
+N_X_C = 10  # Compressed dimension for two-hot encoding
+N_P = [10, 10, 8, 6, 6]  # Place cells per frequency (5 modules)
+N_WALKS = 1  # Number of walks to generate
+WALK_LENGTH = 100  # Timesteps per walk
+F_INITIAL = [0.95, 0.7, 0.4, 0.2, 0.1]  # Initial frequency values
+N_F = len(F_INITIAL)  # Number of frequency modules
+DEVICE = torch.device("cpu")  # Change to "cuda" if GPU is available
 
 
 # ==============================================================================
@@ -150,32 +144,26 @@ if __name__ == "__main__":
     """
     config = ExampleConfig()
 
-    # Create model config using ModelConfig
-    environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
-    model_config = ModelConfig(n_x=config.n_x, n_x_c=config.n_x_c, f_initial=config.f_initial, n_g_subsampled=config.n_g_subsampled)
-
     print("=" * 80)
     print("Sensory Processing Pipeline")
     print("=" * 80)
     print(f"Configuration:")
-    print(f"  Environment: {config.grid_size}×{config.grid_size} grid ({config.observation_mode} observations)")
-    print(f"  Walk length: {config.walk_length} timesteps")
-    print(f"  Frequencies: {model_config.n_f} ({model_config.f_initial[0]:.2f} to {model_config.f_initial[-1]:.2f})")
-    print(f"  Architecture: n_x={model_config.n_x}, n_x_c={model_config.n_x_c}")
+    ...  # TODO complete the printing here
     print()
 
     # =========================================================================
     # PHASE 1: Environment and Walk Generation
     # =========================================================================
     print("Phase 1: Generating walk trajectory...")
-    env = data.Environment(environment_config)
+    from torch_tem.config import EnvironmentConfig
+
+    env_config = EnvironmentConfig(n_observations=N_X)
+    env = data.Environment(env_config)
     env.validate()
 
     policy_gen = data.PolicyGenerator(env)
-    policy = policy_gen.random_policy()
-
     walk_gen = data.WalkGenerator(env)
-    walks = walk_gen.generate_walks(n_walks=1, walk_length=config.walk_length, policy=policy)
+    walks = walk_gen.generate_walks(N_WALKS, WALK_LENGTH, policy=policy_gen.random_policy())
     walk = walks[0]
 
     observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_x]
@@ -188,29 +176,29 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 2: Initializing LEC components...")
 
+    # Create W_tile matrices for tiling operations (sensory → hippocampal projection)
+    # Each matrix projects compressed sensory [n_x_c] to place cell dimension [n_p[f]]
+    W_tile = [torch.randn(N_X_C, n_p, device=DEVICE) * 0.1 for n_p in N_P]
+
     # LEC Encoder: Compresses observations using two-hot encoding
     # x [B, n_x] → x_c [B, n_x_c]
-    encoder = lec.encoder.Encoder(model_config)
+    encoder = lec.Encoder(N_X, N_X_C, config.encoder)
 
     # LEC Processor: Multi-frequency temporal filtering
     # x_c → x_f (List[n_f] of [B, n_x_c])
-    processor = lec.processor.Processor(model_config)
+    processor = lec.Processor(F_INITIAL, config.processor)
 
     # LEC Projection: Tiles sensory to hippocampal space
     # x_f → x̃ (List[n_f] of [B, n_p[f]])
-    projection = lec.projection.Projection(model_config)
+    projection = lec.Projection(W_tile, config.projection)
 
     # LEC Decoder: Generates sensory predictions from place cells
     # p → x̂ [B, n_x]
-    decoder = lec.decoder.Decoder(model_config)
+    decoder = lec.Decoder(N_X, W_tile, config.decoder)
 
-    # Create W_tile matrices for tiling operations
-    # Enables conjunction: p = g ⊗ x̃
-    W_tile = utils.create_W_tile(model_config.n_g_subsampled_combined, projection.n_x_f)
-
-    print(f"  ✓ Encoder: {model_config.n_x} → {model_config.n_x_c} (two-hot compression)")
-    print(f"  ✓ Processor: {model_config.n_f} frequency channels (f = {model_config.f_initial})")
-    print(f"  ✓ Projection: {model_config.n_x_f} → {model_config.n_p} (hippocampal tiling)")
+    print(f"  ✓ Encoder: {N_X} → {N_X_C} (two-hot compression)")
+    print(f"  ✓ Processor: {N_F} frequency channels (f = {F_INITIAL})")
+    print(f"  ✓ Projection: {N_X_C} → {N_P} (hippocampal tiling)")
     print(f"  ✓ Decoder: place cells → sensory predictions")
     print()
 
@@ -227,9 +215,9 @@ if __name__ == "__main__":
     x_hat_history = []  # Decoded sensory predictions
 
     # Initialize processor state (previous filtered observations)
-    x_f_prev = [torch.zeros(1, model_config.n_x_c) for _ in range(model_config.n_f)]
+    x_f_prev = [torch.zeros(1, N_X_C, device=DEVICE) for _ in range(N_F)]
 
-    for t in range(config.walk_length):
+    for t in range(WALK_LENGTH):
         # === INFERENCE PATHWAY ===
         # Step 1: Encode observation → compressed sensory
         x_t = observations[t].unsqueeze(0)  # Add batch dimension: [n_x] → [1, n_x]
@@ -239,7 +227,7 @@ if __name__ == "__main__":
         x_f = processor(x_c, x_f_prev)  # List[n_f] of [1, n_x_c]
 
         # Step 3: Project to hippocampal p-space
-        x_ = projection(x_f, W_tile)  # List[n_f] of [1, n_p[f]]
+        x_ = projection(x_f)  # List[n_f] of [1, n_p[f]]
 
         # Update previous state
         x_f_prev = x_f
@@ -256,10 +244,10 @@ if __name__ == "__main__":
         p_history.append([p[0] for p in p_t])
 
         # Step 4: Decode place cells → sensory prediction
-        x_hat = decoder(p_t, W_tile[0])  # Returns SensoryPrediction using first frequency's W_tile
+        x_hat = decoder(p_t)  # Returns SensoryPrediction
         x_hat_history.append(x_hat.values[0][0])  # [1, n_x] → [n_x]
 
-    print(f"  ✓ Processed {config.walk_length} timesteps through LEC pipeline")
+    print(f"  ✓ Processed {WALK_LENGTH} timesteps through LEC pipeline")
     print()
 
     # =========================================================================
@@ -269,34 +257,34 @@ if __name__ == "__main__":
 
     # Generate demo data for normalization comparison (5 consecutive timesteps)
     observations_stacked = torch.stack(observations)  # List[T] of [n_x] → [T, n_x]
-    midpoint = config.walk_length // 2
+    midpoint = WALK_LENGTH // 2
     x_c_demo = encoder(observations_stacked[midpoint : midpoint + 5])  # [5, n_x_c]
-    x_prev_demo = [torch.zeros(5, model_config.n_x_c) for _ in range(model_config.n_f)]
+    x_prev_demo = [torch.zeros(5, N_X_C, device=DEVICE) for _ in range(N_F)]
 
     # Compare raw filtering vs normalized filtering (using projection.normalize)
     x_f_raw = processor.filter_temporal(x_c_demo, x_prev_demo)  # Raw exponential smoothing only
     x_f_normalized = projection.normalize(x_f_raw)  # Projection normalization (demean + ReLU + L2)
 
     # Plot 1: Frequency bank configuration
-    fig1 = figures.plot_frequency_bank(model_config.f_extended)
+    fig1 = figures.plot_frequency_bank(F_INITIAL)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_frequency_bank.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 01_frequency_bank.png")
 
     # Plot 2: Temporal filtering across all frequencies
-    fig2 = figures.plot_temporal_filtering(x_c_history, x_f_history, model_config.f_extended)
+    fig2 = figures.plot_temporal_filtering(x_c_history, x_f_history, F_INITIAL)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_temporal_filtering.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 02_temporal_filtering.png")
 
     # Plot 3: Single feature comparison
-    fig3 = figures.plot_frequency_comparison(x_c_history, x_f_history, model_config.f_extended, feature_idx=0)
+    fig3 = figures.plot_frequency_comparison(x_c_history, x_f_history, F_INITIAL, feature_idx=0)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_frequency_comparison.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 03_frequency_comparison.png")
 
     # Plot 4: Normalization effects (single timestep)
-    fig4 = figures.plot_normalization_effects(x_f_raw, x_f_normalized, model_config.f_extended)
+    fig4 = figures.plot_normalization_effects(x_f_raw, x_f_normalized, F_INITIAL)
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_normalization_effects.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 04_normalization_effects.png")
@@ -305,7 +293,7 @@ if __name__ == "__main__":
     # Shows the tiled sensory representation ready for conjunction with grid cells
     fig5 = figures.plot_sensory_projection(
         x__history,
-        n_p_per_freq=model_config.n_p,
+        n_p_per_freq=N_P,
         title="LEC → Hippocampus Projection: Sensory in p-space (x̃)",
     )
     if config.save_plots:
@@ -346,71 +334,38 @@ if __name__ == "__main__":
         print(f"  Saved: 06_decoder_predictions.png")
 
     # Plot 7: Reconstruction quality metrics
-    fig7, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig7 = figures.plot_reconstruction_quality(observations, x_hat_history)
+    if config.save_plots:
+        fig7.savefig(config.output_dir / "07_reconstruction_quality.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 07_reconstruction_quality.png")
 
-    # MSE over time
+    # Calculate quality metrics for summary
+    obs_matrix = torch.stack(observations).detach().numpy()
+    x_hat_matrix = torch.stack(x_hat_history).detach().numpy()
     mse_per_step = ((obs_matrix - x_hat_matrix) ** 2).mean(axis=1)
-    axes[0, 0].plot(mse_per_step, linewidth=2, color="crimson")
-    axes[0, 0].set_title("Mean Squared Error Over Time", fontsize=11, fontweight="bold")
-    axes[0, 0].set_xlabel("Time Step")
-    axes[0, 0].set_ylabel("MSE")
-    axes[0, 0].grid(True, alpha=0.3)
-
-    # Correlation over time
     correlations = []
     for t in range(len(observations)):
         corr = torch.corrcoef(torch.stack([observations[t], x_hat_history[t]]))[0, 1]
         correlations.append(corr.item())
-    axes[0, 1].plot(correlations, linewidth=2, color="forestgreen")
-    axes[0, 1].set_title("Correlation Between x and x̂", fontsize=11, fontweight="bold")
-    axes[0, 1].set_xlabel("Time Step")
-    axes[0, 1].set_ylabel("Correlation")
-    axes[0, 1].grid(True, alpha=0.3)
-    axes[0, 1].axhline(y=0.5, color="gray", linestyle="--", alpha=0.5, label="0.5 threshold")
-    axes[0, 1].legend()
-
-    # Distribution comparison
-    axes[1, 0].hist(obs_matrix.flatten(), bins=50, alpha=0.5, label="Original (x)", color="blue")
-    axes[1, 0].hist(x_hat_matrix.flatten(), bins=50, alpha=0.5, label="Decoded (x̂)", color="orange")
-    axes[1, 0].set_title("Value Distribution Comparison", fontsize=11, fontweight="bold")
-    axes[1, 0].set_xlabel("Value")
-    axes[1, 0].set_ylabel("Frequency")
-    axes[1, 0].legend()
-    axes[1, 0].grid(True, alpha=0.3)
-
-    # Per-dimension reconstruction accuracy
-    dim_mse = ((obs_matrix - x_hat_matrix) ** 2).mean(axis=0)
-    axes[1, 1].bar(range(model_config.n_x), dim_mse, color="purple", alpha=0.7)
-    axes[1, 1].set_title("Reconstruction Error Per Dimension", fontsize=11, fontweight="bold")
-    axes[1, 1].set_xlabel("Observation Dimension")
-    axes[1, 1].set_ylabel("MSE")
-    axes[1, 1].grid(True, alpha=0.3, axis="y")
-
-    fig7.suptitle("Reconstruction Quality Metrics", fontsize=14, y=0.995)
-    fig7.tight_layout()
-
-    if config.save_plots:
-        fig7.savefig(config.output_dir / "07_reconstruction_quality.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 07_reconstruction_quality.png")
 
     print()
     print("=" * 80)
     print("LEC Pipeline Summary")
     print("=" * 80)
     print("\nINFERENCE PATHWAY (Sensory → Hippocampus):")
-    print(f"  Input:  {model_config.n_x}-dim observations ({config.observation_mode} mode)")
+    print(f"  Input:  {N_X}-dim observations")
     print(f"    ↓ LEC Encoder (two-hot compression)")
-    print(f"  Stage 1: {model_config.n_x_c}-dim compressed sensory (x_c)")
-    print(f"    ↓ LEC Processor ({model_config.n_f} frequencies: {model_config.f_initial})")
-    print(f"  Stage 2: Multi-frequency filtered sensory (x_f) - List[{model_config.n_f}] of [batch, {model_config.n_x_c}]")
+    print(f"  Stage 1: {N_X_C}-dim compressed sensory (x_c)")
+    print(f"    ↓ LEC Processor ({N_F} frequencies: {F_INITIAL})")
+    print(f"  Stage 2: Multi-frequency filtered sensory (x_f) - List[{N_F}] of [batch, {N_X_C}]")
     print(f"    ↓ LEC Projection (tiling + weighting)")
-    print(f"  Output: Hippocampal-ready sensory (x̃) - List[{model_config.n_f}] of [batch, n_p[f]]")
-    print(f"          Dimensions per frequency: {model_config.n_p}")
-    print(f"          Total hippocampal dimension: {sum(model_config.n_p)}")
+    print(f"  Output: Hippocampal-ready sensory (x̃) - List[{N_F}] of [batch, n_p[f]]")
+    print(f"          Dimensions per frequency: {N_P}")
+    print(f"          Total hippocampal dimension: {sum(N_P)}")
     print("\nGENERATIVE PATHWAY (Hippocampus → Sensory):")
-    print(f"  Input:  Grounded location (place cells p) - List[{model_config.n_f}] of [batch, n_p[f]]")
+    print(f"  Input:  Grounded location (place cells p) - List[{N_F}] of [batch, n_p[f]]")
     print(f"    ↓ LEC Decoder (linear projection + MLP)")
-    print(f"  Output: Sensory prediction (x̂) - [batch, {model_config.n_x}]")
+    print(f"  Output: Sensory prediction (x̂) - [batch, {N_X}]")
     print("\nQUALITY METRICS:")
     print(f"  Average MSE: {mse_per_step.mean():.4f}")
     print(f"  Average Correlation: {sum(correlations)/len(correlations):.4f}")

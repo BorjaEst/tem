@@ -80,9 +80,9 @@ class ExampleConfig(BaseSettings):
 
     This config implements all inference-related protocols:
     - EncoderParams, ProcessorParams
-    - GroundedLocParams, ProjectionParams
+    - GroundedLocConfig, ProjectionParams
     - AbstractInferenceParams
-    - MemoryStorageParams, AttractorParams
+    - MemoryStorageParams, AttractorConfig
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="tem_inference")

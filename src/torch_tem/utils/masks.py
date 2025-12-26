@@ -9,7 +9,7 @@ from torch import Tensor
 from torch_tem.types import Matrix
 
 
-def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, f_extended: List[float]) -> Matrix:
+def create_p_update_mask(n_p: List[int], n_f_g: int, f_extended: List[float]) -> Matrix:
     """Create hierarchical mask for memory updates.
 
     Set connections when forming Hebbian memory of grounded locations:
@@ -17,14 +17,14 @@ def create_p_update_mask(n_p: List[int], n_f: int, n_f_g: int, f_extended: List[
     connection FROM cell i TO cell j.
 
     Args:
-        n_p: Grounded location dimensions per frequency
-        n_f: Total number of frequency modules (grid + OVC)
-        n_f_g: Number of grid cell frequency modules
-        f_extended: Frequency values for ALL modules (grid + OVC) [n_f]
+        n_p: Grounded location dimensions per frequency.
+        n_f_g: Number of grid cell frequency modules.
+        f_extended: Frequency values for ALL modules (grid + OVC).
 
     Returns:
-        Binary mask tensor [sum(n_p), sum(n_p)]
+        Binary mask tensor [sum(n_p), sum(n_p)].
     """
+    n_f = len(n_p)  # Infer total number of frequencies
     p_update_mask = torch.zeros((sum(n_p), sum(n_p)), dtype=torch.float)
     n_p_cumsum = np.cumsum(np.concatenate(([0], n_p)))
 
@@ -75,21 +75,21 @@ def create_p_retrieve_mask(n_p: List[int], i_attractor: int, max_freq: List[int]
     return p_retrieve_mask
 
 
-def create_g_connections(n_f: int, n_f_g: int, f_extended: List[float]) -> List[List[bool]]:
+def create_g_connections(n_f_g: int, f_extended: List[float]) -> List[List[bool]]:
     """Create hierarchical connections between frequency modules for transitions.
 
     Abstract location frequency modules can influence the transition of other
     modules hierarchically (low to high frequency).
 
     Args:
-        n_f: Total number of frequency modules (grid + OVC)
-        n_f_g: Number of grid cell frequency modules
-        f_extended: Frequency values for ALL modules (grid + OVC) [n_f]
+        n_f_g: Number of grid cell frequency modules.
+        f_extended: Frequency values for ALL modules (grid + OVC).
 
     Returns:
         List[n_f][n_f] of boolean connections. connections[f_to][f_from]
         indicates if f_from connects to f_to.
     """
+    n_f = len(f_extended)  # Infer total number of frequencies
     n_f_ovc = n_f - n_f_g  # Derived: number of OVC modules
 
     # Grid cell connections: hierarchical

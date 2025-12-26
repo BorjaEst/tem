@@ -585,3 +585,88 @@ def plot_memory_difference(
     fig.suptitle(title)
     plt.tight_layout()
     return fig
+
+
+def plot_memory_structure_analysis(
+    M: Matrix,
+    n_p_per_freq: List[int],
+    title: str = "Memory Structure Analysis",
+    figsize: tuple = (14, 5),
+) -> plt.Figure:
+    """Plot eigenvalue spectrum and hierarchical block structure of memory matrix.
+
+    Visualizes two aspects of learned memory organization:
+    1. Eigenvalue spectrum - indicates memory capacity and rank
+    2. Block structure - compares within-frequency vs between-frequency connections
+
+    Args:
+        M: Memory matrix to analyze [N, N] (single batch element).
+        n_p_per_freq: Place cell counts per frequency module.
+        title: Overall figure title.
+        figsize: Figure dimensions (width, height).
+
+    Returns:
+        Figure object containing two subplots.
+
+    Example:
+        >>> M_gen = torch.randn(40, 40)
+        >>> n_p = [10, 10, 8, 6, 6]
+        >>> fig = plot_memory_structure_analysis(M_gen, n_p)
+        >>> fig.savefig("memory_structure.png")
+    """
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    # LEFT: Eigenvalue spectrum
+    eigenvalues = torch.linalg.eigvalsh(M.cpu())
+    axes[0].plot(eigenvalues.numpy(), linewidth=2, color="steelblue")
+    axes[0].set_title("Eigenvalue Spectrum", fontsize=12, fontweight="bold")
+    axes[0].set_xlabel("Index")
+    axes[0].set_ylabel("Eigenvalue")
+    axes[0].grid(True, alpha=0.3)
+
+    # RIGHT: Block structure (within vs between frequency)
+    block_stats = []
+    start_idx = 0
+    for freq_idx, n_p in enumerate(n_p_per_freq):
+        end_idx = start_idx + n_p
+
+        # Within-frequency connections
+        within_block = M[start_idx:end_idx, start_idx:end_idx]
+        within_strength = torch.norm(within_block).item()
+
+        # Between-frequency connections
+        between_block = M[start_idx:end_idx, :].clone()
+        between_block[:, start_idx:end_idx] = 0  # Zero out within-frequency part
+        between_strength = torch.norm(between_block).item()
+
+        block_stats.append(
+            {
+                "freq": freq_idx,
+                "within": within_strength,
+                "between": between_strength,
+            }
+        )
+        start_idx = end_idx
+
+    # Extract data for plotting
+    freqs = [s["freq"] for s in block_stats]
+    within = [s["within"] for s in block_stats]
+    between = [s["between"] for s in block_stats]
+
+    # Create grouped bar chart
+    x = np.arange(len(freqs))
+    width = 0.35
+    axes[1].bar(x - width / 2, within, width, label="Within-frequency", color="forestgreen")
+    axes[1].bar(x + width / 2, between, width, label="Between-frequency", color="coral")
+    axes[1].set_title("Hierarchical Block Structure", fontsize=12, fontweight="bold")
+    axes[1].set_xlabel("Frequency Module")
+    axes[1].set_ylabel("Connection Strength")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels([f"f{i}" for i in freqs])
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3, axis="y")
+
+    fig.suptitle(title, fontsize=14, y=0.98)
+    fig.tight_layout()
+
+    return fig

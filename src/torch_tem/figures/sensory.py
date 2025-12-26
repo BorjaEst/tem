@@ -468,3 +468,79 @@ def plot_sensory_projection(
 
     fig.tight_layout()
     return fig
+
+
+# ==============================================================================
+# Reconstruction Quality Visualization
+# ==============================================================================
+def plot_reconstruction_quality(
+    observations: List[Tensor],
+    predictions: List[Tensor],
+    title: str = "Reconstruction Quality Metrics",
+    figsize: Tuple[float, float] = (14, 10),
+) -> plt.Figure:
+    """Visualize reconstruction quality metrics comparing observations with predictions.
+
+    Creates a 2×2 panel visualization showing:
+    - Top-left: Mean squared error over time
+    - Top-right: Correlation between observations and predictions over time
+    - Bottom-left: Value distribution comparison (histogram)
+    - Bottom-right: Per-dimension reconstruction error (bar chart)
+
+    Args:
+        observations: List[T] of observation tensors [n_x]
+        predictions: List[T] of prediction tensors [n_x]
+        title: Figure title
+        figsize: Figure size (width, height)
+
+    Returns:
+        Matplotlib figure with reconstruction quality analysis
+    """
+    # Convert to numpy arrays for plotting
+    obs_matrix = torch.stack(observations).detach().numpy()  # [T, n_x]
+    pred_matrix = torch.stack(predictions).detach().numpy()  # [T, n_x]
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    # Top-left: MSE over time
+    mse_per_step = ((obs_matrix - pred_matrix) ** 2).mean(axis=1)
+    axes[0, 0].plot(mse_per_step, linewidth=2, color="crimson")
+    axes[0, 0].set_title("Mean Squared Error Over Time", fontsize=11, fontweight="bold")
+    axes[0, 0].set_xlabel("Time Step")
+    axes[0, 0].set_ylabel("MSE")
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Top-right: Correlation over time
+    correlations = []
+    for t in range(len(observations)):
+        corr = torch.corrcoef(torch.stack([observations[t], predictions[t]]))[0, 1]
+        correlations.append(corr.item())
+    axes[0, 1].plot(correlations, linewidth=2, color="forestgreen")
+    axes[0, 1].set_title("Correlation Between x and x̂", fontsize=11, fontweight="bold")
+    axes[0, 1].set_xlabel("Time Step")
+    axes[0, 1].set_ylabel("Correlation")
+    axes[0, 1].grid(True, alpha=0.3)
+    axes[0, 1].axhline(y=0.5, color="gray", linestyle="--", alpha=0.5, label="0.5 threshold")
+    axes[0, 1].legend()
+
+    # Bottom-left: Distribution comparison
+    axes[1, 0].hist(obs_matrix.flatten(), bins=50, alpha=0.5, label="Original (x)", color="blue")
+    axes[1, 0].hist(pred_matrix.flatten(), bins=50, alpha=0.5, label="Decoded (x̂)", color="orange")
+    axes[1, 0].set_title("Value Distribution Comparison", fontsize=11, fontweight="bold")
+    axes[1, 0].set_xlabel("Value")
+    axes[1, 0].set_ylabel("Frequency")
+    axes[1, 0].legend()
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # Bottom-right: Per-dimension reconstruction accuracy
+    dim_mse = ((obs_matrix - pred_matrix) ** 2).mean(axis=0)
+    n_x = obs_matrix.shape[1]
+    axes[1, 1].bar(range(n_x), dim_mse, color="purple", alpha=0.7)
+    axes[1, 1].set_title("Reconstruction Error Per Dimension", fontsize=11, fontweight="bold")
+    axes[1, 1].set_xlabel("Observation Dimension")
+    axes[1, 1].set_ylabel("MSE")
+    axes[1, 1].grid(True, alpha=0.3, axis="y")
+
+    fig.suptitle(title, fontsize=14, y=0.995)
+    fig.tight_layout()
+    return fig

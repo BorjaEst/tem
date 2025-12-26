@@ -26,7 +26,15 @@ from torch_tem.figures.data import (
     plot_walks,
 )
 from torch_tem.figures.grounded import plot_grounded_location_activity, plot_outer_product_structure, plot_place_cell_dynamics
-from torch_tem.figures.memory import plot_attractor_convergence, plot_hierarchical_masks, plot_learning_curve, plot_memory_difference, plot_memory_matrices, plot_retrieval_quality
+from torch_tem.figures.memory import (
+    plot_attractor_convergence,
+    plot_hierarchical_masks,
+    plot_learning_curve,
+    plot_memory_difference,
+    plot_memory_matrices,
+    plot_memory_structure_analysis,
+    plot_retrieval_quality,
+)
 from torch_tem.figures.patterns import (
     plot_grid_cell_patterns,
     plot_grid_temporal_evolution,
@@ -42,6 +50,7 @@ from torch_tem.figures.sensory import (
     plot_frequency_comparison,
     plot_multi_frequency_representation,
     plot_normalization_effects,
+    plot_reconstruction_quality,
     plot_sensory_projection,
     plot_temporal_filtering,
 )
@@ -79,12 +88,14 @@ __all__ = [
     "plot_hierarchical_masks",
     "plot_retrieval_quality",
     "plot_memory_difference",
+    "plot_memory_structure_analysis",
     # Sensory processing
     "plot_frequency_bank",
     "plot_temporal_filtering",
     "plot_frequency_comparison",
     "plot_normalization_effects",
     "plot_multi_frequency_representation",
+    "plot_reconstruction_quality",
     "plot_sensory_projection",
     # Abstract location inference
     "plot_source_contributions",

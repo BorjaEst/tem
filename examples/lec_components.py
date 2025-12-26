@@ -126,11 +126,10 @@ N_P = [10, 10, 8, 6, 6]  # Place cells per frequency (5 modules)
 N_WALKS = 1  # Number of walks to generate
 WALK_LENGTH = 100  # Timesteps per walk
 F_INITIAL = [0.95, 0.7, 0.4, 0.2, 0.1]  # Initial frequency values
-N_F = len(F_INITIAL)  # Number of frequency modules
 DEVICE = torch.device("cpu")  # Change to "cuda" if GPU is available
 
 # Create context for LEC components
-W_tile = utils.create_tiling_matrices(N_P, [N_X_C] * N_F)
+W_tile = utils.create_tiling_matrices(N_P, [N_X_C] * len(F_INITIAL))
 
 # ==============================================================================
 # Main Experiment
@@ -195,7 +194,7 @@ if __name__ == "__main__":
     decoder = lec.Decoder(N_X, W_tile, config.decoder)
 
     print(f"  ✓ Encoder: {N_X} → {N_X_C} (two-hot compression)")
-    print(f"  ✓ Processor: {N_F} frequency channels (f = {F_INITIAL})")
+    print(f"  ✓ Processor: {len(F_INITIAL)} frequency channels (f = {F_INITIAL})")
     print(f"  ✓ Projection: {N_X_C} → {N_P} (hippocampal tiling)")
     print(f"  ✓ Decoder: place cells → sensory predictions")
     print()
@@ -213,7 +212,7 @@ if __name__ == "__main__":
     x_hat_history = []  # Decoded sensory predictions
 
     # Initialize processor state (previous filtered observations)
-    x_f_prev = [torch.zeros(1, N_X_C, device=DEVICE) for _ in range(N_F)]
+    x_f_prev = [torch.zeros(1, N_X_C, device=DEVICE) for _ in range(len(F_INITIAL))]
 
     for t in range(WALK_LENGTH):
         # === INFERENCE PATHWAY ===
@@ -257,7 +256,7 @@ if __name__ == "__main__":
     observations_stacked = torch.stack(observations)  # List[T] of [n_x] → [T, n_x]
     midpoint = WALK_LENGTH // 2
     x_c_demo = encoder(observations_stacked[midpoint : midpoint + 5])  # [5, n_x_c]
-    x_prev_demo = [torch.zeros(5, N_X_C, device=DEVICE) for _ in range(N_F)]
+    x_prev_demo = [torch.zeros(5, N_X_C, device=DEVICE) for _ in range(len(F_INITIAL))]
 
     # Compare raw filtering vs normalized filtering (using projection.normalize)
     x_f_raw = processor.filter_temporal(x_c_demo, x_prev_demo)  # Raw exponential smoothing only
@@ -354,14 +353,14 @@ if __name__ == "__main__":
     print(f"  Input:  {N_X}-dim observations")
     print(f"    ↓ LEC Encoder (two-hot compression)")
     print(f"  Stage 1: {N_X_C}-dim compressed sensory (x_c)")
-    print(f"    ↓ LEC Processor ({N_F} frequencies: {F_INITIAL})")
-    print(f"  Stage 2: Multi-frequency filtered sensory (x_f) - List[{N_F}] of [batch, {N_X_C}]")
+    print(f"    ↓ LEC Processor ({len(F_INITIAL)} frequencies: {F_INITIAL})")
+    print(f"  Stage 2: Multi-frequency filtered sensory (x_f) - List[{len(F_INITIAL)}] of [batch, {N_X_C}]")
     print(f"    ↓ LEC Projection (tiling + weighting)")
-    print(f"  Output: Hippocampal-ready sensory (x̃) - List[{N_F}] of [batch, n_p[f]]")
+    print(f"  Output: Hippocampal-ready sensory (x̃) - List[{len(F_INITIAL)}] of [batch, n_p[f]]")
     print(f"          Dimensions per frequency: {N_P}")
     print(f"          Total hippocampal dimension: {sum(N_P)}")
     print("\nGENERATIVE PATHWAY (Hippocampus → Sensory):")
-    print(f"  Input:  Grounded location (place cells p) - List[{N_F}] of [batch, n_p[f]]")
+    print(f"  Input:  Grounded location (place cells p) - List[{len(F_INITIAL)}] of [batch, n_p[f]]")
     print(f"    ↓ LEC Decoder (linear projection + MLP)")
     print(f"  Output: Sensory prediction (x̂) - [batch, {N_X}]")
     print("\nQUALITY METRICS:")

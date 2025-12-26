@@ -98,11 +98,11 @@ class GroundedLocInference(nn.Module):
         """Compute grounded location via element-wise product of expanded inputs.
 
         Args:
-            g_expanded (MultiScaleCode): Expanded abstract location, list of [B, n_p[f]] tensors.
-            x_expanded (MultiScaleCode): Expanded and gated sensory, list of [B, n_p[f]] tensors.
+            g_expanded: Expanded abstract location, list of [B, n_p[f]] tensors.
+            x_expanded: Expanded and gated sensory, list of [B, n_p[f]] tensors.
 
         Returns:
-            GroundedLocation: Grounded location, list of [B, n_p[f]] tensors.
+            Grounded location, list of [B, n_p[f]] tensors.
 
         Note:
             p[f] = leaky_relu(clamp(g_expanded[f] ⊙ x_expanded[f], -1, 1))

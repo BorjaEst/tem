@@ -16,7 +16,8 @@ from typing import List
 import torch
 from pydantic import BaseModel, ConfigDict, Field
 
-from torch_tem.types import Matrix, MultiScaleCode
+from torch_tem import utils
+from torch_tem.types import Matrix, MultiScaleCode, Vector
 
 
 class AttractorConfig(BaseModel):
@@ -25,6 +26,9 @@ class AttractorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
 
     kappa: float = Field(default=0.8, ge=0, le=1, description="Decay factor for attractor updates (κ in attractor update)")
+    activation: str = Field(default="leaky_relu", description="Activation function for attractor updates")
+    clamp_min: float = Field(default=-1.0, description="Minimum clamp value for attractor states")
+    clamp_max: float = Field(default=1.0, description="Maximum clamp value for attractor states")
 
 
 class AttractorDynamics:
@@ -46,23 +50,19 @@ class AttractorDynamics:
         """Initialize attractor dynamics with hierarchical retrieval masks.
 
         Args:
-            mask_inf: Hierarchical masks for inference retrieval [i_attractor] of (sum(n_p),)
-            mask_gen: Hierarchical masks for generative retrieval [i_attractor] of (sum(n_p),)
-            config: Hyperparameters for attractor dynamics (kappa decay factor)
+            mask_inf: Hierarchical masks for inference retrieval [i_attractor] of (sum(n_p),).
+            mask_gen: Hierarchical masks for generative retrieval [i_attractor] of (sum(n_p),).
+            config: Hyperparameters for attractor dynamics (kappa decay factor).
         """
         self._config = config
         self._retrieve_mask_inf = mask_inf
         self._retrieve_mask_gen = mask_gen
+        self._activation = utils.get_activation_function(config.activation)
 
     @property
     def i_attractor(self) -> int:
         """Number of attractor iterations (inferred from mask count)."""
         return len(self._retrieve_mask_inf)
-
-    @property
-    def n_p(self) -> List[int]:
-        """Place cell dimensions per frequency."""
-        return [mask.shape[0] for mask in self._retrieve_mask_inf[0]]
 
     @property
     def kappa(self) -> float:
@@ -73,6 +73,37 @@ class AttractorDynamics:
     def kappa(self, value: float):
         """Set decay factor for attractor updates."""
         self._config.kappa = value
+
+    @property
+    def activation(self) -> str:
+        """Activation function name."""
+        return self._config.activation
+
+    @activation.setter
+    def activation(self, value: str):
+        """Set activation function."""
+        self._activation = utils.get_activation_function(value)
+        self._config.activation = value
+
+    @property
+    def clamp_min(self) -> float:
+        """Minimum clamp value."""
+        return self._config.clamp_min
+
+    @clamp_min.setter
+    def clamp_min(self, value: float):
+        """Set minimum clamp value."""
+        self._config.clamp_min = value
+
+    @property
+    def clamp_max(self) -> float:
+        """Maximum clamp value."""
+        return self._config.clamp_max
+
+    @clamp_max.setter
+    def clamp_max(self, value: float):
+        """Set maximum clamp value."""
+        self._config.clamp_max = value
 
     def __call__(self, p_query: MultiScaleCode, M: Matrix, for_inference: bool = False) -> MultiScaleCode:
         """Retrieve refined grounded location from memory via attractor dynamics.
@@ -96,31 +127,39 @@ class AttractorDynamics:
         p = torch.cat(p_query, dim=1)
 
         # Apply activation to initial query (stability)
-        p = torch.nn.functional.leaky_relu(torch.clamp(p, min=-1.0, max=1.0))
+        p = torch.clamp(p, min=self._config.clamp_min, max=self._config.clamp_max)
+        p = self._activation(p)
 
         for tau in range(self.i_attractor):
-            # Memory readout: Query the Hebbian matrix (associative recall)
-            # Matrix multiply retrieves patterns associated with current state
-            # Handle batched [B, n_p, n_p] memory
-            p_readout = torch.matmul(p.unsqueeze(1), M.to(p.device)).squeeze(1)
-
-            # Calculate candidate update with decay and activation
-            p_candidate = self._config.kappa * p + p_readout
-            p_candidate = torch.nn.functional.leaky_relu(torch.clamp(p_candidate, min=-1.0, max=1.0))
-
-            # Apply hierarchical mask for coarse-to-fine refinement
-            # Early iterations update only low-frequency (coarse) components
-            # Later iterations progressively enable higher frequencies (finer detail)
-            mask = retrieve_mask[tau].unsqueeze(0).to(p.device)
-
-            # Update only active frequencies, keep others unchanged
-            p = (1 - mask) * p + mask * p_candidate
+            p = self.update_cycle(p, retrieve_mask[tau])
 
         # Split concatenated result back into per-frequency list (like legacy)
-        n_p_cumsum = [0] + torch.cumsum(torch.tensor(self._n_p), dim=0).tolist()
-        p_list = [p[:, n_p_cumsum[f] : n_p_cumsum[f + 1]] for f in range(len(self._n_p))]
+        n_p_cumsum = [0] + torch.cumsum(torch.tensor([pq.shape[1] for pq in p_query]), dim=0).tolist()
+        p_list = [p[:, n_p_cumsum[f] : n_p_cumsum[f + 1]] for f, _ in enumerate(p_query)]
 
         return p_list
+
+    def update_cycle(self, p: Vector, mask_tau: Matrix) -> Vector:
+        """Single attractor update cycle.
+        ...
+        """
+        # Memory readout: Query the Hebbian matrix (associative recall)
+        # Matrix multiply retrieves patterns associated with current state
+        # Handle batched [B, n_p, n_p] memory
+        p_readout = torch.matmul(p.unsqueeze(1), M.to(p.device)).squeeze(1)
+
+        # Calculate candidate update with decay and activation
+        p_candidate = self._config.kappa * p + p_readout
+        p_candidate = torch.clamp(p_candidate, min=self._config.clamp_min, max=self._config.clamp_max)
+        p_candidate = self._activation(p_candidate)
+
+        # Apply hierarchical mask for coarse-to-fine refinement
+        # Early iterations update only low-frequency (coarse) components
+        # Later iterations progressively enable higher frequencies (finer detail)
+        mask = mask_tau.unsqueeze(0).to(p.device)
+
+        # Update only active frequencies, keep others unchanged
+        return (1 - mask) * p + mask * p_candidate
 
 
 # ======================================================================================

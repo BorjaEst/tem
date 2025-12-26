@@ -13,8 +13,6 @@ synaptic connections strengthen when pre- and post-synaptic neurons fire togethe
 with gradual decay (forgetting) over time.
 """
 
-from typing import List, Protocol
-
 import torch
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,12 +28,6 @@ class StorageConfig(BaseModel):
     eta: float = Field(default=0.5, ge=0, le=1, description="Learning rate for memory updates (η in memory update)")
 
 
-class StorageContext(Protocol):
-    """Protocol for memory storage context providing architecture parameters."""
-
-    update_mask: Matrix  # Mask for memory updates
-
-
 class MemoryStorage:
     """Hebbian memory storage with batched parallel memories.
 
@@ -43,15 +35,15 @@ class MemoryStorage:
     All operations are vectorized using batch matrix operations.
     """
 
-    def __init__(self, context: StorageContext, config: StorageConfig):
-        """Initialize memory storage with context and configuration.
+    def __init__(self, update_mask: Matrix, config: StorageConfig):
+        """Initialize memory storage with update mask and configuration.
 
         Args:
-            context (StorageContext): Architectural context providing update masks.
-            config (StorageConfig): Hyperparameters for Hebbian learning.
+            update_mask: Mask for memory updates [N, N].
+            config: Hyperparameters for Hebbian learning.
         """
         self._config = config
-        self._update_mask = context.update_mask
+        self._update_mask = update_mask
 
     @property
     def lambda_(self) -> float:
@@ -76,13 +68,16 @@ class MemoryStorage:
     def update(self, p_inferred: Vector, p_generated: Vector, M: Matrix) -> Matrix:
         """Update memory matrix using Hebbian plasticity (functional interface).
 
+        Implements the Hebbian update rule:
+            M_new = λ*M + η*(p_inf + p_gen) ⊗ (p_inf - p_gen)
+
         Args:
-            p_inferred (Vector): Inferred grounded locations [B, N].
-            p_generated (Vector): Generated grounded locations [B, N].
-            M (Matrix): Current memory matrix [B, N, N].
+            p_inferred: Inferred grounded locations [B, N].
+            p_generated: Generated grounded locations [B, N].
+            M: Current memory matrix [B, N, N].
 
         Returns:
-            Matrix: Updated memory matrix [B, N, N].
+            Updated memory matrix [B, N, N].
         """
         # Move mask to same device
         mask = self._update_mask.to(p_inferred.device)
@@ -124,19 +119,12 @@ if __name__ == "__main__":
     print(f"  Batch size: {batch_size}")
     print(f"  Training steps: {n_steps}")
 
-    # Create simple context
-    @dataclass
-    class SimpleStorageContext:
-        """Minimal context for demonstration."""
-
-        update_mask: torch.Tensor
-
     # Create update mask (allow all connections)
-    ctx = SimpleStorageContext(update_mask=torch.ones(n_p_total, n_p_total))
+    update_mask = torch.ones(n_p_total, n_p_total)
 
     # Create configuration and storage
     config = StorageConfig(lambda_=0.9, eta=0.5)
-    storage = MemoryStorage(ctx, config)
+    storage = MemoryStorage(update_mask, config)
     print(f"\n✓ Memory storage initialized (λ={config.lambda_}, η={config.eta})")
 
     # Initialize memory matrix

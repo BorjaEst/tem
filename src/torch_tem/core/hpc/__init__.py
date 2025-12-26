@@ -50,9 +50,9 @@ class HPCContext(Protocol):
     """Protocol for HPC context providing architecture parameters.
 
     Attributes:
-        mask_inference: Hierarchical masks for inference retrieval [i_attractor] of (sum(n_p),)
-        mask_generative: Hierarchical masks for generative retrieval [i_attractor] of (sum(n_p),)
-        update_mask: Mask for Hebbian memory updates (sum(n_p), sum(n_p))
+        mask_inference: Hierarchical masks for inference retrieval [i_attractor] of (sum(n_p),).
+        mask_generative: Hierarchical masks for generative retrieval [i_attractor] of (sum(n_p),).
+        update_mask: Mask for Hebbian memory updates (sum(n_p), sum(n_p)).
     """
 
     mask_inference: List[torch.Tensor]
@@ -65,9 +65,9 @@ class HPCState:
     """HPC state containing grounded location and memory matrices.
 
     Attributes:
-        grounded_location (Optional[GroundedLocation]): Inferred place cell activations (conjunctive code).
-                                                         None on initialization, set by first forward pass.
-        memory (List[BatchedMemory]): List [M_gen, M_inf] where M_inf may be None if common_memory=True.
+        grounded_location: Inferred place cell activations (conjunctive code).
+            None on initialization, set by first forward pass.
+        memory: List [M_gen, M_inf] where M_inf may be None if common_memory=True.
     """
 
     grounded_location: Optional[GroundedLocation]
@@ -106,7 +106,7 @@ class HPCModel(nn.Module):
 
         self.attractor = AttractorDynamics(context.mask_inference, context.mask_generative, config.attractor)
         self.grounded = GroundedLocInference(config.grounded)
-        self.storage = MemoryStorage(context, config.storage)
+        self.storage = MemoryStorage(context.update_mask, config.storage)
 
     @property
     def common_memory(self) -> bool:
@@ -191,4 +191,4 @@ class HPCModel(nn.Module):
         return [M_gen, M_inf]
 
 
-__all__ = ["HPCConfig", "HPCState", "HPCModel", "AttractorConfig", "StorageConfig"]
+__all__ = ["HPCConfig", "HPCState", "HPCModel", "AttractorConfig", "GroundedLocConfig", "StorageConfig"]

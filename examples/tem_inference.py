@@ -142,8 +142,8 @@ if __name__ == "__main__":
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_extended)
     mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
     mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
-    W_repeat = utils.create_W_repeat(model_config.n_g_subsampled_combined, model_config.n_x_f)
-    W_tile = utils.create_W_tile(model_config.n_g_subsampled_combined, model_config.n_x_f)
+    W_repeat = utils.create_repeat_matrices(model_config.n_g_subsampled_combined, model_config.n_x_f)
+    W_tile = utils.create_tiling_matrices(model_config.n_g_subsampled_combined, model_config.n_x_f)
 
     print("=" * 80)
     print("Complete TEM Inference Pipeline")

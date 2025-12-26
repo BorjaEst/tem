@@ -52,7 +52,7 @@ def squared_error_freq(value: Union[Vector, MultiScaleCode], target: Union[Vecto
     return torch.sum((value - target) ** 2, dim=1) * 0.5
 
 
-def create_W_repeat(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]:
+def create_repeat_matrices(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]:
     """Create repeat matrices for outer product computation.
 
     Matrix for repeating abstract location g to do outer product with sensory
@@ -68,7 +68,7 @@ def create_W_repeat(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]
     return [torch.tensor(np.kron(np.eye(g), np.ones((1, x))), dtype=torch.float) for g, x in zip(n_g_subsampled, n_x_f)]
 
 
-def create_W_tile(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]:
+def create_tiling_matrices(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]:
     """Create tile matrices for outer product computation.
 
     Matrix for tiling sensory observation x to do outer product with abstract

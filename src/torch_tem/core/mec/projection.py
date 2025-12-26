@@ -62,7 +62,7 @@ class Projection(nn.Module):
             self.register_buffer(f"W_down_{i}", matrix)
 
         # Register expansion matrices as buffer for automatic device management
-        W_repeat = utils.create_W_repeat(params.n_g_subsampled, params.n_x_f)
+        W_repeat = utils.create_repeat_matrices(params.n_g_subsampled, params.n_x_f)
         for i, matrix in enumerate(W_repeat):
             self.register_buffer(f"W_repeat_{i}", matrix)
 

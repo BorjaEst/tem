@@ -129,6 +129,8 @@ F_INITIAL = [0.95, 0.7, 0.4, 0.2, 0.1]  # Initial frequency values
 N_F = len(F_INITIAL)  # Number of frequency modules
 DEVICE = torch.device("cpu")  # Change to "cuda" if GPU is available
 
+# Create context for LEC components
+W_tile = utils.create_tiling_matrices(N_P, [N_X_C] * N_F)
 
 # ==============================================================================
 # Main Experiment
@@ -175,10 +177,6 @@ if __name__ == "__main__":
     # PHASE 2: Initialize LEC Components
     # =========================================================================
     print("Phase 2: Initializing LEC components...")
-
-    # Create W_tile matrices for tiling operations (sensory → hippocampal projection)
-    # Each matrix projects compressed sensory [n_x_c] to place cell dimension [n_p[f]]
-    W_tile = [torch.randn(N_X_C, n_p, device=DEVICE) * 0.1 for n_p in N_P]
 
     # LEC Encoder: Compresses observations using two-hot encoding
     # x [B, n_x] → x_c [B, n_x_c]

@@ -131,7 +131,7 @@ class AttractorDynamics:
         p = self._activation(p)
 
         for tau in range(self.i_attractor):
-            p = self.update_cycle(p, retrieve_mask[tau])
+            p = self.update_cycle(p, retrieve_mask[tau], M)
 
         # Split concatenated result back into per-frequency list (like legacy)
         n_p_cumsum = [0] + torch.cumsum(torch.tensor([pq.shape[1] for pq in p_query]), dim=0).tolist()
@@ -139,9 +139,16 @@ class AttractorDynamics:
 
         return p_list
 
-    def update_cycle(self, p: Vector, mask_tau: Matrix) -> Vector:
+    def update_cycle(self, p: Vector, mask_tau: Matrix, M: Matrix) -> Vector:
         """Single attractor update cycle.
-        ...
+
+        Args:
+            p: Current place cell state [batch_size, n_p]
+            mask_tau: Hierarchical update mask [n_p] controlling which frequencies update
+            M: Hebbian memory matrix [batch_size, n_p, n_p] for associative recall
+
+        Returns:
+            Updated place cell state [batch_size, n_p]
         """
         # Memory readout: Query the Hebbian matrix (associative recall)
         # Matrix multiply retrieves patterns associated with current state

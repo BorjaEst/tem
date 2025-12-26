@@ -50,7 +50,6 @@ class MemoryStorage:
             context (StorageContext): Architectural context providing update masks.
             config (StorageConfig): Hyperparameters for Hebbian learning.
         """
-        super().__init__()
         self._config = config
         self._update_mask = context.update_mask
 

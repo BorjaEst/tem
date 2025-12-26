@@ -140,8 +140,9 @@ if __name__ == "__main__":
     print(f"  Batch size: {batch_size}")
 
     # Create grounded location inference module
-    grounded = GroundedLocInference()
-    print(f"\n✓ Grounded inference module initialized")
+    config = GroundedLocConfig()
+    grounded = GroundedLocInference(config)
+    print(f"\n✓ Grounded inference module initialized (activation={config.activation})")
 
     # Simulate expanded inputs (from upstream Projection and SensoryProjection)
     g_expanded = [torch.randn(batch_size, n) for n in n_p]

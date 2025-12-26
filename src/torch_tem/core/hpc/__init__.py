@@ -20,7 +20,7 @@ Theory:
 """
 
 from dataclasses import dataclass
-from typing import List, Protocol
+from typing import List, Optional, Protocol
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field
@@ -65,11 +65,12 @@ class HPCState:
     """HPC state containing grounded location and memory matrices.
 
     Attributes:
-        grounded_location (GroundedLocation): Inferred place cell activations (conjunctive code).
+        grounded_location (Optional[GroundedLocation]): Inferred place cell activations (conjunctive code).
+                                                         None on initialization, set by first forward pass.
         memory (List[BatchedMemory]): List [M_gen, M_inf] where M_inf may be None if common_memory=True.
     """
 
-    grounded_location: GroundedLocation
+    grounded_location: Optional[GroundedLocation]
     memory: List[BatchedMemory]  # [M_gen, M_inf] or [M_gen, None]
 
     def detach(self) -> "HPCState":
@@ -79,7 +80,7 @@ class HPCState:
             HPCState: New state with detached tensors.
         """
         return HPCState(
-            grounded_location=[x.detach() for x in self.grounded_location],
+            grounded_location=[x.detach() for x in self.grounded_location] if self.grounded_location is not None else None,
             memory=[mem.detach() if mem is not None else None for mem in self.memory],
         )
 
@@ -115,24 +116,24 @@ class HPCModel(nn.Module):
     @property
     def size(self) -> int:
         """Total size of grounded location representation (sum of place cell dimensions)."""
-        return sum(self.attractor.n_p)
+        return self.storage._update_mask.shape[0]
 
     def init_state(self, batch_size: int, device: torch.device) -> HPCState:
-        """Initialize HPC state with zero grounded locations and memory matrices.
+        """Initialize HPC state with None grounded location and zero memory matrices.
 
         Args:
             batch_size (int): Number of parallel sequences.
             device (torch.device): Device for tensor allocation.
 
         Returns:
-            HPCState: Initial state with zero activations and memories.
+            HPCState: Initial state with None grounded_location (will be set by first forward)
+                     and zero-initialized memory matrices.
         """
-        p = torch.zeros([batch_size, self.size], dtype=torch.float, device=device)
         M_gen = torch.zeros(batch_size, self.size, self.size, device=device)
         if self.common_memory:
-            return HPCState(grounded_location=p, memory=[M_gen])
+            return HPCState(grounded_location=None, memory=[M_gen])
         M_inf = torch.zeros(batch_size, self.size, self.size, device=device)
-        return HPCState(grounded_location=p, memory=[M_gen, M_inf])
+        return HPCState(grounded_location=None, memory=[M_gen, M_inf])
 
     def forward(self, g_: MultiScaleCode, x_: MultiScaleCode, p_generated: GroundedLocation, state: HPCState) -> HPCState:
         """Forward pass: infer grounded location and update memory.

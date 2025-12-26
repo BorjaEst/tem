@@ -50,7 +50,6 @@ class AttractorDynamics:
             mask_gen: Hierarchical masks for generative retrieval [i_attractor] of (sum(n_p),)
             config: Hyperparameters for attractor dynamics (kappa decay factor)
         """
-        super().__init__()
         self._config = config
         self._retrieve_mask_inf = mask_inf
         self._retrieve_mask_gen = mask_gen

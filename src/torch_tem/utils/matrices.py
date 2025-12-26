@@ -390,3 +390,37 @@ def detect_grid_structure(adj: np.ndarray, n_locs: int) -> Optional[Tuple[int, i
                 return (width, height)
 
     return None
+
+
+def get_activation_function(name: str):
+    """Get activation function by name.
+
+    Args:
+        name: Name of activation function ('elu', 'relu', 'leaky_relu', 'tanh', 'sigmoid').
+
+    Returns:
+        Activation function callable.
+
+    Raises:
+        ValueError: If activation name is not recognized.
+
+    Example:
+        >>> activation = get_activation_function('elu')
+        >>> x = torch.tensor([-1.0, 0.0, 1.0])
+        >>> activation(x)
+        tensor([-0.6321,  0.0000,  1.0000])
+    """
+    import torch.nn.functional as F
+
+    activations = {
+        "elu": F.elu,
+        "relu": F.relu,
+        "leaky_relu": F.leaky_relu,
+        "tanh": torch.tanh,
+        "sigmoid": torch.sigmoid,
+    }
+
+    if name not in activations:
+        raise ValueError(f"Unknown activation function: {name}. Available: {list(activations.keys())}")
+
+    return activations[name]

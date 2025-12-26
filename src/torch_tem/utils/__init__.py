@@ -13,6 +13,7 @@ from .matrices import (
     create_W_repeat,
     create_W_tile,
     detect_grid_structure,
+    get_activation_function,
     split_to_frequencies,
     squared_error_freq,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "create_p_retrieve_mask",
     "create_g_connections",
     "detect_grid_structure",
+    "get_activation_function",
     "compute_graph_layout",
     "split_to_frequencies",
     "concatenate_frequencies",

@@ -55,9 +55,9 @@ class Encoder(nn.Module):
         """Initialize encoder with two-hot lookup table.
 
         Args:
-            n_x: Number of sensory observation neurons
-            n_x_c: Compressed sensory dimension
-            config: Encoder configuration (n_hot parameter)
+            n_x: Number of sensory observation neurons.
+            n_x_c: Compressed sensory dimension.
+            config: Encoder configuration (n_hot parameter).
         """
         super().__init__()
         self._config = config
@@ -92,3 +92,56 @@ class Encoder(nn.Module):
 
 
 __all__ = ["Encoder", "EncoderConfig"]
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """Encoder usage example: Two-hot compression of one-hot observations.
+
+    Demonstrates how the encoder compresses high-dimensional one-hot observations
+    into lower-dimensional n-hot representations using a lookup table.
+    """
+    print("=" * 80)
+    print("Encoder Example - N-Hot Compression")
+    print("=" * 80)
+
+    # Configuration
+    n_x = 45  # Observation space size
+    n_x_c = 10  # Compressed dimension
+    n_hot = 2  # Number of active units
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Observation space: {n_x}")
+    print(f"  Compressed dimension: {n_x_c}")
+    print(f"  N-hot encoding: {n_hot}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create encoder
+    config = EncoderConfig(n_hot=n_hot)
+    encoder = Encoder(n_x, n_x_c, config)
+    print(f"\n✓ Encoder initialized (compression ratio: {n_x/n_x_c:.1f}x)")
+
+    # Create one-hot observations
+    observation_indices = torch.randint(0, n_x, (batch_size,))
+    x_onehot = torch.nn.functional.one_hot(observation_indices, num_classes=n_x).float()
+    print(f"✓ One-hot observations: {x_onehot.shape}")
+    print(f"  Sample indices: {observation_indices.tolist()}")
+
+    # Encode to n-hot
+    with torch.no_grad():
+        x_compressed = encoder(x_onehot)
+
+    print(f"✓ Compressed observations: {x_compressed.shape}")
+    print(f"  Active units per sample: {x_compressed.sum(dim=1).tolist()}")
+
+    # Verify n-hot property
+    active_counts = x_compressed.sum(dim=1)
+    all_nhot = torch.all(active_counts == n_hot)
+    print(f"\nVerification:")
+    print(f"  All samples have exactly {n_hot} active units: {all_nhot}")
+
+    print("\n" + "=" * 80)

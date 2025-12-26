@@ -65,8 +65,8 @@ class Processor(nn.Module):
         """Initialize processor with learnable temporal filtering.
 
         Args:
-            f_initial: Initial frequency values for each channel
-            config: Processor configuration (learning control)
+            f_initial: Initial frequency values for each channel.
+            config: Processor configuration (learning control).
         """
         super().__init__()
         self._config = config
@@ -92,7 +92,7 @@ class Processor(nn.Module):
         Convenience method that combines config mutation and sync.
 
         Args:
-            learn: If True, enable gradients; if False, freeze parameters
+            learn: If True, enable gradients; if False, freeze parameters.
         """
         self._config.learn_alpha = learn
         for param in self._alpha_logit:
@@ -107,11 +107,11 @@ class Processor(nn.Module):
         where alpha[f] = sigmoid(alpha_logit[f]) ∈ (0, 1).
 
         Args:
-            x_c: Compressed sensory input [B, n_x_c]
-            x_prev: Previous filtered state List[n_f] of [B, n_x_c]
+            x_c: Compressed sensory input [B, n_x_c].
+            x_prev: Previous filtered state List[n_f] of [B, n_x_c].
 
         Returns:
-            Filtered sensory (before normalization) List[n_f] of [B, n_x_c]
+            Filtered sensory (before normalization) List[n_f] of [B, n_x_c].
         """
         alpha = [torch.sigmoid(alpha_f) for alpha_f in self._alpha_logit]
         return [alpha_f * x_c + (1 - alpha_f) * x_prev[f] for f, alpha_f in enumerate(alpha)]
@@ -123,14 +123,79 @@ class Processor(nn.Module):
             x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
         Args:
-            x_c: Compressed sensory input [B, n_x_c]
-            x_prev: Previous filtered state List[n_f] of [B, n_x_c]
+            x_c: Compressed sensory input [B, n_x_c].
+            x_prev: Previous filtered state List[n_f] of [B, n_x_c].
 
         Returns:
-            Multi-frequency filtered sensory List[n_f] of [B, n_x_c]
-            (Normalization applied later in Projection module)
+            Multi-frequency filtered sensory List[n_f] of [B, n_x_c].
+            Normalization applied later in Projection module.
         """
         return self.filter_temporal(x_c, x_prev)
 
 
 __all__ = ["Processor", "ProcessorConfig"]
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """Processor usage example: Multi-frequency temporal filtering.
+
+    Demonstrates how the processor applies exponential smoothing at different
+    frequencies to create multiple temporally-filtered views of sensory input.
+    """
+    print("=" * 80)
+    print("Processor Example - Multi-Frequency Temporal Filtering")
+    print("=" * 80)
+
+    # Configuration
+    f_initial = [0.8, 0.5, 0.3]  # Decay rates per frequency
+    n_x_c = 10  # Compressed sensory dimension
+    batch_size = 4
+    n_steps = 5
+
+    print(f"\nConfiguration:")
+    print(f"  Frequencies: {len(f_initial)}")
+    print(f"  Initial alpha values: {f_initial}")
+    print(f"  Compressed dimension: {n_x_c}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Time steps: {n_steps}")
+
+    # Create processor
+    config = ProcessorConfig(learn_alpha=True)
+    processor = Processor(f_initial, config)
+    print(f"\n✓ Processor initialized (n_f={processor.n_f})")
+
+    # Initialize previous state
+    x_prev = [torch.zeros(batch_size, n_x_c) for _ in range(processor.n_f)]
+    print(f"✓ Initial state: {[x.shape for x in x_prev]}")
+
+    # Simulate temporal sequence
+    print(f"\nTemporal filtering over {n_steps} steps:")
+    for t in range(n_steps):
+        # New compressed sensory input (random walk)
+        x_c = torch.randn(batch_size, n_x_c) * 0.1
+        if t > 0:
+            x_c = x_c + x_prev[0] * 0.5  # Correlation with previous
+
+        # Filter at all frequencies
+        with torch.no_grad():
+            x_f = processor(x_c, x_prev)
+
+        # Show statistics
+        print(f"  Step {t}: ", end="")
+        for f in range(processor.n_f):
+            change = (x_f[f] - x_prev[f]).abs().mean().item()
+            print(f"freq_{f}_change={change:.4f} ", end="")
+        print()
+
+        # Update state
+        x_prev = x_f
+
+    print(f"\n✓ Final filtered representations:")
+    for f in range(processor.n_f):
+        print(f"  Frequency {f}: mean={x_prev[f].mean():.4f}, std={x_prev[f].std():.4f}")
+
+    print("\n" + "=" * 80)

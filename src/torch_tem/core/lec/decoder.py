@@ -58,28 +58,29 @@ class Decoder(nn.Module):
         """Initialize Decoder module.
 
         Args:
-            n_x: Number of sensory observation neurons
-            W_tile: Tiling matrices for projection (managed by parent LECModel)
-            config: Decoder configuration parameters
+            n_x: Number of sensory observation neurons.
+            W_tile: Tiling matrices for projection (managed by parent LECModel).
+            config: Decoder configuration parameters.
         """
         super().__init__()
         self._config = config
         self._W_tile = W_tile
+        self._n_x = n_x
 
         # Learnable sensory decoding parameters
         self._w_x = nn.Parameter(torch.ones(1, self.n_x_c))
         self._b_x = nn.Parameter(torch.zeros(1, self.n_x_c))
 
         # MLP decoder from compressed sensory to full observation
-        activation = utils.get_activation_function(config.activation.lower())
+        activation_fn = utils.get_activation_function(config.activation.lower())
         hidden_dim = config.hidden_multiplier * self.n_x_c  # Hidden layer size
         bias = (True, True) if config.use_bias else (False, False)
-        self._mlp_decoder = MLP(self.n_x_c, n_x, activation, hidden_dim, bias)
+        self._mlp_decoder = MLP(self.n_x_c, n_x, (activation_fn, None), hidden_dim, bias)
 
     @property
     def n_x(self) -> int:
         """Number of sensory observation neurons x."""
-        return self._mlp_decoder.n_out
+        return self._n_x
 
     @property
     def n_x_c(self) -> int:
@@ -93,10 +94,10 @@ class Decoder(nn.Module):
         by inverting the tiling operation: x_c = p @ W_tile^T
 
         Args:
-            p: Grounded locations (place cells) List[n_f] of (batch, n_p[f])
+            p: Grounded locations (place cells) List[n_f] of (batch, n_p[f]).
 
         Returns:
-            Compressed sensory representation (batch, n_x_c)
+            Compressed sensory representation (batch, n_x_c).
 
         Note:
             We only untile the highest frequency for decoding, as it contains
@@ -108,10 +109,10 @@ class Decoder(nn.Module):
         """Decode compressed sensory to full observation predictions.
 
         Args:
-            x: Compressed sensory representation (batch, n_x_c)
+            x: Compressed sensory representation (batch, n_x_c).
 
         Returns:
-            Sensory prediction with observation probabilities and logits
+            Sensory prediction with observation probabilities and logits.
         """
         x_logits = self._mlp_decoder(x)
         x_probs = torch.nn.functional.softmax(x_logits, dim=-1)
@@ -123,13 +124,70 @@ class Decoder(nn.Module):
         Complete generative pathway: p → x_c → x̂
 
         Args:
-            p: Grounded locations (place cells) List[n_f] of (batch, n_p[f])
+            p: Grounded locations (place cells) List[n_f] of (batch, n_p[f]).
 
         Returns:
-            Sensory prediction with observation probabilities and logits
+            Sensory prediction with observation probabilities and logits.
         """
         x_proj = self.untiling(p)
         return self.decode(self._w_x * x_proj + self._b_x)
 
 
 __all__ = ["Decoder", "DecoderConfig"]
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """Decoder usage example: Place cells to sensory predictions.
+
+    Demonstrates how the decoder transforms grounded locations (place cells)
+    back into sensory observation predictions via untiling and MLP decoding.
+    """
+    print("=" * 80)
+    print("Decoder Example - Generative Pathway (p → x̂)")
+    print("=" * 80)
+
+    # Configuration
+    n_x = 45  # Observation space size
+    n_x_c = 10  # Compressed dimension
+    n_p = [96, 80, 64]  # Place cells per frequency
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Observation space: {n_x}")
+    print(f"  Compressed dimension: {n_x_c}")
+    print(f"  Place cells per frequency: {n_p}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create tiling matrices (normally from context)
+    W_tile = [torch.randn(n_x_c, n_p_f) for n_p_f in n_p]
+    print(f"\n✓ Tiling matrices: {[W.shape for W in W_tile]}")
+
+    # Create decoder
+    config = DecoderConfig()
+    decoder = Decoder(n_x, W_tile, config)
+    print(f"✓ Decoder initialized (n_x={decoder.n_x}, n_x_c={decoder.n_x_c})")
+
+    # Create grounded locations (place cells)
+    p = [torch.randn(batch_size, n_p_f) for n_p_f in n_p]
+    print(f"✓ Grounded locations: {[p_f.shape for p_f in p]}")
+
+    # Decode to sensory predictions
+    with torch.no_grad():
+        prediction = decoder(p)
+
+    print(f"\n✓ Sensory prediction:")
+    print(f"  Probabilities shape: {prediction.values[0].shape}")
+    print(f"  Logits shape: {prediction.logits[0].shape}")
+    print(f"  Probabilities sum to 1: {torch.allclose(prediction.values[0].sum(dim=-1), torch.ones(batch_size))}")
+
+    # Show top predictions
+    print(f"\nTop-3 predicted observations per sample:")
+    for b in range(min(2, batch_size)):
+        top_k = torch.topk(prediction.values[0][b], k=3)
+        print(f"  Sample {b}: indices={top_k.indices.tolist()}, probs={top_k.values.tolist()}")
+
+    print("\n" + "=" * 80)

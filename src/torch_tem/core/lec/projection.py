@@ -56,15 +56,15 @@ class Projection(nn.Module):
         """Initialize projection module.
 
         Args:
-            W_tile: Tiling matrices for projection (managed by parent LECModel)
-            config: Projection configuration (learning control, initialization)
+            W_tile: Tiling matrices for projection (managed by parent LECModel).
+            config: Projection configuration (learning control, initialization).
         """
         super().__init__()
         self._config = config
         self._W_tile = W_tile
 
         # Learnable frequency-specific weights (initialized to w_p_init)
-        p = [nn.Parameter(config.w_p_init) for _ in range(self.n_f)]
+        p = [nn.Parameter(torch.tensor(config.w_p_init), requires_grad=config.learn_w_p) for _ in range(self.n_f)]
         self._w_p = nn.ParameterList(p)
 
     @property
@@ -86,10 +86,10 @@ class Projection(nn.Module):
         """Normalize a single frequency tensor: demean, ReLU, L2 normalize.
 
         Args:
-            x: Input tensor of shape (batch, n_x_f)
+            x: Input tensor of shape (batch, n_x_f).
 
         Returns:
-            Normalized tensor of shape (batch, n_x_f)
+            Normalized tensor of shape (batch, n_x_f).
         """
         x_demeaned = x - x.mean(dim=-1, keepdim=True)
         x_relu = torch.relu(x_demeaned)
@@ -100,7 +100,7 @@ class Projection(nn.Module):
         """Set learning state for frequency weights w_p.
 
         Args:
-            learn: If True, enable gradients; if False, freeze parameters
+            learn: If True, enable gradients; if False, freeze parameters.
         """
         self._config.learn_w_p = learn
         for param in self._w_p:
@@ -117,10 +117,10 @@ class Projection(nn.Module):
             x̃[f] = sigmoid(w_p[f]) * (x_f[f] @ W_tile[f])
 
         Args:
-            x_f: Normalized filtered sensory List[n_f] of (batch, n_x_c)
+            x_f: Normalized filtered sensory List[n_f] of (batch, n_x_c).
 
         Returns:
-            Tiled sensory List[n_f] of (batch, n_p[f])
+            Tiled sensory List[n_f] of (batch, n_p[f]).
         """
         w_p, W_tile, n_f = self._w_p, self._W_tile, self.n_f
         return [torch.sigmoid(w_p[f]) * x_f[f] @ W_tile[f] for f in range(n_f)]
@@ -131,13 +131,72 @@ class Projection(nn.Module):
         Pipeline: normalize(x_f) → tile → weight → x̃
 
         Args:
-            x_f: Filtered sensory List[n_f] of (batch, n_x_c)
+            x_f: Filtered sensory List[n_f] of (batch, n_x_c).
 
         Returns:
-            Projected sensory List[n_f] of (batch, n_p[f])
+            Projected sensory List[n_f] of (batch, n_p[f]).
         """
         x_norm = self.normalize(x_f)
         return self.tiling(x_norm)
 
 
 __all__ = ["ProjectionConfig", "Projection"]
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """Projection usage example: Sensory to hippocampal projection.
+
+    Demonstrates how the projection module transforms filtered sensory
+    representations into hippocampal space via tiling and weighting.
+    """
+    print("=" * 80)
+    print("Projection Example - Sensory to Hippocampal Space")
+    print("=" * 80)
+
+    # Configuration
+    n_x_c = 10  # Compressed sensory dimension
+    n_p = [96, 80, 64]  # Place cells per frequency
+    n_f = len(n_p)
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Compressed dimension: {n_x_c}")
+    print(f"  Frequencies: {n_f}")
+    print(f"  Place cells per frequency: {n_p}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create tiling matrices (normally from context)
+    W_tile = [torch.randn(n_x_c, n_p_f) for n_p_f in n_p]
+    print(f"\n✓ Tiling matrices: {[W.shape for W in W_tile]}")
+
+    # Create projection
+    config = ProjectionConfig(learn_w_p=True, w_p_init=1.0)
+    projection = Projection(W_tile, config)
+    print(f"✓ Projection initialized (n_f={projection.n_f})")
+    print(f"  Place cells per frequency: {projection.n_p}")
+
+    # Create filtered sensory input
+    x_f = [torch.randn(batch_size, n_x_c) for _ in range(n_f)]
+    print(f"\n✓ Filtered sensory: {[x.shape for x in x_f]}")
+
+    # Project to hippocampal space
+    with torch.no_grad():
+        x_projected = projection(x_f)
+
+    print(f"✓ Projected sensory: {[x.shape for x in x_projected]}")
+
+    # Show statistics per frequency
+    print(f"\nProjection statistics:")
+    for f in range(n_f):
+        print(f"  Frequency {f}:")
+        print(f"    Input: mean={x_f[f].mean():.4f}, std={x_f[f].std():.4f}")
+        print(f"    Output: mean={x_projected[f].mean():.4f}, std={x_projected[f].std():.4f}")
+        print(f"    Dimension: {n_x_c} → {n_p[f]} (expansion={n_p[f]/n_x_c:.1f}x)")
+
+    print("\n" + "=" * 80)
+    print("TEM Pipeline: x → x_c (Encoder) → x_f (Processor) → x̃ (Projection) → p (HPC)")
+    print("=" * 80)

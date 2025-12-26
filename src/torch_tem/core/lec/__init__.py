@@ -45,7 +45,7 @@ class LECContext(Protocol):
 class LECState:
     """State container for LEC pathway.
 
-    Attributes
+    Attributes:
         compressed_observation: Two-hot compressed sensory representation.
         filtered_observation: Temporally filtered sensory representation.
         projection: Projected sensory to hippocampal input space.
@@ -153,4 +153,4 @@ class LECModel(nn.Module):
         return self.decoder(p)
 
 
-__all__ = ["LECConfig", "LECContext", "LECState", "LECModel"]
+__all__ = ["LECConfig", "LECState", "LECModel", "EncoderConfig", "DecoderConfig", "ProcessorConfig", "ProjectionConfig"]

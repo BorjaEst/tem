@@ -24,26 +24,23 @@ Architecture:
     Note: Normalization (f_n) is applied later in the Projection module.
 """
 
-from typing import List, Protocol
+from typing import List
 
 import torch
 import torch.nn as nn
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
 from torch_tem.types import MultiScaleCode
 
 
-class ProcessorParams(Protocol):
-    """Protocol defining required parameters for Processor initialization.
+class ProcessorConfig(BaseModel):
+    """Processor configuration parameters."""
 
-    Attributes:
-        n_f: Number of frequency channels (temporal filtering scales)
-        f_extended: Initial frequency values for each channel [0, 1]
-                   Higher values = higher spatial/temporal frequency = less smoothing
-    """
+    model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
 
-    n_f: int
-    f_extended: List[float]
+    # Learnable parameters initialization
+    learn_alpha: bool = Field(default=True, description="If True, alpha decay rates require gradients; if False, frozen")
 
 
 class Processor(nn.Module):
@@ -57,39 +54,49 @@ class Processor(nn.Module):
     The filtering operation for each frequency f is:
         x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
-    Normalization is applied later in the Projection module via f_n().
+    Normalization is applied later in the Projection module.
 
     Args:
-        params: Configuration object implementing ProcessorParams protocol.
-                Must provide n_f and f_extended.
-
-    Attributes:
-        n_f: Number of frequency channels
-        f_tensor: Base frequency values (used to initialize alpha parameters)
-        alpha_logit: Learnable decay rates in logit space for each frequency
-
-    Example:
-        >>> from torch_tem.config import ModelConfig
-        >>> config = ModelConfig(n_x_c=8, f_initial=[0.9, 0.5, 0.2])
-        >>> processor = Processor(config)
-        >>> x_c = torch.randn(4, 8)  # Compressed sensory [B, n_x_c]
-        >>> x_prev = [torch.zeros(4, 8) for _ in range(3)]  # Previous state
-        >>> x_f = processor(x_c, x_prev)  # List[3] of [4, 8]
-        >>> len(x_f)
-        3
-        >>> x_f[0].shape
-        torch.Size([4, 8])
+        f_initial: Initial frequency values for alpha initialization
+        config: Processor configuration parameters
     """
 
-    def __init__(self, params: ProcessorParams):
+    def __init__(self, f_initial: List[float], config: ProcessorConfig):
+        """Initialize processor with learnable temporal filtering.
+
+        Args:
+            f_initial: Initial frequency values for each channel
+            config: Processor configuration (learning control)
+        """
         super().__init__()
-        self.n_f = params.n_f
+        self._config = config
 
         # Initialize learnable decay rates from base frequencies
         # Use logit space to ensure alpha stays in (0, 1) after sigmoid
-        self.f_tensor = torch.tensor(params.f_extended, dtype=torch.float)
-        logits = torch.logit(self.f_tensor)
-        self.alpha_logit = nn.ParameterList([nn.Parameter(logits[i : i + 1]) for i in range(self.n_f)])
+        alpha_init = torch.tensor(f_initial, dtype=torch.float)
+        alpha_logit = torch.logit(alpha_init)
+
+        # Create learnable parameters for each frequency
+        # Always create as parameters, control learning via requires_grad
+        p = [nn.Parameter(alpha_logit[i : i + 1], requires_grad=config.learn_alpha) for i in range(self.n_f)]
+        self._alpha_logit = nn.ParameterList(p)
+
+    @property
+    def n_f(self) -> int:
+        """Number of frequency channels."""
+        return len(self._alpha_logit)
+
+    def set_alpha_learning(self, learn: bool) -> None:
+        """Set learning state and synchronize immediately.
+
+        Convenience method that combines config mutation and sync.
+
+        Args:
+            learn: If True, enable gradients; if False, freeze parameters
+        """
+        self._config.learn_alpha = learn
+        for param in self._alpha_logit:
+            param.requires_grad_(learn)
 
     def filter_temporal(self, x_c: Tensor, x_prev: MultiScaleCode) -> MultiScaleCode:
         """Apply exponential smoothing at each frequency channel.
@@ -106,8 +113,8 @@ class Processor(nn.Module):
         Returns:
             Filtered sensory (before normalization) List[n_f] of [B, n_x_c]
         """
-        alpha = [torch.sigmoid(self.alpha_logit[f]) for f in range(self.n_f)]
-        return [alpha[f] * x_c + (1 - alpha[f]) * x_prev[f] for f in range(self.n_f)]
+        alpha = [torch.sigmoid(alpha_f) for alpha_f in self._alpha_logit]
+        return [alpha_f * x_c + (1 - alpha_f) * x_prev[f] for f, alpha_f in enumerate(alpha)]
 
     def forward(self, x_c: Tensor, x_prev: MultiScaleCode) -> MultiScaleCode:
         """Process compressed sensory through temporal filtering.
@@ -124,3 +131,6 @@ class Processor(nn.Module):
             (Normalization applied later in Projection module)
         """
         return self.filter_temporal(x_c, x_prev)
+
+
+__all__ = ["Processor", "ProcessorConfig"]

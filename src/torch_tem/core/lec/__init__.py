@@ -1,34 +1,51 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Protocol
 
 import torch
-from torch import Tensor, nn
+from pydantic import BaseModel, ConfigDict, Field
+from torch import nn
 
-from torch_tem import utils
-from torch_tem.types import MultiScaleCode, Observation, SensoryPrediction
+from torch_tem.core.lec.decoder import Decoder, DecoderConfig
+from torch_tem.core.lec.encoder import Encoder, EncoderConfig
+from torch_tem.core.lec.processor import Processor, ProcessorConfig
+from torch_tem.core.lec.projection import Projection, ProjectionConfig
+from torch_tem.types import Matrix, MultiScaleCode, Observation, SensoryPrediction
 
-from . import decoder, encoder, processor, projection
+
+class LECConfig(BaseModel):
+    """LEC model configuration parameters."""
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    # Learning tiling matrices
+    learn_W_tile: bool = Field(default=False, description="If True, tiling matrices W_tile are learnable")
+
+    # Submodule configurations
+    encoder: EncoderConfig = Field(default_factory=EncoderConfig, description="Encoder configuration")
+    decoder: DecoderConfig = Field(default_factory=DecoderConfig, description="Decoder configuration")
+    processor: ProcessorConfig = Field(default_factory=ProcessorConfig, description="Processor configuration")
+    projection: ProjectionConfig = Field(default_factory=ProjectionConfig, description="Projection configuration")
 
 
-class LECParams(encoder.EncoderParams, decoder.DecoderParams, processor.ProcessorParams, projection.ProjectionParams):
+class LECContext(Protocol):
     """Protocol for LEC model initialization parameters.
 
-    Combines parameters from all LEC submodules (encoder, decoder, processor, projection).
-
     Attributes:
-        batch_size: Batch size for state initialization.
-        n_g_subsampled_combined: Grid cell dimensions for W_tile creation.
+        n_x: Number of sensory observation neurons
+        f_initial: Initial frequency values for temporal filtering
+        W_tile: Tiling matrices for projection, one per frequency module
     """
 
-    batch_size: int
-    n_g_subsampled_combined: List[int]
+    n_x: int
+    f_initial: List[float]
+    W_tile: List[Matrix]
 
 
 @dataclass(frozen=True)
 class LECState:
     """State container for LEC pathway.
 
-    Attributes:
+    Attributes
         compressed_observation: Two-hot compressed sensory representation.
         filtered_observation: Temporally filtered sensory representation.
         projection: Projected sensory to hippocampal input space.
@@ -57,50 +74,48 @@ class LECModel(nn.Module):
     - Decoding: p → x (place cells to sensory predictions)
     """
 
-    def __init__(self, params: LECParams):
-        """Initialize LEC model.
+    def __init__(self, context: LECContext, config: LECConfig):
+        """Initialize LEC model."""
+        super().__init__()
+        self._config = config
+
+        # Register W_tile matrices as parameters or buffers based on config
+        p = [nn.Parameter(matrix, requires_grad=config.learn_W_tile) for matrix in context.W_tile]
+        self._W_tile = nn.ParameterList(p)
+
+        self.decoder = Decoder(context.n_x, self.W_tile, config.decoder)
+        self.encoder = Encoder(context.n_x, self.decoder.n_x_c, config.encoder)
+        self.processor = Processor(context.f_initial, config.processor)
+        self.projection = Projection(self.W_tile, config.projection)
+
+    @property
+    def W_tile(self) -> nn.ParameterList:
+        """LEC tiling matrices as ParameterList."""
+        return self._W_tile
+
+    def set_tile_learning(self, learn: bool):
+        """Set learning state for W_tile matrices.
 
         Args:
-            params: Configuration with n_x, n_x_c, n_f, and all submodule parameters.
+            learn: If True, enable gradients; if False, freeze parameters
         """
-        super().__init__()
+        self._config.learn_W_tile = learn
+        for param in self.W_tile:
+            param.requires_grad_(learn)
 
-        # Initialize components
-        self.encoder = encoder.Encoder(params)  # Sensory encoder module: x → x_c
-        self.decoder = decoder.Decoder(params)  # Observation decoder module: p → x
-        self.processor = processor.Processor(params)  # Sensory processor module: x
-        self.projection = projection.Projection(params)  # Tiling module for location inference
-        self.batch_size = params.batch_size
-
-        # Register W_tile matrices as buffers for centralized device management
-        # This ensures W_tile moves with the model when calling .to(device)
-        W_tile = utils.create_W_tile(params.n_g_subsampled_combined, self.projection.n_x_f)
-        for i, matrix in enumerate(W_tile):
-            self.register_buffer(f"W_tile_{i}", matrix)
-
-    @property
-    def n_x_c(self) -> List[int]:
-        """Number of compressed sensory neurons per frequency."""
-        return self.encoder.n_x_c
-
-    @property
-    def n_f(self) -> int:
-        """Number of frequency modules."""
-        return self.processor.n_f
-
-    def init_state(self, device: torch.device) -> LECState:
+    def init_state(self, batch_size: int, device: torch.device) -> LECState:
         """Initialize LEC state with zeros.
 
         Args:
+            batch_size: Batch size for tensor allocation
             device: Device for tensor allocation
 
         Returns:
             Initial LECState with zero-initialized compressed, filtered, and projected observations
         """
-        n_x_c_val = self.n_x_c[0] if isinstance(self.n_x_c, list) else self.n_x_c
-        x_c = [torch.zeros((self.batch_size, n_x_c_val), dtype=torch.float, device=device) for f in range(self.n_f)]
-        x_f = [torch.zeros((self.batch_size, n_x_c_val), dtype=torch.float, device=device) for f in range(self.n_f)]
-        x_ = [torch.zeros((self.batch_size, self.projection.n_p[f]), dtype=torch.float, device=device) for f in range(self.n_f)]
+        x_c = [torch.zeros((batch_size, self.encoder.n_x_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
+        x_f = [torch.zeros((batch_size, self.encoder.n_x_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
+        x_ = [torch.zeros((batch_size, self.projection.n_p[f]), dtype=torch.float, device=device) for f in range(self.processor.n_f)]
         return LECState(compressed_observation=x_c, filtered_observation=x_f, projection=x_)
 
     def forward(self, x: Observation, state: LECState) -> LECState:
@@ -115,7 +130,7 @@ class LECModel(nn.Module):
         """
         x_c = self.encoder(x)  # Compress sensory observation: x → x_c (one-hot to two-hot)
         x_f = self.processor(x_c, state.filtered_observation)  # Temporally filter sensorium: x_c → x_f
-        x_ = self.projection(x_f, self.get_W_tile())  # Project to hippocampal input: x_f → x_
+        x_ = self.projection(x_f)  # Project to hippocampal input: x_f → x_
         return LECState(compressed_observation=x_c, filtered_observation=x_f, projection=x_)
 
     def decode(self, p: MultiScaleCode) -> SensoryPrediction:
@@ -127,26 +142,7 @@ class LECModel(nn.Module):
         Returns:
             Sensory prediction with observation probabilities and logits.
         """
-        return self.decoder(p, self.get_tile_matrix(0))
-
-    def get_W_tile(self) -> List[Tensor]:
-        """Get all W_tile matrices as a list.
-
-        Returns:
-            List of W_tile matrices, one per frequency module.
-        """
-        return [getattr(self, f"W_tile_{f}") for f in range(self.n_f)]
-
-    def get_tile_matrix(self, f: int) -> Tensor:
-        """Get W_tile matrix for a specific frequency module.
-
-        Args:
-            f: Frequency module index (0 to n_f-1)
-
-        Returns:
-            W_tile matrix for frequency f
-        """
-        return getattr(self, f"W_tile_{f}")
+        return self.decoder(p)
 
 
-__all__ = ["LECParams", "LECState", "LECModel"]
+__all__ = ["LECConfig", "LECContext", "LECState", "LECModel"]

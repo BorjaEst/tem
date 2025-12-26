@@ -16,34 +16,21 @@ Architecture:
     Output: Two-hot compressed sensory [B, n_x_c]
 """
 
-from typing import List, Protocol, Union
-
 import torch
 import torch.nn as nn
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
+from torch_tem import utils
 from torch_tem.types import Observation
 
 
-class EncoderParams(Protocol):
-    """Protocol defining required parameters for Encoder initialization.
+class EncoderConfig(BaseModel):
+    """Encoder configuration parameters."""
 
-    Attributes:
-        two_hot_table: Lookup table mapping observation indices to two-hot codes
-        n_x_c: Number of compressed sensory neurons (int or List[int])
-    """
+    model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
 
-    n_x_c: Union[int, List[int]]
-
-    @property
-    def two_hot_table(self) -> List[Tensor]:
-        """Two-hot encoding lookup table.
-
-        Returns:
-            List of n_x tensors, each of shape [n_x_c], representing the
-            two-hot code for each possible observation index.
-        """
-        ...
+    n_hot: int = Field(default=2, ge=2, frozen=True, description="Number of active units in two-hot encoding (fixed at 2)")
 
 
 class Encoder(nn.Module):
@@ -54,32 +41,40 @@ class Encoder(nn.Module):
     per observation, providing a sparse distributed code that facilitates
     efficient learning and generalization.
 
-    The lookup table is pre-computed using a systematic enumeration of all
-    possible 2-hot codes (combinations of 2 active units from n_x_c dimensions).
+    The lookup table is deterministically generated using a systematic
+    enumeration of all possible 2-hot codes (combinations of 2 active units
+    from n_x_c dimensions).
 
     Args:
-        params: Configuration object implementing EncoderParams protocol.
-                Must provide n_x, n_x_c, and two_hot_table property.
-
-    Attributes:
-        two_hot_table: Registered buffer of shape [n_x, n_x_c] containing
-                      the pre-computed two-hot codes for each observation.
-
-    Example:
-        >>> from torch_tem.config import ModelConfig
-        >>> config = ModelConfig(n_x=25, n_x_c=8)
-        >>> encoder = Encoder(config)
-        >>> x = torch.zeros(4, 25)  # Batch of 4 one-hot observations
-        >>> x[0, 5] = 1.0  # Observation index 5
-        >>> x_c = encoder(x)  # [4, 8] two-hot compressed
-        >>> (x_c[0].sum() == 2.0)  # Exactly 2 active units
-        True
+        n_x: Number of sensory observation neurons
+        n_x_c: Compressed sensory dimension
+        config: Encoder configuration parameters
     """
 
-    def __init__(self, params: EncoderParams):
+    def __init__(self, n_x: int, n_x_c: int, config: EncoderConfig):
+        """Initialize encoder with two-hot lookup table.
+
+        Args:
+            n_x: Number of sensory observation neurons
+            n_x_c: Compressed sensory dimension
+            config: Encoder configuration (n_hot parameter)
+        """
         super().__init__()
-        self.n_x_c = params.n_x_c if isinstance(params.n_x_c, list) else [params.n_x_c]
-        self.register_buffer("two_hot_table", torch.stack(params.two_hot_table))
+        self._config = config
+
+        # Pre-compute two-hot encoding lookup table
+        encoding_table = utils.create_encoding_table(n_x, n_x_c, config.n_hot)
+        self.register_buffer("encoding_table", torch.stack(encoding_table))
+
+    @property
+    def n_x(self) -> int:
+        """Number of sensory observation neurons x."""
+        return self.encoding_table.size(0)
+
+    @property
+    def n_x_c(self) -> int:
+        """Number of compressed sensory neurons x_c."""
+        return self.encoding_table.size(1)
 
     def forward(self, x: Observation) -> Tensor:
         """Encode one-hot observations to two-hot compressed representation.
@@ -93,4 +88,7 @@ class Encoder(nn.Module):
             two elements per batch item are 1.0 and all others are 0.0.
         """
         indices = torch.argmax(x, dim=1)  # Extract active observation index [B]
-        return self.two_hot_table[indices]  # Batch lookup [B, n_x_c]
+        return self.encoding_table[indices]  # Batch lookup [B, n_x_c]
+
+
+__all__ = ["Encoder", "EncoderConfig"]

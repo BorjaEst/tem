@@ -1,5 +1,6 @@
 """Matrix generation utilities for torch_tem package."""
 
+from itertools import combinations
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
@@ -155,11 +156,74 @@ def create_W_random_projection(n_g: List[int], n_p: List[int], sparsity: float =
     return matrices
 
 
-def create_two_hot_table(n_x: int, n_x_c: int) -> List[Vector]:
-    """Create two-hot encoding lookup table.
+def create_encoding_table(n_x: int, n_x_c: int, n_hot: int = 2) -> List[Vector]:
+    """Create n-hot encoding lookup table.
 
-    Table for converting one-hot to two-hot compressed representation.
-    Generates all possible 2-hot codes up to the number of observations.
+    Generates a lookup table for converting one-hot observations to n-hot
+    compressed representations. Each observation is encoded using exactly
+    `n_hot` active units from `n_x_c` dimensions.
+
+    Args:
+        n_x: Number of possible observations (must be <= C(n_x_c, n_hot))
+        n_x_c: Compressed sensory dimension
+        n_hot: Number of active units per code (1, 2, 3, etc.)
+            - n_hot=1: One-hot (identity, no compression unless n_x > n_x_c)
+            - n_hot=2: Two-hot (default, typically 45 → 10)
+            - n_hot=3: Three-hot (more distributed, e.g., 220 → 12)
+
+    Returns:
+        List of n-hot code tensors, one per possible observation [n_x, n_x_c]
+
+    Raises:
+        ValueError: If n_x > C(n_x_c, n_hot) (too many observations for compression)
+
+    Example:
+        >>> # Two-hot encoding: 45 observations → 10 dimensions
+        >>> table = create_encoding_table(n_x=45, n_x_c=10, n_hot=2)
+        >>> len(table)
+        45
+        >>> table[0].sum()
+        2.0
+
+        >>> # Three-hot encoding: 220 observations → 12 dimensions
+        >>> table = create_encoding_table(n_x=220, n_x_c=12, n_hot=3)
+        >>> len(table)
+        220
+        >>> table[0].sum()
+        3.0
+    """
+
+    # Validate: number of observations must not exceed possible n-hot codes
+    max_codes = int(comb(n_x_c, n_hot))
+    if n_x > max_codes:
+        raise ValueError(f"Cannot encode {n_x} observations with {n_hot}-hot codes in {n_x_c} dimensions. " f"Maximum possible codes: C({n_x_c}, {n_hot}) = {max_codes}")
+
+    # Generate all possible n-hot codes using combinations
+    # combinations(range(n_x_c), n_hot) gives all ways to choose n_hot positions
+    encoding_table = []
+    for active_positions in combinations(range(n_x_c), n_hot):
+        # Create zero vector
+        code = [0] * n_x_c
+        # Activate n_hot positions
+        for pos in active_positions:
+            code[pos] = 1
+        # Add to table
+        encoding_table.append(torch.tensor(code, dtype=torch.float))
+
+        # Stop when we have enough codes for all observations
+        if len(encoding_table) >= n_x:
+            break
+
+    return encoding_table
+
+
+def create_two_hot_table(n_x: int, n_x_c: int) -> List[Vector]:
+    """Create two-hot encoding lookup table (backward compatibility wrapper).
+
+    DEPRECATED: Use create_encoding_table(n_x, n_x_c, n_hot=2) instead.
+
+    This function is maintained for backward compatibility. New code should use
+    the more general create_encoding_table() function.
 
     Args:
         n_x: Number of possible observations
@@ -168,32 +232,7 @@ def create_two_hot_table(n_x: int, n_x_c: int) -> List[Vector]:
     Returns:
         List of two-hot code tensors, one per possible observation
     """
-    # Start with first code: [0, 0, ..., 0, 1, 1]
-    two_hot_table = [[0] * (n_x_c - 2) + [1] * 2]
-
-    # Generate remaining codes up to min(C(n_x_c, 2), n_x)
-    max_codes = min(int(comb(n_x_c, 2)), n_x)
-
-    for i in range(1, max_codes):
-        # Copy previous code
-        code = two_hot_table[-1].copy()
-
-        # Find latest occurrence of [0, 1] in that code
-        swap = [index for index in range(len(code) - 1, -1, -1) if code[index : index + 2] == [0, 1]][0]
-
-        # Swap those to get new code
-        code[swap : swap + 2] = [1, 0]
-
-        # If the first one was swapped: value after swapped pair is 1
-        if swap + 2 < len(code) and code[swap + 2] == 1:
-            # Move the second 1 all the way back - reverse everything after the swapped pair
-            code[swap + 2 :] = code[: swap + 1 : -1]
-
-        # Append new code to array
-        two_hot_table.append(code)
-
-    # Convert each code to column vector pytorch tensor
-    return [torch.tensor(code, dtype=torch.float) for code in two_hot_table]
+    return create_encoding_table(n_x, n_x_c, n_hot=2)
 
 
 def split_to_frequencies(p_flat: Vector, n_p: List[int]) -> GroundedLocation:

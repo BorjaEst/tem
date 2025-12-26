@@ -9,62 +9,127 @@ The Decoder performs p→x decoding using learned sensory processing
 parameters (w_x, b_x) and tiling matrices (W_tile).
 """
 
-from typing import List, Protocol, Tuple, Union
+from typing import List, Protocol
 
 import torch
 import torch.nn as nn
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
+from torch_tem import utils
 from torch_tem.core.mlp import MLP
-from torch_tem.types import GroundedLocation, Observation, SensoryPrediction
+from torch_tem.types import Matrix, MultiScaleCode, SensoryPrediction
 
 
-class DecoderParams(Protocol):
-    """Protocol defining required parameters for Decoder initialization.
+class DecoderConfig(BaseModel):
+    """Decoder configuration parameters."""
 
-    Attributes:
-        n_x: Number of sensory observation neurons (output dimension)
-        n_x_c: Number of compressed sensory neurons (int or List[int])
-    """
+    model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
 
-    n_x: int
-    n_x_c: Union[int, List[int]]
+    hidden_multiplier: int = Field(default=20, ge=1, frozen=True, description="Hidden dim = hidden_multiplier * n_x_c")
+    activation: str = Field(default="elu", frozen=True, description="Activation function name")
+    use_bias: bool = Field(default=True, frozen=True, description="Use bias in MLP layers")
+
+
+class DecoderContext(Protocol):
+    """Protocol defining required parameters for Decoder initialization."""
+
+    n_x: int  # Number of sensory observation neurons x
+    W_tile: List[Matrix]  # Tiling matrices for each frequency
 
 
 class Decoder(nn.Module):
     """Decodes grounded location (place cells) to sensory predictions.
 
-    W_tile matrices are managed by the parent LECModel and passed to forward()
-    to ensure consistency and proper device management.
+    Implements the generative pathway: p → x̂
+
+    The decoder performs:
+    1. Untiling: Project place cells to compressed sensory (p → x_c)
+    2. Scaling: Apply learned weights and biases (w_x, b_x)
+    3. Decoding: MLP expansion to full observation space (x_c → x̂)
 
     Args:
-        params: Configuration with n_x, n_x_c
+        n_x: Number of sensory observation neurons
+        W_tile: Tiling matrices shared from parent LECModel
+        config: Decoder configuration parameters
     """
 
-    def __init__(self, params: DecoderParams):
-        super().__init__()
-        # Extract n_x_c - use first element if it's a list
-        n_x_c = params.n_x_c[0] if isinstance(params.n_x_c, list) else params.n_x_c
-        self.n_x_c = n_x_c
-        self.w_x = nn.Parameter(torch.ones(1, n_x_c))
-        self.b_x = nn.Parameter(torch.zeros(1, n_x_c))
-
-        activation: Tuple = (torch.nn.functional.elu, None)
-        hidden_dim = 20 * n_x_c
-        self.mlp_decoder = MLP(n_x_c, params.n_x, activation, hidden_dim, bias=(True, True))
-
-    def forward(self, p: List[Tensor], W_tile_0: Tensor) -> SensoryPrediction:
-        """Decode place cells to sensory prediction.
+    def __init__(self, n_x: int, W_tile: List[Matrix], config: DecoderConfig):
+        """Initialize Decoder module.
 
         Args:
-            p: Grounded location (place cells) as List[n_f] of (batch, n_p[f])
-            W_tile_0: Tiling matrix for frequency 0 with shape (n_x_c, n_p[0])
+            n_x: Number of sensory observation neurons
+            W_tile: Tiling matrices for projection (managed by parent LECModel)
+            config: Decoder configuration parameters
+        """
+        super().__init__()
+        self._config = config
+        self._W_tile = W_tile
+
+        # Learnable sensory decoding parameters
+        self._w_x = nn.Parameter(torch.ones(1, self.n_x_c))
+        self._b_x = nn.Parameter(torch.zeros(1, self.n_x_c))
+
+        # MLP decoder from compressed sensory to full observation
+        activation = utils.get_activation_function(config.activation.lower())
+        hidden_dim = config.hidden_multiplier * self.n_x_c  # Hidden layer size
+        bias = (True, True) if config.use_bias else (False, False)
+        self._mlp_decoder = MLP(self.n_x_c, n_x, activation, hidden_dim, bias)
+
+    @property
+    def n_x(self) -> int:
+        """Number of sensory observation neurons x."""
+        return self._mlp_decoder.n_out
+
+    @property
+    def n_x_c(self) -> int:
+        """Number of compressed sensory neurons x_c."""
+        return self._W_tile[0].size(0)
+
+    def untiling(self, p: MultiScaleCode) -> Tensor:
+        """Untile grounded locations to compressed sensory space.
+
+        Projects place cell activations back to compressed sensory representation
+        by inverting the tiling operation: x_c = p @ W_tile^T
+
+        Args:
+            p: Grounded locations (place cells) List[n_f] of (batch, n_p[f])
 
         Returns:
-            SensoryPrediction with observation probabilities and logits
+            Compressed sensory representation (batch, n_x_c)
+
+        Note:
+            We only untile the highest frequency for decoding, as it contains
+            the most detailed sensory information to reduce computation costs.
         """
-        x_proj = torch.matmul(p[0], W_tile_0.t())
-        x = self.w_x * x_proj + self.b_x
-        x_logits = self.mlp_decoder(x)
+        return torch.matmul(p[0], self._W_tile[0].t())
+
+    def decode(self, x: Tensor) -> SensoryPrediction:
+        """Decode compressed sensory to full observation predictions.
+
+        Args:
+            x: Compressed sensory representation (batch, n_x_c)
+
+        Returns:
+            Sensory prediction with observation probabilities and logits
+        """
+        x_logits = self._mlp_decoder(x)
         x_probs = torch.nn.functional.softmax(x_logits, dim=-1)
         return SensoryPrediction(values=[x_probs], logits=[x_logits])
+
+    def forward(self, p: MultiScaleCode) -> SensoryPrediction:
+        """Decode grounded locations to sensory predictions.
+
+        Complete generative pathway: p → x_c → x̂
+
+        Args:
+            p: Grounded locations (place cells) List[n_f] of (batch, n_p[f])
+
+        Returns:
+            Sensory prediction with observation probabilities and logits
+        """
+        x_proj = self.untiling(p)
+        return self.decode(self._w_x * x_proj + self._b_x)
+
+
+__all__ = ["Decoder", "DecoderConfig"]

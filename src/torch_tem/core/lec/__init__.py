@@ -56,7 +56,11 @@ class LECState:
     projection: MultiScaleCode
 
     def detach(self) -> "LECState":
-        """Detach all tensors in the state from the computation graph."""
+        """Detach all tensors in the state from the computation graph.
+
+        Returns:
+            New LECState with all tensors detached from gradients.
+        """
         return LECState(
             compressed_observation=[x.detach() for x in self.compressed_observation],
             filtered_observation=[x.detach() for x in self.filtered_observation],
@@ -90,7 +94,11 @@ class LECModel(nn.Module):
 
     @property
     def W_tile(self) -> nn.ParameterList:
-        """LEC tiling matrices as ParameterList."""
+        """Tiling matrices for projection and decoder.
+
+        Returns:
+            Parameter list of tiling matrices, one per frequency module.
+        """
         return self._W_tile
 
     def set_tile_learning(self, learn: bool):

@@ -34,21 +34,21 @@ class EncoderConfig(BaseModel):
 
 
 class Encoder(nn.Module):
-    """LEC Sensory Encoder using two-hot compression.
+    """LEC Sensory Encoder using n-hot compression.
 
     Compresses high-dimensional one-hot observations into a lower-dimensional
-    two-hot representation. The two-hot encoding uses exactly 2 active units
-    per observation, providing a sparse distributed code that facilitates
-    efficient learning and generalization.
+    n-hot representation. The n-hot encoding uses exactly n active units
+    per observation (default n=2), providing a sparse distributed code that
+    facilitates efficient learning and generalization.
 
     The lookup table is deterministically generated using a systematic
-    enumeration of all possible 2-hot codes (combinations of 2 active units
+    enumeration of all possible n-hot codes (combinations of n active units
     from n_x_c dimensions).
 
     Args:
         n_x: Number of sensory observation neurons
         n_x_c: Compressed sensory dimension
-        config: Encoder configuration parameters
+        config: Encoder configuration parameters (n_hot strategy)
     """
 
     def __init__(self, n_x: int, n_x_c: int, config: EncoderConfig):
@@ -77,15 +77,15 @@ class Encoder(nn.Module):
         return self.encoding_table.size(1)
 
     def forward(self, x: Observation) -> Tensor:
-        """Encode one-hot observations to two-hot compressed representation.
+        """Encode one-hot observations to n-hot compressed representation.
 
         Args:
             x: One-hot encoded observations of shape [B, n_x], where exactly
                one element per batch item is 1.0 and all others are 0.0.
 
         Returns:
-            Two-hot compressed sensory of shape [B, n_x_c], where exactly
-            two elements per batch item are 1.0 and all others are 0.0.
+            N-hot compressed sensory of shape [B, n_x_c], where exactly
+            n_hot elements per batch item are 1.0 and all others are 0.0.
         """
         indices = torch.argmax(x, dim=1)  # Extract active observation index [B]
         return self.encoding_table[indices]  # Batch lookup [B, n_x_c]

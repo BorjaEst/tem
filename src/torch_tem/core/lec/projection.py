@@ -113,6 +113,9 @@ class Projection(nn.Module):
         learned tiling matrices W_tile, then applies frequency-specific weights
         to modulate each frequency's contribution to hippocampal representations.
 
+        Mathematical operation:
+            x̃[f] = sigmoid(w_p[f]) * (x_f[f] @ W_tile[f])
+
         Args:
             x_f: Normalized filtered sensory List[n_f] of (batch, n_x_c)
 

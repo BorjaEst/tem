@@ -78,7 +78,7 @@ class Processor(nn.Module):
 
         # Create learnable parameters for each frequency
         # Always create as parameters, control learning via requires_grad
-        p = [nn.Parameter(alpha_logit[i : i + 1], requires_grad=config.learn_alpha) for i in range(self.n_f)]
+        p = [nn.Parameter(alpha_logit[i : i + 1], requires_grad=config.learn_alpha) for i in range(len(f_initial))]
         self._alpha_logit = nn.ParameterList(p)
 
     @property

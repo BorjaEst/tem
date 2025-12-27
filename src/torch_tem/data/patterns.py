@@ -26,7 +26,7 @@ class PatternGeneratorParams(Protocol):
 
     n_g: List[int]
     n_p: List[int]
-    n_x_c: int
+    n_o_c: int
 
 
 class PlaceCellPatternGenerator:
@@ -431,7 +431,7 @@ if __name__ == "__main__":
     class ExampleConfig(BaseModel):
         n_g: List[int] = [30, 25, 20]
         n_p: List[int] = [240, 200, 160]
-        n_x_c: int = 8
+        n_o_c: int = 8
 
     print("=" * 80)
     print("Pattern Generation Example")

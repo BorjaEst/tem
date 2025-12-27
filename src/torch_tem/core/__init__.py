@@ -2,7 +2,7 @@
 
 from torch_tem.core.hpc import HPCConfig, HPCModel, HPCState
 from torch_tem.core.lec import LECConfig, LECModel, LECState
-from torch_tem.core.mec import MECModel, MECParams, MECState
+from torch_tem.core.mec import MECConfig, MECModel, MECState
 from torch_tem.core.mlp import MLP
 from torch_tem.core.model import TEMModel, TEMState
 
@@ -17,6 +17,6 @@ __all__ = [
     "LECConfig",
     "LECState",
     "MECModel",
-    "MECParams",
+    "MECConfig",
     "MECState",
 ]

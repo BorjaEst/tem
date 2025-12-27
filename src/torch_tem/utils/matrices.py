@@ -52,7 +52,7 @@ def squared_error_freq(value: Union[Vector, MultiScaleCode], target: Union[Vecto
     return torch.sum((value - target) ** 2, dim=1) * 0.5
 
 
-def create_repeat_matrices(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]:
+def create_repeat_matrices(n_g_subsampled: List[int], n_x: List[int]) -> List[Matrix]:
     """Create repeat matrices for outer product computation.
 
     Matrix for repeating abstract location g to do outer product with sensory
@@ -60,28 +60,40 @@ def create_repeat_matrices(n_g_subsampled: List[int], n_x_f: List[int]) -> List[
 
     Args:
         n_g_subsampled: Subsampled abstract location dimensions per frequency
-        n_x_f: Sensory dimensions per frequency
+        n_x: Sensory dimensions per frequency
 
     Returns:
         List of repeat matrices, one per frequency module
     """
-    return [torch.tensor(np.kron(np.eye(g), np.ones((1, x))), dtype=torch.float) for g, x in zip(n_g_subsampled, n_x_f)]
+    return [torch.tensor(np.kron(np.eye(g), np.ones((1, x))), dtype=torch.float) for g, x in zip(n_g_subsampled, n_x)]
 
 
-def create_tiling_matrices(n_g_subsampled: List[int], n_x_f: List[int]) -> List[Matrix]:
-    """Create tile matrices for outer product computation.
+def create_tiling_matrices(n_p: List[int], n_o_c: int) -> List[Matrix]:
+    """Create tile matrices for LEC sensory projection to hippocampal space.
 
-    Matrix for tiling sensory observation x to do outer product with abstract
-    location using elementwise product after matrix multiplication.
+    Creates Kronecker product matrices that tile compressed sensory (x_c) to
+    hippocampal place cell dimensions (n_p).
+
+    Architectural constraint: n_p[f] must equal n_g_subsampled[f] * n_o_c to
+    enable element-wise product p = g_ ⊙ x̃ in the hippocampus.
 
     Args:
-        n_g_subsampled: Subsampled abstract location dimensions per frequency
-        n_x_f: Sensory dimensions per frequency
+        n_p: Place cell dimensions per frequency (output size).
+        n_o_c: Compressed sensory dimension (input size).
 
     Returns:
-        List of tile matrices, one per frequency module
+        List of tile matrices [n_o_c, n_p[f]], one per frequency module.
+
+    Raises:
+        ValueError: If n_p[f] is not divisible by n_o_c.
     """
-    return [torch.tensor(np.kron(np.ones((1, g)), np.eye(x)), dtype=torch.float) for g, x in zip(n_g_subsampled, n_x_f)]
+    # Validate divisibility
+    if any(p % n_o_c != 0 for p in n_p):
+        raise ValueError(f"n_p must be divisible by n_o_c. Got n_p={n_p}, n_o_c={n_o_c}")
+
+    # Infer tiling factor from output dimension and input dimension
+    n_tiles = [p // n_o_c for p in n_p]
+    return [torch.tensor(np.kron(np.ones((1, n_tile)), np.eye(n_o_c)), dtype=torch.float) for n_tile in n_tiles]
 
 
 def create_g_downsample(n_g: List[int], n_g_subsampled: List[int]) -> List[Matrix]:
@@ -156,37 +168,37 @@ def create_W_random_projection(n_g: List[int], n_p: List[int], sparsity: float =
     return matrices
 
 
-def create_encoding_table(n_x: int, n_x_c: int, n_hot: int = 2) -> List[Vector]:
+def create_encoding_table(n_o: int, n_o_c: int, n_hot: int = 2) -> List[Vector]:
     """Create n-hot encoding lookup table.
 
     Generates a lookup table for converting one-hot observations to n-hot
     compressed representations. Each observation is encoded using exactly
-    `n_hot` active units from `n_x_c` dimensions.
+    `n_hot` active units from `n_o_c` dimensions.
 
     Args:
-        n_x: Number of possible observations (must be <= C(n_x_c, n_hot))
-        n_x_c: Compressed sensory dimension
+        n_o: Number of possible observations (must be <= C(n_o_c, n_hot))
+        n_o_c: Compressed sensory dimension
         n_hot: Number of active units per code (1, 2, 3, etc.)
-            - n_hot=1: One-hot (identity, no compression unless n_x > n_x_c)
+            - n_hot=1: One-hot (identity, no compression unless n_o > n_o_c)
             - n_hot=2: Two-hot (default, typically 45 → 10)
             - n_hot=3: Three-hot (more distributed, e.g., 220 → 12)
 
     Returns:
-        List of n-hot code tensors, one per possible observation [n_x, n_x_c]
+        List of n-hot code tensors, one per possible observation [n_o, n_o_c]
 
     Raises:
-        ValueError: If n_x > C(n_x_c, n_hot) (too many observations for compression)
+        ValueError: If n_o > C(n_o_c, n_hot) (too many observations for compression)
 
     Example:
         >>> # Two-hot encoding: 45 observations → 10 dimensions
-        >>> table = create_encoding_table(n_x=45, n_x_c=10, n_hot=2)
+        >>> table = create_encoding_table(n_o=45, n_o_c=10, n_hot=2)
         >>> len(table)
         45
         >>> table[0].sum()
         2.0
 
         >>> # Three-hot encoding: 220 observations → 12 dimensions
-        >>> table = create_encoding_table(n_x=220, n_x_c=12, n_hot=3)
+        >>> table = create_encoding_table(n_o=220, n_o_c=12, n_hot=3)
         >>> len(table)
         220
         >>> table[0].sum()
@@ -194,16 +206,16 @@ def create_encoding_table(n_x: int, n_x_c: int, n_hot: int = 2) -> List[Vector]:
     """
 
     # Validate: number of observations must not exceed possible n-hot codes
-    max_codes = int(comb(n_x_c, n_hot))
-    if n_x > max_codes:
-        raise ValueError(f"Cannot encode {n_x} observations with {n_hot}-hot codes in {n_x_c} dimensions. " f"Maximum possible codes: C({n_x_c}, {n_hot}) = {max_codes}")
+    max_codes = int(comb(n_o_c, n_hot))
+    if n_o > max_codes:
+        raise ValueError(f"Cannot encode {n_o} observations with {n_hot}-hot codes in {n_o_c} dimensions. " f"Maximum possible codes: C({n_o_c}, {n_hot}) = {max_codes}")
 
     # Generate all possible n-hot codes using combinations
-    # combinations(range(n_x_c), n_hot) gives all ways to choose n_hot positions
+    # combinations(range(n_o_c), n_hot) gives all ways to choose n_hot positions
     encoding_table = []
-    for active_positions in combinations(range(n_x_c), n_hot):
+    for active_positions in combinations(range(n_o_c), n_hot):
         # Create zero vector
-        code = [0] * n_x_c
+        code = [0] * n_o_c
         # Activate n_hot positions
         for pos in active_positions:
             code[pos] = 1
@@ -211,28 +223,28 @@ def create_encoding_table(n_x: int, n_x_c: int, n_hot: int = 2) -> List[Vector]:
         encoding_table.append(torch.tensor(code, dtype=torch.float))
 
         # Stop when we have enough codes for all observations
-        if len(encoding_table) >= n_x:
+        if len(encoding_table) >= n_o:
             break
 
     return encoding_table
 
 
-def create_two_hot_table(n_x: int, n_x_c: int) -> List[Vector]:
+def create_two_hot_table(n_o: int, n_o_c: int) -> List[Vector]:
     """Create two-hot encoding lookup table (backward compatibility wrapper).
 
-    DEPRECATED: Use create_encoding_table(n_x, n_x_c, n_hot=2) instead.
+    DEPRECATED: Use create_encoding_table(n_o, n_o_c, n_hot=2) instead.
 
     This function is maintained for backward compatibility. New code should use
     the more general create_encoding_table() function.
 
     Args:
-        n_x: Number of possible observations
-        n_x_c: Compressed sensory dimension
+        n_o: Number of possible observations
+        n_o_c: Compressed sensory dimension
 
     Returns:
         List of two-hot code tensors, one per possible observation
     """
-    return create_encoding_table(n_x, n_x_c, n_hot=2)
+    return create_encoding_table(n_o, n_o_c, n_hot=2)
 
 
 def split_to_frequencies(p_flat: Vector, n_p: List[int]) -> GroundedLocation:
@@ -329,7 +341,7 @@ def concatenate_frequencies(p_list: GroundedLocation) -> Vector:
 
     Example:
         >>> # After inference generates per-frequency place cells
-        >>> p_list = grounded_inference(g_inf, x_f)  # List of [B,40], [B,32], [B,24]
+        >>> p_list = grounded_inference(g_inf, x)  # List of [B,40], [B,32], [B,24]
         >>> # Convert to concatenated format for memory update
         >>> p_concat = concatenate_frequencies(p_list)  # [B, 96]
         >>> # Now ready for Hebbian update

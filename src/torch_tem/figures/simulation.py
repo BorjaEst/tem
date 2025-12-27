@@ -161,7 +161,7 @@ def plot_prediction_accuracy(
         predictions: List of predictions per timestep.
             Each element is either None or a list of tensors per frequency module.
         ground_truth: List of ground truth observations.
-            Each element is a tensor of shape [n_x].
+            Each element is a tensor of shape [n_o].
         title: Plot title.
         figsize: Figure size as (width, height).
 

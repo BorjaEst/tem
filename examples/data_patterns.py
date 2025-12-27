@@ -34,7 +34,7 @@ class PatternConfig(BaseModel):
 
     n_g: List[int] = Field(default=[30, 25, 20], description="Grid cell dimensions per frequency")
     n_p: List[int] = Field(default=[240, 200, 160], description="Place cell dimensions per frequency")
-    n_x_c: int = Field(default=8, description="Compressed sensory dimension")
+    n_o_c: int = Field(default=8, description="Compressed sensory dimension")
     f_extended: List[float] = Field(default=[0.9, 0.5, 0.2], description="Frequency values for oscillatory patterns")
 
 
@@ -88,7 +88,7 @@ class ExampleConfig(BaseSettings):
         # Create decreasing frequencies
         f_extended = [0.9 - f * (0.7 / max(1, self.n_frequencies - 1)) for f in range(self.n_frequencies)]
 
-        return PatternConfig(n_g=n_g, n_p=n_p, n_x_c=8, f_extended=f_extended)
+        return PatternConfig(n_g=n_g, n_p=n_p, n_o_c=8, f_extended=f_extended)
 
 
 # ==============================================================================

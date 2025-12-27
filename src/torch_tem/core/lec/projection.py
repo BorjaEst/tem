@@ -2,10 +2,10 @@
 
 In TEM theory, the Lateral Entorhinal Cortex (LEC) projects filtered sensory
 information to the hippocampus via outer product with grid cells. This module
-implements the sensory projection pathway (x_f → x̃) using learned tiling matrices.
+implements the sensory projection pathway (x → x̃) using learned tiling matrices.
 
 The projection creates hippocampal inputs by:
-1. Normalizing filtered sensory per frequency: x_norm = f_n(x_f)
+1. Normalizing filtered sensory per frequency: x_norm = f_n(x)
 2. Tiling to hippocampal dimension: x_tiled = x_norm @ W_tile^T
 3. Frequency-specific weighting: x̃ = sigmoid(w_p) * x_tiled
 
@@ -38,7 +38,7 @@ class ProjectionConfig(BaseModel):
 class Projection(nn.Module):
     """LEC sensory projection to hippocampal space via learned tiling.
 
-    Projects multi-frequency filtered sensory (x_f) to hippocampal inputs (x̃) that
+    Projects multi-frequency filtered sensory (x) to hippocampal inputs (x̃) that
     can form conjunctive codes with grid cells. Each frequency has a learnable weight
     controlling its contribution to hippocampal representations.
 
@@ -77,19 +77,24 @@ class Projection(nn.Module):
         """Number of hippocampal place cells per frequency."""
         return [matrix.shape[1] for matrix in self._W_tile]
 
-    def normalize(self, x_f: MultiScaleCode) -> MultiScaleCode:
+    @property
+    def n_x(self) -> List[int]:
+        """Number of sensory neurons per frequency."""
+        return [matrix.shape[0] for matrix in self._W_tile]
+
+    def normalize(self, x: MultiScaleCode) -> MultiScaleCode:
         """Normalize sensory representations per frequency module."""
-        return [self.normalize_fn(x_f_f) for x_f_f in x_f]
+        return [self.normalize_fn(x_f_f) for x_f_f in x]
 
     @staticmethod
     def normalize_fn(x: Tensor) -> Tensor:
         """Normalize a single frequency tensor: demean, ReLU, L2 normalize.
 
         Args:
-            x: Input tensor of shape (batch, n_x_f).
+            x: Input tensor of shape (batch, n_x).
 
         Returns:
-            Normalized tensor of shape (batch, n_x_f).
+            Normalized tensor of shape (batch, n_x).
         """
         x_demeaned = x - x.mean(dim=-1, keepdim=True)
         x_relu = torch.relu(x_demeaned)
@@ -106,37 +111,37 @@ class Projection(nn.Module):
         for param in self._w_p:
             param.requires_grad_(learn)
 
-    def tiling(self, x_f: MultiScaleCode) -> MultiScaleCode:
+    def tiling(self, x: MultiScaleCode) -> MultiScaleCode:
         """Tile normalized sensory to hippocampal dimension with learned weighting.
 
-        Expands the sensory representation from n_x_c to n_p dimensions using
+        Expands the sensory representation from n_o_c to n_p dimensions using
         learned tiling matrices W_tile, then applies frequency-specific weights
         to modulate each frequency's contribution to hippocampal representations.
 
         Mathematical operation:
-            x̃[f] = sigmoid(w_p[f]) * (x_f[f] @ W_tile[f])
+            x̃[f] = sigmoid(w_p[f]) * (x[f] @ W_tile[f])
 
         Args:
-            x_f: Normalized filtered sensory List[n_f] of (batch, n_x_c).
+            x: Normalized filtered sensory List[n_f] of (batch, n_o_c).
 
         Returns:
             Tiled sensory List[n_f] of (batch, n_p[f]).
         """
         w_p, W_tile, n_f = self._w_p, self._W_tile, self.n_f
-        return [torch.sigmoid(w_p[f]) * x_f[f] @ W_tile[f] for f in range(n_f)]
+        return [torch.sigmoid(w_p[f]) * x[f] @ W_tile[f] for f in range(n_f)]
 
-    def forward(self, x_f: MultiScaleCode) -> MultiScaleCode:
-        """Project filtered sensory to hippocampal space: x_f → x̃.
+    def forward(self, x: MultiScaleCode) -> MultiScaleCode:
+        """Project filtered sensory to hippocampal space: x → x̃.
 
-        Pipeline: normalize(x_f) → tile → weight → x̃
+        Pipeline: normalize(x) → tile → weight → x̃
 
         Args:
-            x_f: Filtered sensory List[n_f] of (batch, n_x_c).
+            x: Filtered sensory List[n_f] of (batch, n_o_c).
 
         Returns:
             Projected sensory List[n_f] of (batch, n_p[f]).
         """
-        x_norm = self.normalize(x_f)
+        x_norm = self.normalize(x)
         return self.tiling(x_norm)
 
 
@@ -158,19 +163,19 @@ if __name__ == "__main__":
     print("=" * 80)
 
     # Configuration
-    n_x_c = 10  # Compressed sensory dimension
+    n_o_c = 10  # Compressed sensory dimension
     n_p = [96, 80, 64]  # Place cells per frequency
     n_f = len(n_p)
     batch_size = 4
 
     print(f"\nConfiguration:")
-    print(f"  Compressed dimension: {n_x_c}")
+    print(f"  Compressed dimension: {n_o_c}")
     print(f"  Frequencies: {n_f}")
     print(f"  Place cells per frequency: {n_p}")
     print(f"  Batch size: {batch_size}")
 
     # Create tiling matrices (normally from context)
-    W_tile = [torch.randn(n_x_c, n_p_f) for n_p_f in n_p]
+    W_tile = [torch.randn(n_o_c, n_p_f) for n_p_f in n_p]
     print(f"\n✓ Tiling matrices: {[W.shape for W in W_tile]}")
 
     # Create projection
@@ -180,12 +185,12 @@ if __name__ == "__main__":
     print(f"  Place cells per frequency: {projection.n_p}")
 
     # Create filtered sensory input
-    x_f = [torch.randn(batch_size, n_x_c) for _ in range(n_f)]
-    print(f"\n✓ Filtered sensory: {[x.shape for x in x_f]}")
+    x = [torch.randn(batch_size, n_o_c) for _ in range(n_f)]
+    print(f"\n✓ Filtered sensory: {[x.shape for x in x]}")
 
     # Project to hippocampal space
     with torch.no_grad():
-        x_projected = projection(x_f)
+        x_projected = projection(x)
 
     print(f"✓ Projected sensory: {[x.shape for x in x_projected]}")
 
@@ -193,10 +198,10 @@ if __name__ == "__main__":
     print(f"\nProjection statistics:")
     for f in range(n_f):
         print(f"  Frequency {f}:")
-        print(f"    Input: mean={x_f[f].mean():.4f}, std={x_f[f].std():.4f}")
+        print(f"    Input: mean={x[f].mean():.4f}, std={x[f].std():.4f}")
         print(f"    Output: mean={x_projected[f].mean():.4f}, std={x_projected[f].std():.4f}")
-        print(f"    Dimension: {n_x_c} → {n_p[f]} (expansion={n_p[f]/n_x_c:.1f}x)")
+        print(f"    Dimension: {n_o_c} → {n_p[f]} (expansion={n_p[f]/n_o_c:.1f}x)")
 
     print("\n" + "=" * 80)
-    print("TEM Pipeline: x → x_c (Encoder) → x_f (Processor) → x̃ (Projection) → p (HPC)")
+    print("TEM Pipeline: x → x_c (Encoder) → x (Processor) → x̃ (Projection) → p (HPC)")
     print("=" * 80)

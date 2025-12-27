@@ -21,7 +21,7 @@ Example:
     >>> from torch_tem.config import ModelConfig
     >>>
     >>> # Initialize model and loss
-    >>> config = ModelConfig(n_x=25, n_g=[32, 16, 8])
+    >>> config = ModelConfig(n_o=25, n_g=[32, 16, 8])
     >>> model = TEMModel(config)
     >>> loss_fn = JointLoss()
     >>>

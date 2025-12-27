@@ -246,10 +246,10 @@ def test_encoder():
 
     legacy, refactored, params = create_test_models(batch_size=4)
 
-    # Create test input: one-hot observations [batch, n_x]
+    # Create test input: one-hot observations [batch, n_o]
     batch_size = 4
-    n_x = params["n_x"]
-    x_onehot = torch.zeros(batch_size, n_x)
+    n_o = params["n_o"]
+    x_onehot = torch.zeros(batch_size, n_o)
     x_onehot[0, 5] = 1.0  # Observation 5
     x_onehot[1, 10] = 1.0  # Observation 10
     x_onehot[2, 20] = 1.0  # Observation 20
@@ -337,22 +337,22 @@ def test_grounded_inference():
     batch_size = 4
     n_f = params["n_f"]
     n_g = params["n_g"]
-    n_x_f = params["n_x_f"]
+    n_x = params["n_x"]
 
     # Abstract location g
     g = [torch.randn(batch_size, n_g[f]) for f in range(n_f)]
 
-    # Filtered sensory x_f
-    x_f = [torch.randn(batch_size, n_x_f[f]) for f in range(n_f)]
+    # Filtered sensory x
+    x = [torch.randn(batch_size, n_x[f]) for f in range(n_f)]
 
     # Legacy grounded inference
     with torch.no_grad():
         # Legacy inf_p expects expanded inputs (g_, x_)
         # We need to manually prepare them
         legacy_g_ = legacy.g2g_(g)
-        # x_f is already filtered, but legacy x2x_ expects filtered x
+        # x is already filtered, but legacy x2x_ expects filtered x
         # Wait, legacy x2x_ takes x (filtered) and does normalization + expansion
-        legacy_x_ = legacy.x2x_(x_f)
+        legacy_x_ = legacy.x2x_(x)
         legacy_p = legacy.inf_p(legacy_x_, legacy_g_)
 
     # Refactored grounded inference
@@ -366,9 +366,9 @@ def test_grounded_inference():
         # It handles expansion internally
         # BUT it expects x to be normalized (lec.Processor does this)
         # Legacy x2x_ does normalization internally.
-        # So we must normalize x_f for refactored to match legacy input parity.
+        # So we must normalize x for refactored to match legacy input parity.
         # We use legacy.f_n to ensure exact same normalization.
-        x_f_norm = legacy.f_n(x_f)
+        x_f_norm = legacy.f_n(x)
 
         refactored_p = refactored.inference.grounded(g_down, x_f_norm)
 
@@ -552,7 +552,7 @@ def test_abstract_inference():
     n_f = params["n_f"]
     n_g = params["n_g"]
     n_p = params["n_p"]
-    n_x = params["n_x"]
+    n_o = params["n_o"]
 
     # Retrieved grounded location p_x (from memory)
     p_x = [torch.randn(batch_size, n_p[f]) for f in range(n_f)]
@@ -564,7 +564,7 @@ def test_abstract_inference():
     g_gen = (mu_g_path, sigma_g_path)
 
     # Observation x (one-hot)
-    x = torch.zeros(batch_size, n_x)
+    x = torch.zeros(batch_size, n_o)
     x[0, 0] = 1.0
     x[1, 1] = 1.0
     x[2, 2] = 1.0

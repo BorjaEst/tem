@@ -79,7 +79,7 @@ def legacy_to_typed(params: Dict[str, Any]) -> ConfigWrapper:
     architecture.environment = environment
 
     # Return the merged configuration object directly
-    # TEMModel expects an object with direct access to architecture fields (n_g, n_x, etc.)
+    # TEMModel expects an object with direct access to architecture fields (n_g, n_o, etc.)
     return architecture
 
 
@@ -94,8 +94,8 @@ def _create_merged_architecture(params: Dict[str, Any]):
     config = ModelConfig(
         # Base dimensions
         batch_size=params["batch_size"],
-        n_x=params["n_x"],
-        n_x_c=params["n_x_c"],
+        n_o=params["n_o"],
+        n_o_c=params["n_o_c"],
         n_g_subsampled=params["n_g_subsampled"][: params["n_f_g"]],  # Exclude OVC if separate
         n_ovc=params.get("n_ovc", []),
         f_initial=params["f_initial"][: len(params["n_g_subsampled"]) - params.get("n_f_ovc", 0)],

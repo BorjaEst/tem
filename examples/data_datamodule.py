@@ -103,7 +103,7 @@ if __name__ == "__main__":
     print(f"  observations: shape={tuple(obs.shape)}, dtype={obs.dtype}")
     print(f"  actions:       shape={tuple(actions.shape)}, dtype={actions.dtype}")
     print(f"  locations:     shape={tuple(locations.shape)}, dtype={locations.dtype}")
-    print(f"  → Time-major contract: T={obs.shape[0]}, B={obs.shape[1]}, n_x={obs.shape[2]}")
+    print(f"  → Time-major contract: T={obs.shape[0]}, B={obs.shape[1]}, n_o={obs.shape[2]}")
     print()
 
     # ------------------------------------------------------------------

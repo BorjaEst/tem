@@ -15,7 +15,7 @@ graph TB
         Encoder["Encoder<br/>x → x_c<br/>(one-hot → two-hot)"]
         Decoder["Decoder<br/>p → x<br/>(place → observation)"]
         Projection["Projection<br/>g transformations<br/>(downsample, normalize, clamp)"]
-        Tiling["SensoryProjection<br/>x_f → x_<br/>(tile + weight)"]
+        Tiling["SensoryProjection<br/>x → x_<br/>(tile + weight)"]
         Transition["TransitionModel<br/>a, g → g'<br/>(action-based dynamics)"]
     end
     
@@ -43,7 +43,7 @@ graph TB
     
     %% Component Dependencies
     Encoder -.->|x_c| Sensory
-    Sensory -.->|x_f| Tiling
+    Sensory -.->|x| Tiling
     Tiling -.->|x_| Grounded
     Tiling -.->|x_| Attractor
     

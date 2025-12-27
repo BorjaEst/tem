@@ -32,7 +32,7 @@ Usage Examples:
     python examples/simulation_usage.py --grid_size 6 --walk_length 100
 
     # Different observation mode and architecture
-    python examples/simulation_usage.py --observation_mode tiled --n_x_c 12
+    python examples/simulation_usage.py --observation_mode tiled --n_o_c 12
 
     # Custom frequency modules
     python examples/simulation_usage.py --f_initial "[0.95, 0.7, 0.4, 0.2]"
@@ -89,7 +89,7 @@ class ExampleConfig(BaseSettings):
     # Architecture configuration
     f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5], description="Spatial frequencies per module")
     n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 8], description="Grid cells per frequency module")
-    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension")
+    n_o_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension")
 
     # Memory configuration
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
@@ -134,8 +134,8 @@ def main():
 
     # Create model configuration
     model_config = ModelConfig(
-        n_x=env_config.n_locations,
-        n_x_c=config.n_x_c,
+        n_o=env_config.n_locations,
+        n_o_c=config.n_o_c,
         n_g_subsampled=config.n_g_subsampled,
         f_initial=config.f_initial,
         batch_size=1,

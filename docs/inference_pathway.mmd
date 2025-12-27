@@ -9,7 +9,7 @@ graph LR
     
     %% Processing Steps
     X -->|"f_c"| X_c["x_c<br/>(compressed<br/>sensory)"]
-    X_c -->|"x_prev2x<br/>(temporal filter)"| X_f["x_f<br/>(filtered<br/>sensory)"]
+    X_c -->|"x_prev2x<br/>(temporal filter)"| X_f["x<br/>(filtered<br/>sensory)"]
     X_prev -.->|"mix with"| X_f
     
     X_f -->|"x2x_<br/>(tile + normalize)"| X_["x_<br/>(tiled sensory<br/>per frequency)"]
@@ -32,7 +32,7 @@ graph LR
     %% Output
     P_inf -->|"output"| OUT_P["p<br/>(hippocampal<br/>code)"]
     G_inf -->|"output"| OUT_G["g<br/>(entorhinal<br/>code)"]
-    X_f -->|"output"| OUT_X["x_f<br/>(filtered<br/>sensory)"]
+    X_f -->|"output"| OUT_X["x<br/>(filtered<br/>sensory)"]
     P_x -->|"output"| OUT_PX["p_x<br/>(retrieved<br/>from sensory)"]
     
     style X fill:#ffebee

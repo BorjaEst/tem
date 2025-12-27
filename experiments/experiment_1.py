@@ -53,7 +53,7 @@ class ExperimentConfig(BaseSettings):
     # Architecture configuration
     f_initial: List[float] = Field(default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01], description="Initial frequencies for each spatial module")
     n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 10, 8, 6, 6], description="Grid cells per frequency module")
-    n_x_c: int = Field(default=15, ge=2, le=30, description="Compressed sensory dimension (two-hot)")
+    n_o_c: int = Field(default=15, ge=2, le=30, description="Compressed sensory dimension (two-hot)")
 
     # Training configuration
     max_steps: int = Field(default=100, ge=100, le=50000, description="Maximum training steps")
@@ -151,8 +151,8 @@ if __name__ == "__main__":
 
     # Create model configuration
     model_config = ModelConfig(
-        n_x=env.n_observations,
-        n_x_c=config.n_x_c,
+        n_o=env.n_observations,
+        n_o_c=config.n_o_c,
         n_g_subsampled=config.n_g_subsampled,
         f_initial=config.f_initial,
         n_actions=total_actions,
@@ -164,8 +164,8 @@ if __name__ == "__main__":
     # Create TEM model
     tem_model = TEMModel(model_config)
     print(f"  Model architecture:")
-    print(f"    - Observations: {model_config.n_x}")
-    print(f"    - Compressed sensory: {model_config.n_x_c}")
+    print(f"    - Observations: {model_config.n_o}")
+    print(f"    - Compressed sensory: {model_config.n_o_c}")
     print(f"    - Grid cells (subsampled): {model_config.n_g_subsampled}")
     print(f"    - Place cells: {model_config.n_p}")
     print(f"    - Actions: {total_actions}")

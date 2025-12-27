@@ -9,7 +9,7 @@ This module provides:
     *time-major* batches for TEM training.
 
 Time-major batch contract:
-        - observations: float tensor of shape (T, B, n_x)
+        - observations: float tensor of shape (T, B, n_o)
         - actions: int tensor of shape (T, B)
         - locations: int tensor of shape (T, B) (auxiliary)
 
@@ -378,7 +378,7 @@ class WalkDataset(Dataset[WalkSample]):
 
         Returns:
             A tuple `(observations, actions, locations)` with shapes:
-            - observations: (T, n_x)
+            - observations: (T, n_o)
             - actions: (T,)
             - locations: (T,)
         """

@@ -34,9 +34,9 @@ class TEMModel(nn.Module):
         self.config = config
 
         # Configuration-derived matrices (computed once)
-        self.two_hot_table = compute_two_hot_table(config.architecture.n_x_c)
-        self.W_repeat = compute_repeat_matrices(config.architecture.n_g, config.architecture.n_x_c)
-        self.W_tile = compute_tile_matrices(config.architecture.n_g, config.architecture.n_x_c)
+        self.two_hot_table = compute_two_hot_table(config.architecture.n_o_c)
+        self.W_repeat = compute_repeat_matrices(config.architecture.n_g, config.architecture.n_o_c)
+        self.W_tile = compute_tile_matrices(config.architecture.n_g, config.architecture.n_o_c)
         # ... (g_downsample, g_connections, p_update_mask, p_retrieve_masks)
 
         # Component instantiation
@@ -125,11 +125,11 @@ p_list = torch.split(p_flat, n_p, dim=1)
 ### Format Flow Through Pipeline
 
 ```
-Observation (x: [B, n_x])
+Observation (x: [B, n_o])
   ↓ encoder
-Compressed (x_c: [B, n_x_c])
+Compressed (x_c: [B, n_o_c])
   ↓ processor.filter
-Filtered (x_f: List[[B, n_x_f[f]]])  ← PER-FREQUENCY
+Filtered (x: List[[B, n_x[f]]])  ← PER-FREQUENCY
   ↓ sensory_projection.tile
 Tiled (x_: List[[B, n_p[f]]])  ← PER-FREQUENCY
   ↓ concatenate_frequencies
@@ -151,8 +151,8 @@ Grounded (p: List[[B, n_p[f]]])  ← PER-FREQUENCY
 ```
 ModelConfig (src/torch_tem/config/__init__.py)
 ├── ArchitectureConfig (architecture.py)
-│   ├── Base dimensions: n_x, n_x_c, n_g, f_initial
-│   └── Derived dimensions: n_f, n_g_total, n_x_f, n_p
+│   ├── Base dimensions: n_o, n_o_c, n_g, f_initial
+│   └── Derived dimensions: n_f, n_g_total, n_x, n_p
 ├── EnvironmentConfig (environment.py)
 │   ├── Grid: width, height, observation_mode
 │   └── Shiny: n_shiny_objects, shiny_influence
@@ -174,8 +174,8 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 class ArchitectureConfig(BaseModel):
     model_config = ConfigDict(strict=False, validate_assignment=True)
 
-    n_x: int = Field(gt=0, description="Sensory observation dimensions")
-    n_x_c: int = Field(gt=0, description="Compressed sensory dimensions")
+    n_o: int = Field(gt=0, description="Sensory observation dimensions")
+    n_o_c: int = Field(gt=0, description="Compressed sensory dimensions")
     n_g: List[int] = Field(min_length=1, description="Grid cells per frequency")
 
     @computed_field
@@ -187,8 +187,8 @@ class ArchitectureConfig(BaseModel):
     @computed_field
     @property
     def n_p(self) -> List[int]:
-        """Place cells per frequency = n_g[f] × n_x_f[f]."""
-        return [self.n_g[f] * self.n_x_f[f] for f in range(self.n_f)]
+        """Place cells per frequency = n_g[f] × n_x[f]."""
+        return [self.n_g[f] * self.n_x[f] for f in range(self.n_f)]
 
     @model_validator(mode='after')
     def validate_dimensions(self):
@@ -202,7 +202,7 @@ class ArchitectureConfig(BaseModel):
 - Runtime type checking (no silent type coercion)
 - Clear error messages on invalid configuration
 - Automatic computed fields (no manual calculation)
-- Dependency validation (e.g., n_p depends on n_g and n_x_f)
+- Dependency validation (e.g., n_p depends on n_g and n_x)
 
 ### Configuration Access Pattern
 
@@ -400,11 +400,11 @@ class MemoryStorage(nn.Module):
 
 - `B`: Batch size
 - `T`: Time steps in walk sequence
-- `n_x`: Sensory observation dimensions (e.g., 45 for 9×5 one-hot grid)
-- `n_x_c`: Compressed sensory dimensions (e.g., 10 for two-hot)
-- `n_x_f[f]`: Temporally filtered sensory dimensions per frequency
+- `n_o`: Sensory observation dimensions (e.g., 45 for 9×5 one-hot grid)
+- `n_o_c`: Compressed sensory dimensions (e.g., 10 for two-hot)
+- `n_x[f]`: Temporally filtered sensory dimensions per frequency
 - `n_g[f]`: Abstract location (grid cell) dimensions per frequency
-- `n_p[f]`: Grounded location (place cell) dimensions per frequency = n_g[f] × n_x_f[f]
+- `n_p[f]`: Grounded location (place cell) dimensions per frequency = n_g[f] × n_x[f]
 - `n_f`: Number of frequency modules (grid + OVC)
 - `sum(n_p)`: Total place cells across all frequencies
 
@@ -413,13 +413,13 @@ class MemoryStorage(nn.Module):
 | Stage          | Variable     | Shape                     | Format   | Notes                              |
 | -------------- | ------------ | ------------------------- | -------- | ---------------------------------- |
 | **Input**      |              |                           |          |                                    |
-|                | `x`          | `[B, n_x]`                | Single   | One-hot sensory observation        |
+|                | `x`          | `[B, n_o]`                | Single   | One-hot sensory observation        |
 |                | `a`          | `List[int]` length B      | List     | Discrete actions per walk          |
 |                | `locations`  | `List[Dict]` length B     | List     | Environment metadata               |
 | **Encoding**   |              |                           |          |                                    |
-|                | `x_c`        | `[B, n_x_c]`              | Single   | Two-hot compressed                 |
+|                | `x_c`        | `[B, n_o_c]`              | Single   | Two-hot compressed                 |
 | **Filtering**  |              |                           |          |                                    |
-|                | `x_f`        | `List[[B, n_x_f[f]]]`     | Per-freq | Temporally filtered sensory        |
+|                | `x`          | `List[[B, n_x[f]]]`       | Per-freq | Temporally filtered sensory        |
 | **Tiling**     |              |                           |          |                                    |
 |                | `x_`         | `List[[B, n_p[f]]]`       | Per-freq | Tiled for outer product            |
 |                | `x_flat`     | `[B, sum(n_p)]`           | Concat   | For memory retrieval               |
@@ -433,10 +433,10 @@ class MemoryStorage(nn.Module):
 |                | `p_inf`      | `List[[B, n_p[f]]]`       | Per-freq | Inferred grounded location         |
 | **Generation** |              |                           |          |                                    |
 |                | `p_gen`      | `List[[B, n_p[f]]]`       | Per-freq | Retrieved from g_inf               |
-|                | `x_p`        | `[B, n_x]`                | Single   | Observation from p_inf             |
-|                | `x_g`        | `[B, n_x]`                | Single   | Observation from g_inf→p           |
-|                | `x_gt`       | `[B, n_x]`                | Single   | Observation from g_gen→p           |
-|                | `x_logits`   | `Tuple[3 × [B, n_x]]`     | Tuple    | Pre-softmax scores                 |
+|                | `x_p`        | `[B, n_o]`                | Single   | Observation from p_inf             |
+|                | `x_g`        | `[B, n_o]`                | Single   | Observation from g_inf→p           |
+|                | `x_gt`       | `[B, n_o]`                | Single   | Observation from g_gen→p           |
+|                | `x_logits`   | `Tuple[3 × [B, n_o]]`     | Tuple    | Pre-softmax scores                 |
 | **Memory**     |              |                           |          |                                    |
 |                | `p_inf_flat` | `[B, sum(n_p)]`           | Concat   | For Hebbian update                 |
 |                | `p_gen_flat` | `[B, sum(n_p)]`           | Concat   | For Hebbian update                 |
@@ -477,21 +477,21 @@ p_retrieved = tanh(p_query + (M @ p_prev.unsqueeze(2)).squeeze(2))  # [B, sum(n_
 
 ```python
 g: [B, n_g]
-x: [B, n_x]
-p = g[:, :, None] @ x[:, None, :]  # [B, n_g, n_x] → flatten → [B, n_g × n_x]
+x: [B, n_o]
+p = g[:, :, None] @ x[:, None, :]  # [B, n_g, n_o] → flatten → [B, n_g × n_o]
 ```
 
 **Efficient approach** (using projection matrices):
 
 ```python
-W_repeat: [n_g × n_x, n_g]  # Kronecker repeat
-W_tile: [n_g × n_x, n_x]    # Kronecker tile
-g_expanded = g @ W_repeat.T  # [B, n_g × n_x]
-x_expanded = x @ W_tile.T    # [B, n_g × n_x]
-p = g_expanded * x_expanded  # [B, n_g × n_x] element-wise
+W_repeat: [n_g × n_o, n_g]  # Kronecker repeat
+W_tile: [n_g × n_o, n_o]    # Kronecker tile
+g_expanded = g @ W_repeat.T  # [B, n_g × n_o]
+x_expanded = x @ W_tile.T    # [B, n_g × n_o]
+p = g_expanded * x_expanded  # [B, n_g × n_o] element-wise
 ```
 
-**Rationale**: Avoids explicit outer product, reduces memory from O(B × n_g × n_x) to O(B × (n_g + n_x)).
+**Rationale**: Avoids explicit outer product, reduces memory from O(B × n_g × n_o) to O(B × (n_g + n_o)).
 
 ---
 
@@ -574,7 +574,7 @@ Pydantic v2 with strict mode provides:
 
 - Runtime type checking (no silent coercion)
 - Clear error messages on invalid configs
-- Automatic computed fields (e.g., n_p = n_g × n_x_f)
+- Automatic computed fields (e.g., n_p = n_g × n_x)
 - Dependency validation across config sections
 
 No manual validation code required—configuration errors caught at initialization.

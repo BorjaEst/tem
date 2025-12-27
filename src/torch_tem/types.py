@@ -334,7 +334,7 @@ WalkSample: TypeAlias = Tuple[Vector, Vector, Vector]
 This is the item-level return type used by the map-style walk dataset.
 
 Tuple elements:
-    observations: Float tensor of shape (T, n_x).
+    observations: Float tensor of shape (T, n_o).
     actions: Integer tensor of shape (T,).
     locations: Integer tensor of shape (T,).
 
@@ -347,7 +347,7 @@ WalkBatch: TypeAlias = Tuple[Observation, Action, Location]
 """Single time-major batch of walks.
 
 Tuple elements:
-    observations: Float tensor of shape (T, B, n_x).
+    observations: Float tensor of shape (T, B, n_o).
     actions: Integer tensor of shape (T, B).
     locations: Integer tensor of shape (T, B).
 

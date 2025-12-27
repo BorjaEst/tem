@@ -4,7 +4,7 @@ This module generates synthetic walk data on the fly and yields *time-major*
 full-walk tensors suitable for manual truncated BPTT in the Lightning module.
 
 Batch contract (time-major):
-    - observations: float32 [T, B, n_x]
+    - observations: float32 [T, B, n_o]
     - actions: int64 [T, B]
     - locations: int64 [T, B] (auxiliary)
 """
@@ -27,7 +27,7 @@ class TEMDataModule(L.LightningDataModule):
     The DataLoader returns tuples `(observations, actions, locations)` with the
     following shapes:
 
-    - observations: float32 tensor of shape (T, B, n_x)
+    - observations: float32 tensor of shape (T, B, n_o)
     - actions: int64 tensor of shape (T, B)
     - locations: int64 tensor of shape (T, B) (auxiliary)
 

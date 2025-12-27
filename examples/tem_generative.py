@@ -35,7 +35,7 @@ Usage Examples:
     python examples/tem_generative.py
 
     # Longer walk with different architecture
-    python examples/tem_generative.py --walk_length 200 --n_x_c 12
+    python examples/tem_generative.py --walk_length 200 --n_o_c 12
 
     # Different grid size and observation mode
     python examples/tem_generative.py --grid_size 7 --observation_mode tiled
@@ -76,8 +76,8 @@ class ExampleConfig(BaseSettings):
     """Configuration for complete TEM generative pipeline example.
 
     This config implements all generative-related protocols:
-    - TransitionParams
-    - ProjectionParams
+    - TransitionConfig
+    - ProjectionConfig
     - DecoderParams
     - MemoryParams (generative pathway)
     """
@@ -94,7 +94,7 @@ class ExampleConfig(BaseSettings):
     # Architecture configuration
     f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
     n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
-    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
+    n_o_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
 
     # Memory configuration
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
@@ -126,8 +126,8 @@ if __name__ == "__main__":
     # Calculate total actions (directional + static if enabled)
     total_actions = environment_config.n_actions + (1 if environment_config.has_static_action else 0)
     model_config = ModelConfig(
-        n_x=environment_config.n_locations,
-        n_x_c=config.n_x_c,
+        n_o=environment_config.n_locations,
+        n_o_c=config.n_o_c,
         n_g_subsampled=config.n_g_subsampled,
         f_initial=config.f_initial,
         n_actions=total_actions,
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     print(f"  Walk length: {config.walk_length} timesteps")
     print(f"  Actions: {total_actions} (4 directional + {1 if environment_config.has_static_action else 0} static)")
     print(f"  Frequencies: {model_config.n_f} ({model_config.f_initial[0]:.2f} to {model_config.f_initial[-1]:.2f})")
-    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_x_c={model_config.n_x_c}")
+    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_o_c={model_config.n_o_c}")
     print()
 
     # =========================================================================
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     walks = walk_gen.generate_walks(n_walks=1, walk_length=config.walk_length, policy=policy)
     walk = walks[0]
 
-    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_x]
+    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_o]
     locations = torch.as_tensor(walk.locations, dtype=torch.long)  # [T]
     print(f"  ✓ Generated walk: {len(walk)} timesteps")
     print()
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     # Decoder: Hippocampus to sensory space
     decoder = lec.decoder.Decoder(model_config)
     # Create W_tile for decoder (only needs first frequency matrix)
-    W_tile_0 = torch.randn(model_config.n_x_c, model_config.n_p[0]) / np.sqrt(model_config.n_p[0])
+    W_tile_0 = torch.randn(model_config.n_o_c, model_config.n_p[0]) / np.sqrt(model_config.n_p[0])
     print(f"  ✓ Decoder: p → x̂ (place cells to sensory prediction)")
     print()
 
@@ -231,9 +231,9 @@ if __name__ == "__main__":
     # Initialize grid cell state (random start)
     g_prev = [torch.randn(1, model_config.n_g[f]) * 0.1 for f in range(model_config.n_f)]
     # Initialize sensory processor state (zeros for first timestep)
-    x_prev = [torch.zeros(1, model_config.n_x_f[f]) for f in range(model_config.n_f)]
+    x_prev = [torch.zeros(1, model_config.n_x[f]) for f in range(model_config.n_f)]
     print(f"  ✓ Grid cell state initialized: {model_config.n_g}")
-    print(f"  ✓ Sensory processor state initialized: {model_config.n_x_f}")
+    print(f"  ✓ Sensory processor state initialized: {model_config.n_x}")
     print()
 
     # =========================================================================
@@ -279,7 +279,7 @@ if __name__ == "__main__":
         # x̂ = decoder(p_g, W_tile_0)
         # ============================================================
         x_pred_result = decoder(p_g, W_tile_0)  # Returns SensoryPrediction
-        x_pred = x_pred_result.values[0]  # First frequency: [B, n_x]
+        x_pred = x_pred_result.values[0]  # First frequency: [B, n_o]
         x_pred_history.append(x_pred[0].detach())
 
         # Update state for next iteration
@@ -300,8 +300,8 @@ if __name__ == "__main__":
     print("Phase 6: Generating visualizations...")
 
     # Compute prediction accuracy
-    x_pred_tensor = torch.stack(x_pred_history)  # [T, n_x]
-    x_true_tensor = torch.stack(observations)  # [T, n_x]
+    x_pred_tensor = torch.stack(x_pred_history)  # [T, n_o]
+    x_true_tensor = torch.stack(observations)  # [T, n_o]
     predictions = x_pred_tensor.argmax(dim=-1)
     truth = x_true_tensor.argmax(dim=-1)
     prediction_acc = (predictions == truth).float().mean().item()
@@ -337,14 +337,14 @@ if __name__ == "__main__":
     fig4, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
 
     # True observations
-    x_true_np = x_true_tensor.cpu().numpy()  # [T, n_x]
+    x_true_np = x_true_tensor.cpu().numpy()  # [T, n_o]
     im1 = axes[0].imshow(x_true_np.T, aspect="auto", cmap="Blues", interpolation="nearest")
     axes[0].set_ylabel("Location ID")
     axes[0].set_title("True Observations (Ground Truth)")
     plt.colorbar(im1, ax=axes[0])
 
     # Predicted observations
-    x_pred_np = x_pred_tensor.cpu().numpy()  # [T, n_x]
+    x_pred_np = x_pred_tensor.cpu().numpy()  # [T, n_o]
     im2 = axes[1].imshow(x_pred_np.T, aspect="auto", cmap="Oranges", interpolation="nearest")
     axes[1].set_ylabel("Location ID")
     axes[1].set_xlabel("Timestep")
@@ -409,7 +409,7 @@ if __name__ == "__main__":
     print(f"  ↓ Step 3: attractor(g_, M_gen) - Retrieve from memory")
     print(f"Stage 3: p_g - Retrieved hippocampal patterns - {model_config.n_p}")
     print(f"  ↓ Step 4: decoder(p_g) - Generate sensory prediction")
-    print(f"Output: x̂ - Predicted observations - {model_config.n_x}")
+    print(f"Output: x̂ - Predicted observations - {model_config.n_o}")
     print("=" * 80)
     print()
     print(f"All outputs saved to: {config.output_dir}")

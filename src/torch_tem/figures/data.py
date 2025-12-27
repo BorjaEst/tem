@@ -765,7 +765,7 @@ def plot_batch_tensors_time_major(
     if isinstance(obs, Tensor) and obs.ndim == 3:
         obs_batched = obs.transpose(0, 1)
     else:
-        raise ValueError(f"Expected obs with shape [T, B, n_x], got {getattr(obs, 'shape', None)}")
+        raise ValueError(f"Expected obs with shape [T, B, n_o], got {getattr(obs, 'shape', None)}")
 
     if isinstance(actions, Tensor) and actions.ndim == 2:
         actions_batched = actions.transpose(0, 1)

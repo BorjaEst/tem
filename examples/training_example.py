@@ -97,8 +97,8 @@ if __name__ == "__main__":
     # Create TEM model
     tem_model = TEMModel(model_config)
     print(f"  Model architecture:")
-    print(f"    - Observations: {model_config.n_x}")
-    print(f"    - Compressed sensory: {model_config.n_x_c}")
+    print(f"    - Observations: {model_config.n_o}")
+    print(f"    - Compressed sensory: {model_config.n_o_c}")
     print(f"    - Grid cells (subsampled): {model_config.n_g_subsampled}")
     print(f"    - Place cells: {model_config.n_p}")
     print(f"    - Actions: {model_config.n_actions}")
@@ -204,7 +204,7 @@ if __name__ == "__main__":
         test_actions = test_actions.to(model_device)
         test_locations = test_locations.to(model_device)
 
-        # Initialize state with first observation: [B, n_x]
+        # Initialize state with first observation: [B, n_o]
         state = tem_model.init_state(test_obs[0])
 
         # Process through walk (limit to 100 steps)
@@ -212,7 +212,7 @@ if __name__ == "__main__":
         batch_size = test_obs.shape[1]
         for t in range(max_steps):
             # Extract observation and action for timestep t
-            obs_t = test_obs[t]  # [B, n_x]
+            obs_t = test_obs[t]  # [B, n_o]
             act_t = test_actions[t]  # [B]
             # Convert location IDs to location metadata dicts
             location_ids = test_locations[t].tolist()

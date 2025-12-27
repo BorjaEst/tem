@@ -6,7 +6,7 @@ behavior.
 In particular, when training TEM with (truncated) BPTT, the canonical batch
 layout is time-major full walks:
 
-- observations: float32 tensor [T, B, n_x]
+- observations: float32 tensor [T, B, n_o]
 - actions: int64 tensor [T, B]
 - locations: int64 tensor [T, B] (auxiliary)
 
@@ -91,7 +91,7 @@ class EnvironmentConfig(BaseModel):
         base = base or ModelConfig()
         model_dict = base.model_dump()
         n_actions = self.n_actions + (1 if self.has_static_action else 0)
-        model_dict.update({"n_x": self.n_observations, "n_actions": n_actions})
+        model_dict.update({"n_o": self.n_observations, "n_actions": n_actions})
         model_dict.update(overrides)
         return ModelConfig.model_validate(model_dict)
 

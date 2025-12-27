@@ -31,12 +31,12 @@ class LECContext(Protocol):
     """Protocol for LEC model initialization parameters.
 
     Attributes:
-        n_x: Number of sensory observation neurons
+        n_o: Number of sensory observation neurons
         f_initial: Initial frequency values for temporal filtering
         W_tile: Tiling matrices for projection, one per frequency module
     """
 
-    n_x: int
+    n_o: int
     f_initial: List[float]
     W_tile: List[Matrix]
 
@@ -72,9 +72,9 @@ class LECModel(nn.Module):
     """Lateral Entorhinal Cortex (LEC) pathway for sensory processing.
 
     Implements sensory observation processing through:
-    - Encoding: x → x_c (one-hot to two-hot compression)
-    - Processing: x_c → x_f (temporal filtering at multiple frequencies)
-    - Projection: x_f → x_ (tiling to hippocampal input space)
+    - Encoding: o → o_c (one-hot to two-hot compression)
+    - Processing: o_c → x (temporal filtering at multiple frequencies)
+    - Projection: x → x_ (tiling to hippocampal input space)
     - Decoding: p → x (place cells to sensory predictions)
     """
 
@@ -87,10 +87,10 @@ class LECModel(nn.Module):
         p = [nn.Parameter(matrix, requires_grad=config.learn_W_tile) for matrix in context.W_tile]
         self._W_tile = nn.ParameterList(p)
 
-        self.decoder = Decoder(context.n_x, self.W_tile, config.decoder)
-        self.encoder = Encoder(context.n_x, self.decoder.n_x_c, config.encoder)
-        self.processor = Processor(context.f_initial, config.processor)
         self.projection = Projection(self.W_tile, config.projection)
+        self.decoder = Decoder(context.n_o, self.W_tile, config.decoder)
+        self.encoder = Encoder(context.n_o, self.decoder.n_o_c, config.encoder)
+        self.processor = Processor(context.f_initial, config.processor)
 
     @property
     def W_tile(self) -> nn.ParameterList:
@@ -121,10 +121,10 @@ class LECModel(nn.Module):
         Returns:
             Initial LECState with zero-initialized compressed, filtered, and projected observations
         """
-        x_c = [torch.zeros((batch_size, self.encoder.n_x_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
-        x_f = [torch.zeros((batch_size, self.encoder.n_x_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
+        x_c = [torch.zeros((batch_size, self.encoder.n_o_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
+        x = [torch.zeros((batch_size, self.encoder.n_o_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
         x_ = [torch.zeros((batch_size, self.projection.n_p[f]), dtype=torch.float, device=device) for f in range(self.processor.n_f)]
-        return LECState(compressed_observation=x_c, filtered_observation=x_f, projection=x_)
+        return LECState(compressed_observation=x_c, filtered_observation=x, projection=x_)
 
     def forward(self, x: Observation, state: LECState) -> LECState:
         """Forward pass through LEC pathway.
@@ -137,9 +137,9 @@ class LECModel(nn.Module):
             Updated LEC state with new sensory representations.
         """
         x_c = self.encoder(x)  # Compress sensory observation: x → x_c (one-hot to two-hot)
-        x_f = self.processor(x_c, state.filtered_observation)  # Temporally filter sensorium: x_c → x_f
-        x_ = self.projection(x_f)  # Project to hippocampal input: x_f → x_
-        return LECState(compressed_observation=x_c, filtered_observation=x_f, projection=x_)
+        x = self.processor(x_c, state.filtered_observation)  # Temporally filter sensorium: x_c → x
+        x_ = self.projection(x)  # Project to hippocampal input: x → x_
+        return LECState(compressed_observation=x_c, filtered_observation=x, projection=x_)
 
     def decode(self, p: MultiScaleCode) -> SensoryPrediction:
         """Decode hippocampal place cells to sensory predictions.

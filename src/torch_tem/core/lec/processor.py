@@ -12,12 +12,12 @@ Multi-frequency filtering provides:
 - Learnable dynamics: Each frequency has a learnable decay rate (alpha)
 
 Architecture:
-    Input: Compressed sensory [B, n_x_c]
+    Input: Compressed sensory [B, n_o_c]
     Processing: Per-frequency exponential moving average
-    Output: Multi-frequency filtered sensory List[n_f] of [B, n_x_c]
+    Output: Multi-frequency filtered sensory List[n_f] of [B, n_o_c]
 
     For each frequency f:
-        x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
+        x[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
     where alpha[f] is a learnable decay rate in (0, 1).
 
@@ -52,7 +52,7 @@ class Processor(nn.Module):
     balance between new input and previous state.
 
     The filtering operation for each frequency f is:
-        x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
+        x[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
     Normalization is applied later in the Projection module.
 
@@ -86,6 +86,11 @@ class Processor(nn.Module):
         """Number of frequency channels."""
         return len(self._alpha_logit)
 
+    @property
+    def n_x(self) -> List[int]:
+        """List of compressed sensory dimensions per frequency."""
+        return [param.shape[1] for param in self._alpha_logit]
+
     def set_alpha_learning(self, learn: bool) -> None:
         """Set learning state and synchronize immediately.
 
@@ -102,16 +107,16 @@ class Processor(nn.Module):
         """Apply exponential smoothing at each frequency channel.
 
         For each frequency f, computes:
-            x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
+            x[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
         where alpha[f] = sigmoid(alpha_logit[f]) ∈ (0, 1).
 
         Args:
-            x_c: Compressed sensory input [B, n_x_c].
-            x_prev: Previous filtered state List[n_f] of [B, n_x_c].
+            x_c: Compressed sensory input [B, n_o_c].
+            x_prev: Previous filtered state List[n_f] of [B, n_o_c].
 
         Returns:
-            Filtered sensory (before normalization) List[n_f] of [B, n_x_c].
+            Filtered sensory (before normalization) List[n_f] of [B, n_o_c].
         """
         alpha = [torch.sigmoid(alpha_f) for alpha_f in self._alpha_logit]
         return [alpha_f * x_c + (1 - alpha_f) * x_prev[f] for f, alpha_f in enumerate(alpha)]
@@ -120,14 +125,14 @@ class Processor(nn.Module):
         """Process compressed sensory through temporal filtering.
 
         Applies exponential smoothing at each frequency:
-            x_f[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
+            x[f] = alpha[f] * x_c + (1 - alpha[f]) * x_prev[f]
 
         Args:
-            x_c: Compressed sensory input [B, n_x_c].
-            x_prev: Previous filtered state List[n_f] of [B, n_x_c].
+            x_c: Compressed sensory input [B, n_o_c].
+            x_prev: Previous filtered state List[n_f] of [B, n_o_c].
 
         Returns:
-            Multi-frequency filtered sensory List[n_f] of [B, n_x_c].
+            Multi-frequency filtered sensory List[n_f] of [B, n_o_c].
             Normalization applied later in Projection module.
         """
         return self.filter_temporal(x_c, x_prev)
@@ -152,14 +157,14 @@ if __name__ == "__main__":
 
     # Configuration
     f_initial = [0.8, 0.5, 0.3]  # Decay rates per frequency
-    n_x_c = 10  # Compressed sensory dimension
+    n_o_c = 10  # Compressed sensory dimension
     batch_size = 4
     n_steps = 5
 
     print(f"\nConfiguration:")
     print(f"  Frequencies: {len(f_initial)}")
     print(f"  Initial alpha values: {f_initial}")
-    print(f"  Compressed dimension: {n_x_c}")
+    print(f"  Compressed dimension: {n_o_c}")
     print(f"  Batch size: {batch_size}")
     print(f"  Time steps: {n_steps}")
 
@@ -169,30 +174,30 @@ if __name__ == "__main__":
     print(f"\n✓ Processor initialized (n_f={processor.n_f})")
 
     # Initialize previous state
-    x_prev = [torch.zeros(batch_size, n_x_c) for _ in range(processor.n_f)]
+    x_prev = [torch.zeros(batch_size, n_o_c) for _ in range(processor.n_f)]
     print(f"✓ Initial state: {[x.shape for x in x_prev]}")
 
     # Simulate temporal sequence
     print(f"\nTemporal filtering over {n_steps} steps:")
     for t in range(n_steps):
         # New compressed sensory input (random walk)
-        x_c = torch.randn(batch_size, n_x_c) * 0.1
+        x_c = torch.randn(batch_size, n_o_c) * 0.1
         if t > 0:
             x_c = x_c + x_prev[0] * 0.5  # Correlation with previous
 
         # Filter at all frequencies
         with torch.no_grad():
-            x_f = processor(x_c, x_prev)
+            x = processor(x_c, x_prev)
 
         # Show statistics
         print(f"  Step {t}: ", end="")
         for f in range(processor.n_f):
-            change = (x_f[f] - x_prev[f]).abs().mean().item()
+            change = (x[f] - x_prev[f]).abs().mean().item()
             print(f"freq_{f}_change={change:.4f} ", end="")
         print()
 
         # Update state
-        x_prev = x_f
+        x_prev = x
 
     print(f"\n✓ Final filtered representations:")
     for f in range(processor.n_f):

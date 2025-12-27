@@ -60,7 +60,7 @@ def plot_grounded_location_activity(
 
     Args:
         p_history: List[T] of [List[n_f] of [n_p[f]]] - place cell activity over time (single trajectory)
-        observations: List of T timesteps, each a tensor [n_x] - one-hot observation vectors (single trajectory)
+        observations: List of T timesteps, each a tensor [n_o] - one-hot observation vectors (single trajectory)
         locations: [T] - location indices
         frequencies: Frequency values per module
         n_cells_per_freq: Number of place cells per frequency module
@@ -171,7 +171,7 @@ def plot_outer_product_structure(
 
     Args:
         g_sample: Grid cell activity [n_f] of [n_g_sub[f]] (single sample)
-        x_sample: Sensory activity [n_f] of [n_x_c] (single sample)
+        x_sample: Sensory activity [n_f] of [n_o_c] (single sample)
         p_sample: Place cell activity [n_f] of [n_p[f]] (single sample)
         frequencies: Frequency values per module
         figsize: Figure size (width, height). Auto-computed if None
@@ -211,7 +211,7 @@ def plot_outer_product_structure(
 
     for f in range(n_f):
         g_vec = g_sample[f].detach().numpy()  # [n_g_sub[f]]
-        x_vec = x_sample[f].detach().numpy()  # [n_x_c]
+        x_vec = x_sample[f].detach().numpy()  # [n_o_c]
         p_vec = p_sample[f].detach().numpy()  # [n_p[f]]
 
         # Plot grid cells
@@ -230,8 +230,8 @@ def plot_outer_product_structure(
 
         # Plot place cells (reshaped to show structure)
         n_g = len(g_vec)
-        n_x = len(x_vec)
-        p_matrix = p_vec.reshape(n_g, n_x)  # Reshape to show conjunctive structure
+        n_o = len(x_vec)
+        p_matrix = p_vec.reshape(n_g, n_o)  # Reshape to show conjunctive structure
 
         im = axes[f, 2].imshow(p_matrix, aspect="auto", cmap="RdYlBu_r", interpolation="nearest")
         axes[f, 2].set_title(f"Place Cells p[{f}] = g ⊗ x\n(Conjunctive Coding)", fontsize=10, fontweight="bold")
@@ -260,7 +260,7 @@ def plot_place_cell_dynamics(
 
     Args:
         p_history: List[T] of [List[n_f] of [n_p[f]]] - place cell activity (single trajectory)
-        observations: List of T timesteps, each a tensor [n_x] - one-hot observation vectors (single trajectory)
+        observations: List of T timesteps, each a tensor [n_o] - one-hot observation vectors (single trajectory)
         frequencies: Frequency values per module
         n_cells_per_freq: Number of place cells per frequency module
         cell_indices: Specific cell indices to plot (defaults to middle cell per freq)

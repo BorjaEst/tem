@@ -34,8 +34,8 @@ classDiagram
     class Processor {
         +Parameter w_n
         +Parameter b_n
-        +filter(x_c, x_prev) x_f
-        +normalize(x_f) x_normalized
+        +filter(x_c, x_prev) x
+        +normalize(x) x_normalized
     }
     
     class TransitionModel {
@@ -52,7 +52,7 @@ classDiagram
         +Parameter w_x
         +Parameter w_g
         +Parameter w_pc
-        +forward(g, x_f) p_inf
+        +forward(g, x) p_inf
     }
     
     class AbstractLocInference {
@@ -100,7 +100,7 @@ classDiagram
     TEMModel --> Decoder : uses
     
     Encoder ..> Processor : x_c
-    Processor ..> GroundedLocInference : x_f
+    Processor ..> GroundedLocInference : x
     TransitionModel ..> AbstractLocInference : g_gen σ_gen
     AttractorDynamics ..> AbstractLocInference : p_x
     AbstractLocInference ..> GroundedLocInference : g_inf

@@ -20,14 +20,14 @@ sequenceDiagram
         Note over TEMModel,Mem: Inference Phase
         TEMModel->>Inf: inference x locations M_prev x_prev g_gen
         Inf->>Inf: encode x to x_c
-        Inf->>Inf: filter x_c x_prev to x_f
-        Inf->>Inf: tile x_f to x_
+        Inf->>Inf: filter x_c x_prev to x
+        Inf->>Inf: tile x to x_
         Inf->>Mem: retrieve p_x from M_inf using x_
         Mem-->>Inf: p_x
         Inf->>Inf: inf_g fuse g_gen p_x shiny
         Note over Inf: precision-weighted fusion
-        Inf->>Inf: inf_p g_inf tensor x_f to p_inf
-        Inf-->>TEMModel: x_f g_inf p_x p_inf
+        Inf->>Inf: inf_p g_inf tensor x to p_inf
+        Inf-->>TEMModel: x g_inf p_x p_inf
         
         Note over TEMModel,Mem: Generative Phase
         TEMModel->>Gen: generative M_prev p_inf g_inf g_gen

@@ -28,7 +28,7 @@ class SensoryProcessorProtocol(Protocol):
     """Minimal sensory processor interface for plotting."""
 
     n_f: int
-    n_x_c: int
+    n_o_c: int
     f_initial: List[float]
 
 
@@ -115,8 +115,8 @@ def plot_temporal_filtering(
     - Subsequent panels: Filtered output for each frequency channel
 
     Args:
-        x_c_history: List of T timesteps, each a tensor [n_x_c] (single trajectory)
-        x_f_history: List of T timesteps, each with n_f filtered tensors [n_x_c] (single trajectory)
+        x_c_history: List of T timesteps, each a tensor [n_o_c] (single trajectory)
+        x_f_history: List of T timesteps, each with n_f filtered tensors [n_o_c] (single trajectory)
         frequencies: List of frequency values
         title: Plot title
         figsize: Figure size per panel (width, height)
@@ -137,7 +137,7 @@ def plot_temporal_filtering(
     # Create subplot grid: original + all frequencies
     fig, axes = plt.subplots(n_f + 1, 1, figsize=(figsize[0], figsize[1] * (n_f + 1)), sharex=True)
 
-    # Plot original compressed sensory - stack list into [T, n_x_c]
+    # Plot original compressed sensory - stack list into [T, n_o_c]
     x_c_stacked = torch.stack(x_c_history)
     x_c_np = x_c_stacked.detach().cpu().numpy()
     im0 = axes[0].imshow(x_c_np.T, aspect="auto", cmap=cmap, interpolation="nearest")
@@ -147,7 +147,7 @@ def plot_temporal_filtering(
 
     # Plot each frequency channel
     for f_idx in range(n_f):
-        # Stack filtered tensors over time: [T, n_x_c]
+        # Stack filtered tensors over time: [T, n_o_c]
         x_f_t = torch.stack([x_f_history[t][f_idx] for t in range(T)])
         x_f_np = x_f_t.detach().cpu().numpy()
 
@@ -182,8 +182,8 @@ def plot_frequency_comparison(
     demonstrating the temporal smoothing effect.
 
     Args:
-        x_c_history: List of T timesteps, each a tensor [n_x_c] (single trajectory)
-        x_f_history: List of T timesteps with n_f filtered tensors [n_x_c] (single trajectory)
+        x_c_history: List of T timesteps, each a tensor [n_o_c] (single trajectory)
+        x_f_history: List of T timesteps with n_f filtered tensors [n_o_c] (single trajectory)
         frequencies: List of frequency values
         feature_idx: Which feature dimension to plot
         title: Plot title
@@ -243,8 +243,8 @@ def plot_normalization_effects(
     demonstrating the scale stabilization effect.
 
     Args:
-        x_f_raw: List of n_f raw filtered tensors [B, n_x_c]
-        x_f_normalized: List of n_f normalized tensors [B, n_x_c]
+        x_f_raw: List of n_f raw filtered tensors [B, n_o_c]
+        x_f_normalized: List of n_f normalized tensors [B, n_o_c]
         frequencies: List of frequency values
         title: Plot title
         figsize: Figure size per subplot (width, height)
@@ -313,7 +313,7 @@ def plot_multi_frequency_representation(
     at selected points in time.
 
     Args:
-        x_f_list: List of timesteps, each with n_f filtered tensors [B, n_x_c]
+        x_f_list: List of timesteps, each with n_f filtered tensors [B, n_o_c]
         frequencies: List of frequency values
         timesteps: Which timesteps to display
         title: Plot title
@@ -404,11 +404,11 @@ def plot_sensory_projection(
         matplotlib Figure with a heatmap of p-space activations over time.
 
     Example:
-        >>> # x_f_t: [n_f, n_x_f] per timestep; apply projection per timestep
+        >>> # x_f_t: [n_f, n_x] per timestep; apply projection per timestep
         >>> x_p_hist = []
         >>> for t in range(T):
         ...     # SensoryProjection expects a list of tensors per frequency with batch dim
-        ...     x_list = [x_f_t[f].unsqueeze(0) for f in range(n_f)]  # [1, n_x_f[f]]
+        ...     x_list = [x_f_t[f].unsqueeze(0) for f in range(n_f)]  # [1, n_x[f]]
         ...     x_p_f = projection(x_list)  # List of [1, n_p[f]]
         ...     x_p_hist.append([x_p_f[f].squeeze(0) for f in range(n_f)])
         >>> fig = plot_sensory_projection(x_p_hist, n_p_per_freq=params.n_p)
@@ -488,8 +488,8 @@ def plot_reconstruction_quality(
     - Bottom-right: Per-dimension reconstruction error (bar chart)
 
     Args:
-        observations: List[T] of observation tensors [n_x]
-        predictions: List[T] of prediction tensors [n_x]
+        observations: List[T] of observation tensors [n_o]
+        predictions: List[T] of prediction tensors [n_o]
         title: Figure title
         figsize: Figure size (width, height)
 
@@ -497,8 +497,8 @@ def plot_reconstruction_quality(
         Matplotlib figure with reconstruction quality analysis
     """
     # Convert to numpy arrays for plotting
-    obs_matrix = torch.stack(observations).detach().numpy()  # [T, n_x]
-    pred_matrix = torch.stack(predictions).detach().numpy()  # [T, n_x]
+    obs_matrix = torch.stack(observations).detach().numpy()  # [T, n_o]
+    pred_matrix = torch.stack(predictions).detach().numpy()  # [T, n_o]
 
     fig, axes = plt.subplots(2, 2, figsize=figsize)
 
@@ -534,8 +534,8 @@ def plot_reconstruction_quality(
 
     # Bottom-right: Per-dimension reconstruction accuracy
     dim_mse = ((obs_matrix - pred_matrix) ** 2).mean(axis=0)
-    n_x = obs_matrix.shape[1]
-    axes[1, 1].bar(range(n_x), dim_mse, color="purple", alpha=0.7)
+    n_o = obs_matrix.shape[1]
+    axes[1, 1].bar(range(n_o), dim_mse, color="purple", alpha=0.7)
     axes[1, 1].set_title("Reconstruction Error Per Dimension", fontsize=11, fontweight="bold")
     axes[1, 1].set_xlabel("Observation Dimension")
     axes[1, 1].set_ylabel("MSE")

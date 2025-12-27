@@ -106,7 +106,7 @@ class TEMModel(nn.Module):
     """Tolman-Eichenbaum Machine (TEM) for spatial navigation and memory.
 
     TEM combines two pathways:
-    - LEC pathway: Sensory processing (x → x_f → x_ → p_x)
+    - LEC pathway: Sensory processing (x → x → x_ → p_x)
     - MEC pathway: Abstract location processing (g → g_ → p_g)
 
     These converge in the hippocampus to form conjunctive place cells (p = g ⊗ x).
@@ -136,7 +136,7 @@ class TEMModel(nn.Module):
         """Initialize TEM state from first observation.
 
         Args:
-            x: Initial sensory observation [B, n_x] for device placement.
+            x: Initial sensory observation [B, n_o] for device placement.
 
         Returns:
             Initial TEM state with zero-initialized locations.
@@ -254,7 +254,7 @@ class Simulation(Iterator[TEMState]):
         self.__current_step = 0
 
         # Initialize state with first observation
-        first_x = walk.observations[0].unsqueeze(0)  # [n_x] -> [1, n_x]
+        first_x = walk.observations[0].unsqueeze(0)  # [n_o] -> [1, n_o]
         self.__state = self.__model.init_state(first_x)
 
     def __iter__(self) -> Iterator[TEMState]:
@@ -274,7 +274,7 @@ class Simulation(Iterator[TEMState]):
             raise StopIteration
 
         # Extract current timestep data
-        x = self.__walk.observations[self.__current_step].unsqueeze(0)  # [1, n_x]
+        x = self.__walk.observations[self.__current_step].unsqueeze(0)  # [1, n_o]
         # First timestep uses action index 0 (no previous action to learn from)
         a = self.__walk.actions[self.__current_step].unsqueeze(0)  # [1]
 

@@ -8,7 +8,7 @@ This example demonstrates the Lateral Entorhinal Cortex (LEC) components:
 - Decoder: Generating sensory predictions from grounded locations (place cells)
 
 The LEC pipeline:
-  Inference: x → Encoder → x_c → Processor → x_f → Projection → x̃
+  Inference: x → Encoder → x_c → Processor → x → Projection → x̃
   Generative: p → Decoder → x̂
 
 Note: This example uses a real environment with a random walk. For MEC spatial
@@ -17,25 +17,25 @@ processing, see mec_components.py.
 Architecture:
 -------------
     LEC Encoder (lec.encoder.Encoder):
-        - Input: One-hot observations [B, n_x]
-        - Output: Two-hot compressed sensory [B, n_x_c]
+        - Input: One-hot observations [B, n_o]
+        - Output: Two-hot compressed sensory [B, n_o_c]
         - Method: Lookup table mapping observation index to two-hot code
 
     LEC Processor (lec.processor.Processor):
-        - Input: Compressed sensory [B, n_x_c]
-        - Output: Multi-frequency filtered sensory List[n_f] of [B, n_x_c]
+        - Input: Compressed sensory [B, n_o_c]
+        - Output: Multi-frequency filtered sensory List[n_f] of [B, n_o_c]
         - Method: Per-frequency exponential smoothing + L2 normalization
         - Learnable parameters: Decay rates (alpha) for each frequency channel
 
     LEC Projection (lec.projection.Projection):
-        - Input: Filtered sensory List[n_f] of [B, n_x_c]
+        - Input: Filtered sensory List[n_f] of [B, n_o_c]
         - Output: Tiled sensory List[n_f] of [B, n_p[f]]
         - Method: Normalize, tile to hippocampal dimension, frequency weighting
         - Prepares sensory for conjunction: p = g ⊗ x̃
 
     LEC Decoder (lec.decoder.Decoder):
         - Input: Grounded location (place cells) List[n_f] of [B, n_p[f]]
-        - Output: Sensory predictions [B, n_x]
+        - Output: Sensory predictions [B, n_o]
         - Method: Linear projection + MLP decoding
         - Generates expected observations from hippocampal activity
 
@@ -119,14 +119,14 @@ class ExampleConfig(BaseSettings):
 # Model architecture; not configurable via CLI
 N_X = 25  # Observation space size (5x5, one per cell)
 N_X_C = 10  # Compressed dimension for two-hot encoding
-N_P = [10, 10, 8, 6, 6]  # Place cells per frequency (5 modules)
+N_P = [100, 80, 60, 50, 40]  # Place cells per frequency (5 modules)
 N_WALKS = 1  # Number of walks to generate
 WALK_LENGTH = 100  # Timesteps per walk
 F_INITIAL = [0.95, 0.7, 0.4, 0.2, 0.1]  # Initial frequency values
 DEVICE = torch.device("cpu")  # Change to "cuda" if GPU is available
 
 # Create context for LEC components
-W_tile = utils.create_tiling_matrices(N_P, [N_X_C] * len(F_INITIAL))
+W_tile = utils.create_tiling_matrices(N_P, N_X_C)
 
 # ==============================================================================
 # Main Experiment
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     walks = walk_gen.generate_walks(N_WALKS, WALK_LENGTH, policy=policy_gen.random_policy())
     walk = walks[0]
 
-    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_x]
+    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_o]
     locations = torch.as_tensor(walk.locations, dtype=torch.long)  # [T]
     print(f"  ✓ Generated walk: {len(walk)} timesteps")
     print()
@@ -179,19 +179,19 @@ if __name__ == "__main__":
     print("Phase 2: Initializing LEC components...")
 
     # LEC Encoder: Compresses observations using two-hot encoding
-    # x [B, n_x] → x_c [B, n_x_c]
+    # x [B, n_o] → x_c [B, n_o_c]
     encoder = lec.Encoder(N_X, N_X_C, config.encoder)
 
     # LEC Processor: Multi-frequency temporal filtering
-    # x_c → x_f (List[n_f] of [B, n_x_c])
+    # x_c → x (List[n_f] of [B, n_o_c])
     processor = lec.Processor(F_INITIAL, config.processor)
 
     # LEC Projection: Tiles sensory to hippocampal space
-    # x_f → x̃ (List[n_f] of [B, n_p[f]])
+    # x → x̃ (List[n_f] of [B, n_p[f]])
     projection = lec.Projection(W_tile, config.projection)
 
     # LEC Decoder: Generates sensory predictions from place cells
-    # p → x̂ [B, n_x]
+    # p → x̂ [B, n_o]
     decoder = lec.Decoder(N_X, W_tile, config.decoder)
 
     print(f"  ✓ Encoder: {N_X} → {N_X_C} (two-hot compression)")
@@ -218,21 +218,21 @@ if __name__ == "__main__":
     for t in range(WALK_LENGTH):
         # === INFERENCE PATHWAY ===
         # Step 1: Encode observation → compressed sensory
-        x_t = observations[t].unsqueeze(0)  # Add batch dimension: [n_x] → [1, n_x]
-        x_c = encoder(x_t)  # [1, n_x_c]
+        x_t = observations[t].unsqueeze(0)  # Add batch dimension: [n_o] → [1, n_o]
+        x_c = encoder(x_t)  # [1, n_o_c]
 
         # Step 2: Apply temporal filtering across frequencies
-        x_f = processor(x_c, x_f_prev)  # List[n_f] of [1, n_x_c]
+        x = processor(x_c, x_f_prev)  # List[n_f] of [1, n_o_c]
 
         # Step 3: Project to hippocampal p-space
-        x_ = projection(x_f)  # List[n_f] of [1, n_p[f]]
+        x_ = projection(x)  # List[n_f] of [1, n_p[f]]
 
         # Update previous state
-        x_f_prev = x_f
+        x_f_prev = x
 
         # Store for visualization
-        x_c_history.append(x_c[0])  # [1, n_x_c] → [n_x_c]
-        x_f_history.append([x[0] for x in x_f])  # All frequencies, remove batch dim
+        x_c_history.append(x_c[0])  # [1, n_o_c] → [n_o_c]
+        x_f_history.append([x[0] for x in x])  # All frequencies, remove batch dim
         x__history.append([x[0] for x in x_])  # All frequencies, remove batch dim
 
         # === GENERATIVE PATHWAY ===
@@ -243,7 +243,7 @@ if __name__ == "__main__":
 
         # Step 4: Decode place cells → sensory prediction
         x_hat = decoder(p_t)  # Returns SensoryPrediction
-        x_hat_history.append(x_hat.values[0][0])  # [1, n_x] → [n_x]
+        x_hat_history.append(x_hat.values[0][0])  # [1, n_o] → [n_o]
 
     print(f"  ✓ Processed {WALK_LENGTH} timesteps through LEC pipeline")
     print()
@@ -254,9 +254,9 @@ if __name__ == "__main__":
     print("Phase 4: Generating visualizations...")
 
     # Generate demo data for normalization comparison (5 consecutive timesteps)
-    observations_stacked = torch.stack(observations)  # List[T] of [n_x] → [T, n_x]
+    observations_stacked = torch.stack(observations)  # List[T] of [n_o] → [T, n_o]
     midpoint = WALK_LENGTH // 2
-    x_c_demo = encoder(observations_stacked[midpoint : midpoint + 5])  # [5, n_x_c]
+    x_c_demo = encoder(observations_stacked[midpoint : midpoint + 5])  # [5, n_o_c]
     x_prev_demo = [torch.zeros(5, N_X_C, device=DEVICE) for _ in range(len(F_INITIAL))]
 
     # Compare raw filtering vs normalized filtering (using projection.normalize)
@@ -303,14 +303,14 @@ if __name__ == "__main__":
     fig6, axes = plt.subplots(3, 1, figsize=(14, 10))
 
     # Original observations
-    obs_matrix = torch.stack(observations).detach().numpy()  # [T, n_x]
+    obs_matrix = torch.stack(observations).detach().numpy()  # [T, n_o]
     axes[0].imshow(obs_matrix.T, aspect="auto", cmap="Blues", interpolation="nearest")
     axes[0].set_title("Original Observations (x)", fontsize=12, fontweight="bold")
     axes[0].set_ylabel("Observation Dimension", fontsize=10)
     axes[0].set_xlabel("Time Step", fontsize=10)
 
     # Decoded predictions
-    x_hat_matrix = torch.stack(x_hat_history).detach().numpy()  # [T, n_x]
+    x_hat_matrix = torch.stack(x_hat_history).detach().numpy()  # [T, n_o]
     axes[1].imshow(x_hat_matrix.T, aspect="auto", cmap="Oranges", interpolation="nearest")
     axes[1].set_title("Decoder Predictions (x̂ from p)", fontsize=12, fontweight="bold")
     axes[1].set_ylabel("Observation Dimension", fontsize=10)
@@ -355,7 +355,7 @@ if __name__ == "__main__":
     print(f"    ↓ LEC Encoder (two-hot compression)")
     print(f"  Stage 1: {N_X_C}-dim compressed sensory (x_c)")
     print(f"    ↓ LEC Processor ({len(F_INITIAL)} frequencies: {F_INITIAL})")
-    print(f"  Stage 2: Multi-frequency filtered sensory (x_f) - List[{len(F_INITIAL)}] of [batch, {N_X_C}]")
+    print(f"  Stage 2: Multi-frequency filtered sensory (x) - List[{len(F_INITIAL)}] of [batch, {N_X_C}]")
     print(f"    ↓ LEC Projection (tiling + weighting)")
     print(f"  Output: Hippocampal-ready sensory (x̃) - List[{len(F_INITIAL)}] of [batch, n_p[f]]")
     print(f"          Dimensions per frequency: {N_P}")

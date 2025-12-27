@@ -26,7 +26,7 @@ class DecoderConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
 
-    hidden_multiplier: int = Field(default=20, ge=1, frozen=True, description="Hidden dim = hidden_multiplier * n_x_c")
+    hidden_multiplier: int = Field(default=20, ge=1, frozen=True, description="Hidden dim = hidden_multiplier * n_o_c")
     activation: str = Field(default="elu", frozen=True, description="Activation function name")
     use_bias: bool = Field(default=True, frozen=True, description="Use bias in MLP layers")
 
@@ -34,7 +34,7 @@ class DecoderConfig(BaseModel):
 class DecoderContext(Protocol):
     """Protocol defining required parameters for Decoder initialization."""
 
-    n_x: int  # Number of sensory observation neurons x
+    n_o: int  # Number of sensory observation neurons x
     W_tile: List[Matrix]  # Tiling matrices for each frequency
 
 
@@ -49,41 +49,41 @@ class Decoder(nn.Module):
     3. Decoding: MLP expansion to full observation space (x_c → x̂)
 
     Args:
-        n_x: Number of sensory observation neurons
+        n_o: Number of sensory observation neurons
         W_tile: Tiling matrices shared from parent LECModel
         config: Decoder configuration parameters
     """
 
-    def __init__(self, n_x: int, W_tile: List[Matrix], config: DecoderConfig):
+    def __init__(self, n_o: int, W_tile: List[Matrix], config: DecoderConfig):
         """Initialize Decoder module.
 
         Args:
-            n_x: Number of sensory observation neurons.
+            n_o: Number of sensory observation neurons.
             W_tile: Tiling matrices for projection (managed by parent LECModel).
             config: Decoder configuration parameters.
         """
         super().__init__()
         self._config = config
         self._W_tile = W_tile
-        self._n_x = n_x
+        self._n_x = n_o
 
         # Learnable sensory decoding parameters
-        self._w_x = nn.Parameter(torch.ones(1, self.n_x_c))
-        self._b_x = nn.Parameter(torch.zeros(1, self.n_x_c))
+        self._w_x = nn.Parameter(torch.ones(1, self.n_o_c))
+        self._b_x = nn.Parameter(torch.zeros(1, self.n_o_c))
 
         # MLP decoder from compressed sensory to full observation
         activation_fn = utils.get_activation_function(config.activation.lower())
-        hidden_dim = config.hidden_multiplier * self.n_x_c  # Hidden layer size
+        hidden_dim = config.hidden_multiplier * self.n_o_c  # Hidden layer size
         bias = (True, True) if config.use_bias else (False, False)
-        self._mlp_decoder = MLP(self.n_x_c, n_x, (activation_fn, None), hidden_dim, bias)
+        self._mlp_decoder = MLP(self.n_o_c, n_o, (activation_fn, None), hidden_dim, bias)
 
     @property
-    def n_x(self) -> int:
+    def n_o(self) -> int:
         """Number of sensory observation neurons x."""
         return self._n_x
 
     @property
-    def n_x_c(self) -> int:
+    def n_o_c(self) -> int:
         """Number of compressed sensory neurons x_c."""
         return self._W_tile[0].size(0)
 
@@ -97,7 +97,7 @@ class Decoder(nn.Module):
             p: Grounded locations (place cells) List[n_f] of (batch, n_p[f]).
 
         Returns:
-            Compressed sensory representation (batch, n_x_c).
+            Compressed sensory representation (batch, n_o_c).
 
         Note:
             We only untile the highest frequency for decoding, as it contains
@@ -109,7 +109,7 @@ class Decoder(nn.Module):
         """Decode compressed sensory to full observation predictions.
 
         Args:
-            x: Compressed sensory representation (batch, n_x_c).
+            x: Compressed sensory representation (batch, n_o_c).
 
         Returns:
             Sensory prediction with observation probabilities and logits.
@@ -151,25 +151,25 @@ if __name__ == "__main__":
     print("=" * 80)
 
     # Configuration
-    n_x = 45  # Observation space size
-    n_x_c = 10  # Compressed dimension
+    n_o = 45  # Observation space size
+    n_o_c = 10  # Compressed dimension
     n_p = [96, 80, 64]  # Place cells per frequency
     batch_size = 4
 
     print(f"\nConfiguration:")
-    print(f"  Observation space: {n_x}")
-    print(f"  Compressed dimension: {n_x_c}")
+    print(f"  Observation space: {n_o}")
+    print(f"  Compressed dimension: {n_o_c}")
     print(f"  Place cells per frequency: {n_p}")
     print(f"  Batch size: {batch_size}")
 
     # Create tiling matrices (normally from context)
-    W_tile = [torch.randn(n_x_c, n_p_f) for n_p_f in n_p]
+    W_tile = [torch.randn(n_o_c, n_p_f) for n_p_f in n_p]
     print(f"\n✓ Tiling matrices: {[W.shape for W in W_tile]}")
 
     # Create decoder
     config = DecoderConfig()
-    decoder = Decoder(n_x, W_tile, config)
-    print(f"✓ Decoder initialized (n_x={decoder.n_x}, n_x_c={decoder.n_x_c})")
+    decoder = Decoder(n_o, W_tile, config)
+    print(f"✓ Decoder initialized (n_o={decoder.n_o}, n_o_c={decoder.n_o_c})")
 
     # Create grounded locations (place cells)
     p = [torch.randn(batch_size, n_p_f) for n_p_f in n_p]

@@ -165,7 +165,7 @@ class Model(TEMModel):
         walk : List[(locations, observations, actions), ...]
             List of walk steps, where each step is a tuple of:
             - locations: List of location dicts for each batch element
-            - observations: Stacked observation tensor [batch, n_x]
+            - observations: Stacked observation tensor [batch, n_o]
             - actions: List of action ints (or None) for each batch element
         prev_iter : List[Iteration], optional
             List of Iteration objects from previous walk segment.
@@ -202,7 +202,7 @@ class Model(TEMModel):
         """Single TEM iteration matching legacy interface.
 
         Args:
-            x: Sensory observations [batch, n_x].
+            x: Sensory observations [batch, n_o].
             locations: List of location dicts.
             a_prev: Previous actions (list of ints or None).
             M_prev: Previous memory [M_gen, M_inf].
@@ -267,7 +267,7 @@ class Model(TEMModel):
         g_inf = [torch.stack([self.g_init[f] for _ in range(batch_size)]) for f in range(self.hyper["n_f"])]
 
         # Initialize filtered observations as zeros
-        x_inf = [torch.zeros((batch_size, self.hyper["n_x_f"][f]), device=x.device) for f in range(self.hyper["n_f"])]
+        x_inf = [torch.zeros((batch_size, self.hyper["n_x"][f]), device=x.device) for f in range(self.hyper["n_f"])]
 
         return Iteration(g=g, x=x, a=a, M=M, x_inf=x_inf, g_inf=g_inf)
 
@@ -327,12 +327,12 @@ class Model(TEMModel):
             g_gen: Generated abstract location.
 
         Returns:
-            Tuple of (x_f, g, p_x, p).
+            Tuple of (x, g, p_x, p).
         """
         # Compress and filter sensory observation (LEC pathway)
         x_c = self.f_c(x)
-        x_f = self.x_prev2x(x_prev, x_c)
-        x_ = self.x2x_(x_f)
+        x = self.x_prev2x(x_prev, x_c)
+        x_ = self.x2x_(x)
 
         # Retrieve from memory using sensory input
         p_x = self.attractor(x_, M_prev[1], for_inference=True) if self.hyper["use_p_inf"] else None
@@ -346,7 +346,7 @@ class Model(TEMModel):
         # Infer grounded location from sensory and abstract
         p = self.inf_p(x_, g_)
 
-        return x_f, g, p_x, p
+        return x, g, p_x, p
 
     def generative(self, M_prev, p_inf, g_inf, g_gen):
         """Generative pathway: abstract location → sensory prediction.
@@ -422,10 +422,10 @@ class Model(TEMModel):
         # Use LEC processor - note argument order: (x_c, x_prev)
         return self.lec.processor(x_c, x_prev)
 
-    def x2x_(self, x_f):
+    def x2x_(self, x):
         """Project filtered observation to hippocampal input."""
         # Use LEC projection with tiling matrices
-        return self.lec.projection(x_f, self.lec.get_W_tile())
+        return self.lec.projection(x, self.lec.get_W_tile())
 
     def attractor(self, x_, M, for_inference=False):
         """Memory retrieval via attractor dynamics."""

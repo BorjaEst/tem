@@ -10,8 +10,8 @@ Pipeline Stages (TEM Manuscript - Inference):
 Following the exact inference steps from the TEM manuscript:
 
 1. Compress sensory observation: x_c = f_c(x)
-2. Temporally filter sensorium: x_f = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
-3. Sensory input to hippocampus: ~x = W_tile·w_p·f_n(x_f)
+2. Temporally filter sensorium: x = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
+3. Sensory input to hippocampus: ~x = W_tile·w_p·f_n(x)
 4. Retrieve memory: p_x = attractor(~x, M_{t-1})
 5. Infer entorhinal: g ~ q_φ(g | p_x, g_{t-1}, a_t)
 6. Entorhinal input to hippocampus: ~g = W_repeat·f_down(g)
@@ -23,7 +23,7 @@ Data Flow (Manuscript Notation):
 --------------------------------
     x (observation)
     → x_c (compressed sensory via f_c)
-    → x_f (temporally filtered per frequency)
+    → x (temporally filtered per frequency)
     → ~x (sensory input to hippocampus via W_tile)
     → p_x (memory retrieval via attractor dynamics)
     → g (inferred entorhinal from p_x, g_{t-1}, a_t)
@@ -37,7 +37,7 @@ Usage Examples:
     python examples/tem_inference.py
 
     # Longer walk with different architecture
-    python examples/tem_inference.py --walk_length 200 --n_x_c 12
+    python examples/tem_inference.py --walk_length 200 --n_o_c 12
 
     # Different grid size and observation mode
     python examples/tem_inference.py --grid_size 7 --observation_mode tiled
@@ -80,7 +80,7 @@ class ExampleConfig(BaseSettings):
 
     This config implements all inference-related protocols:
     - EncoderParams, ProcessorParams
-    - GroundedLocConfig, ProjectionParams
+    - GroundedLocConfig, ProjectionConfig
     - AbstractInferenceParams
     - MemoryStorageParams, AttractorConfig
     """
@@ -97,7 +97,7 @@ class ExampleConfig(BaseSettings):
     # Architecture configuration
     f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
     n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
-    n_x_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
+    n_o_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
 
     # Memory configuration
     eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
@@ -127,8 +127,8 @@ if __name__ == "__main__":
     # Create config objects with proper field mapping
     environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
     model_config = ModelConfig(
-        n_x=environment_config.n_locations,
-        n_x_c=config.n_x_c,
+        n_o=environment_config.n_locations,
+        n_o_c=config.n_o_c,
         n_g_subsampled=config.n_g_subsampled,
         f_initial=config.f_initial,
         eta=config.eta,
@@ -137,13 +137,13 @@ if __name__ == "__main__":
     )
 
     # Compute connectivity matrices from model config
-    two_hot_table = utils.create_two_hot_table(model_config.n_x, model_config.n_x_c)
+    two_hot_table = utils.create_two_hot_table(model_config.n_o, model_config.n_o_c)
     g_downsample = utils.create_g_downsample(model_config.n_g, model_config.n_g_subsampled_combined)
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_extended)
     mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
     mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
-    W_repeat = utils.create_repeat_matrices(model_config.n_g_subsampled_combined, model_config.n_x_f)
-    W_tile = utils.create_tiling_matrices(model_config.n_g_subsampled_combined, model_config.n_x_f)
+    W_repeat = utils.create_repeat_matrices(model_config.n_g_subsampled_combined, model_config.n_x)
+    W_tile = utils.create_tiling_matrices(model_config.n_g_subsampled_combined, model_config.n_o_c)
 
     print("=" * 80)
     print("Complete TEM Inference Pipeline")
@@ -152,7 +152,7 @@ if __name__ == "__main__":
     print(f"  Environment: {config.grid_size}×{config.grid_size} grid ({config.observation_mode} observations)")
     print(f"  Walk length: {config.walk_length} timesteps")
     print(f"  Frequencies: {model_config.n_f} ({model_config.f_initial[0]:.2f} to {model_config.f_initial[-1]:.2f})")
-    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_x_c={model_config.n_x_c}")
+    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_o_c={model_config.n_o_c}")
     print()
 
     # =========================================================================
@@ -169,7 +169,7 @@ if __name__ == "__main__":
     walks = walk_gen.generate_walks(n_walks=1, walk_length=config.walk_length, policy=policy)
     walk = walks[0]
 
-    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_x]
+    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_o]
     locations = torch.as_tensor(walk.locations, dtype=torch.long)  # [T]
     print(f"  ✓ Generated walk: {len(walk)} timesteps")
     print()
@@ -183,9 +183,9 @@ if __name__ == "__main__":
     encoder = lec.encoder.Encoder(model_config)
     processor = lec.processor.Processor(model_config)
     lec_projection = lec.projection.Projection(model_config)
-    print(f"  ✓ Encoder: {model_config.n_x} → {model_config.n_x_c} (two-hot)")
+    print(f"  ✓ Encoder: {model_config.n_o} → {model_config.n_o_c} (two-hot)")
     print(f"  ✓ Processor: {model_config.n_f} frequency channels")
-    print(f"  ✓ Projection: x_f → x_ (W_tile expansion + w_p gating)")
+    print(f"  ✓ Projection: x → x_ (W_tile expansion + w_p gating)")
     print()
 
     # Abstract location transition model
@@ -229,7 +229,7 @@ if __name__ == "__main__":
     print("Phase 4: Running complete inference pipeline...")
 
     x_c_history = []  # x_c: compressed sensory observations
-    x_f_history = []  # x_f: temporally filtered sensory
+    x_f_history = []  # x: temporally filtered sensory
     x__history = []  # ~x: sensory input to hippocampus
     p_x_history = []  # p_x: retrieved hippocampal patterns from sensory
     g_history = []  # g: inferred entorhinal (abstract location)
@@ -237,20 +237,20 @@ if __name__ == "__main__":
     g__history = []  # ~g: entorhinal input to hippocampus
     p_history = []  # p: inferred hippocampus (grounded location)
 
-    x_prev = [torch.zeros(1, model_config.n_x_c) for _ in range(model_config.n_f)]
+    x_prev = [torch.zeros(1, model_config.n_o_c) for _ in range(model_config.n_f)]
     g_prev = initial_transition.mean  # Extract mean from Transition
     for t in range(config.walk_length):
         # Step 1 (Manuscript): Compress sensory observation x_c = f_c(x)
-        x = observations[t].unsqueeze(0)  # [n_x] → [B, n_x]
-        x_c = encoder(x)  # [B, n_x_c]
+        x = observations[t].unsqueeze(0)  # [n_o] → [B, n_o]
+        x_c = encoder(x)  # [B, n_o_c]
         x_c_history.append(x_c[0])
 
-        # Step 2 (Manuscript): Temporally filter sensorium x_f = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
-        x_f = x_prev = processor(x_c, x_prev)  # List[n_f] of [B, n_x_c]
-        x_f_history.append([x[0] for x in x_f])
+        # Step 2 (Manuscript): Temporally filter sensorium x = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
+        x = x_prev = processor(x_c, x_prev)  # List[n_f] of [B, n_o_c]
+        x_f_history.append([x[0] for x in x])
 
-        # Step 3 (Manuscript): Sensory input to hippocampus ~x = W_tile·w_p·f_n(x_f)
-        x_ = lec_projection(x_f, W_tile)  # List[n_f] of [B, n_p[f]]
+        # Step 3 (Manuscript): Sensory input to hippocampus ~x = W_tile·w_p·f_n(x)
+        x_ = lec_projection(x, W_tile)  # List[n_f] of [B, n_p[f]]
         x__history.append([x[0] for x in x_])
 
         # Step 4 (Manuscript): Retrieve memory p_x = attractor(~x, M_{t-1})
@@ -352,12 +352,12 @@ if __name__ == "__main__":
     print()
     print("Pipeline Flow (Manuscript Steps):")
     print("=" * 80)
-    print(f"Input:  x - {model_config.n_x}-dim observations ({config.observation_mode} mode)")
+    print(f"Input:  x - {model_config.n_o}-dim observations ({config.observation_mode} mode)")
     print(f"  ↓ Step 1: f_c(x) - Compress sensory")
-    print(f"Stage 1: x_c - {model_config.n_x_c}-dim compressed sensory")
+    print(f"Stage 1: x_c - {model_config.n_o_c}-dim compressed sensory")
     print(f"  ↓ Step 2: (1-α_f)·x_f_{{t-1}} + α_f·x_c_t - Temporal filter")
-    print(f"Stage 2: x_f - Multi-frequency filtered sensory ({model_config.n_f} frequencies)")
-    print(f"  ↓ Step 3: W_tile·w_p·f_n(x_f) - Project to hippocampus")
+    print(f"Stage 2: x - Multi-frequency filtered sensory ({model_config.n_f} frequencies)")
+    print(f"  ↓ Step 3: W_tile·w_p·f_n(x) - Project to hippocampus")
     print(f"Stage 3: ~x - Sensory input to hippocampus - {model_config.n_p}")
     print(f"  ↓ Step 4: attractor(~x, M_{{t-1}}) - Retrieve memory")
     print(f"Stage 4: p_x - Retrieved hippocampal patterns - {model_config.n_p}")

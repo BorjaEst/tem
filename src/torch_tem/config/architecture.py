@@ -23,8 +23,8 @@ class ModelConfig(BaseModel):
     # ===================================================================================
 
     batch_size: int = Field(default=4, ge=1, description="Batch size for training and inference")
-    n_x: int = Field(default=45, ge=1, description="Number of sensory observation neurons x")
-    n_x_c: int = Field(default=10, ge=1, description="Number of compressed sensory neurons x_c")
+    n_o: int = Field(default=45, ge=1, description="Number of sensory observation neurons x")
+    n_o_c: int = Field(default=10, ge=1, description="Number of compressed sensory neurons x_c")
     n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 10, 8, 6, 6], description="Subsampled grid cells per frequency module")
     n_ovc: List[int] = Field(default_factory=list, description="Object-vector cells per module; merged into grid modules when separate_ovc=False")
     f_initial: List[float] = Field(default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01], description="Base module frequencies (higher = higher spatial frequency)")
@@ -100,20 +100,20 @@ class ModelConfig(BaseModel):
     def n_g(self) -> List[int]:
         return [3 * g for g in self.n_g_subsampled_combined]
 
-    @computed_field(description="Temporally filtered sensory neurons x_f per frequency (shares n_x_c)")
+    @computed_field(description="Temporally filtered sensory neurons x per frequency (shares n_o_c)")
     @property
-    def n_x_f(self) -> List[int]:
-        return [self.n_x_c for _ in range(self.n_f)]
+    def n_x(self) -> List[int]:
+        return [self.n_o_c for _ in range(self.n_f)]
 
-    @computed_field(description="Hippocampal grounded location neurons p per frequency (outer product g × x_f)")
+    @computed_field(description="Hippocampal grounded location neurons p per frequency (outer product g × x)")
     @property
     def n_p(self) -> List[int]:
-        return [g * x for g, x in zip(self.n_g_subsampled_combined, self.n_x_f)]
+        return [g * x for g, x in zip(self.n_g_subsampled_combined, self.n_x)]
 
     @computed_field(description="Two-hot encoding lookup table for sensory compression")
     @property
     def two_hot_table(self) -> List[Tensor]:
-        return utils.create_two_hot_table(self.n_x, self.n_x_c)
+        return utils.create_two_hot_table(self.n_o, self.n_o_c)
 
     @computed_field(description="Number of attractor iterations for memory retrieval (equals n_f_g)")
     @property
@@ -148,7 +148,7 @@ class ModelConfig(BaseModel):
         - When OVCs are separate, the extended frequency list
           (``f_extended``) matches the total number of modules
           (``n_f``).
-        - ``n_x_c`` is large enough to support two-hot encoding of all observations.
+        - ``n_o_c`` is large enough to support two-hot encoding of all observations.
         """
 
         if len(self.f_initial) != len(self.n_g_subsampled):
@@ -158,15 +158,15 @@ class ModelConfig(BaseModel):
             raise ValueError("When separate_ovc is True and n_ovc is non-empty, the " "extended frequency list (f_extended) must have " "one entry per module (n_f).")
 
         # Validate two-hot encoding capacity
-        max_two_hot_codes = int(math.comb(self.n_x_c, 2))
-        if self.n_x > max_two_hot_codes:
-            min_n_x_c = math.ceil((1 + math.sqrt(1 + 8 * self.n_x)) / 2)
+        max_two_hot_codes = int(math.comb(self.n_o_c, 2))
+        if self.n_o > max_two_hot_codes:
+            min_n_x_c = math.ceil((1 + math.sqrt(1 + 8 * self.n_o)) / 2)
             raise ValueError(
-                f"Insufficient two-hot encoding capacity: n_x={self.n_x} observations "
-                f"requires at least C(n_x_c, 2)={self.n_x} unique codes, "
-                f"but n_x_c={self.n_x_c} only provides C({self.n_x_c}, 2)={max_two_hot_codes} codes. "
-                f"Minimum required: n_x_c={min_n_x_c}. "
-                f"Solutions: (1) Increase n_x_c to {min_n_x_c}+, "
+                f"Insufficient two-hot encoding capacity: n_o={self.n_o} observations "
+                f"requires at least C(n_o_c, 2)={self.n_o} unique codes, "
+                f"but n_o_c={self.n_o_c} only provides C({self.n_o_c}, 2)={max_two_hot_codes} codes. "
+                f"Minimum required: n_o_c={min_n_x_c}. "
+                f"Solutions: (1) Increase n_o_c to {min_n_x_c}+, "
                 f"(2) Use tiled/random observation_mode to reduce unique observations, "
                 f"(3) Reduce grid size."
             )

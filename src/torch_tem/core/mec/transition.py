@@ -4,6 +4,7 @@ from typing import List, Optional, Protocol, Tuple
 
 import torch
 import torch.nn as nn
+from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import truncnorm
 from torch import Tensor
 
@@ -12,7 +13,7 @@ from torch_tem.core.mlp import MLP
 from torch_tem.types import AbstractLocation, Transition
 
 
-class TransitionParams(Protocol):
+class TransitionConfig(Protocol):
     """Minimal interface for TransitionModel.
 
     The TransitionModel requires architectural parameters to:
@@ -54,7 +55,7 @@ class TransitionModel(nn.Module):
     - Uncertainty estimation (sigma_g)
     """
 
-    def __init__(self, params: TransitionParams):
+    def __init__(self, params: TransitionConfig):
         super().__init__()
         self.n_f = n_f = params.n_f
         self.n_g = params.n_g

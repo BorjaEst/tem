@@ -35,10 +35,11 @@ This implementation follows the style/patterns of other TEM modules and
 is designed to be testable with simple parameter stubs.
 """
 
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
 from torch_tem.core.mlp import MLP
@@ -46,21 +47,24 @@ from torch_tem.types import AbstractLocation, GroundedLocation, Transition
 from torch_tem.utils.fusion import fuse_transitions, sample_transition
 
 
-class AbstractLocParams(Protocol):
-    """Architecture parameters needed by AbstractLocInference."""
+class AbstractLocConfig(BaseModel):
+    """Architecture parameters needed by AbstractLocInference.
+    ...
+    """
 
-    n_f: int
-    n_g: List[int]
-    n_g_subsampled: List[int]
-    n_p: List[int]  # Grounded location dimensions per frequency
-    g_init_std: float
-    g_mem_std: float
-    p2g_scale_offset: float
-    p2g_sig_val: float
-    do_sample: bool
-    separate_ovc: bool
-    n_f_g: int
-    n_f_ovc: int
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    # Architecture parameters
+    hidden_multiplier: int = Field(default=20, ge=1, frozen=True, description="Hidden dim = hidden_multiplier * n_o_c")
+
+    #
+    g_init_std: float = Field(default=0.5, gt=0, description="Std of initial abstract location g (before learning)")
+    g_mem_std: float = Field(default=0.1, gt=0, description="Std for MLP hidden→output weights in g transition network")
+
+    # Inference behavior
+    p2g_scale_offset: float = Field(default=0.0, ge=0, description="Variance offset scaling for memory path during abstract inference (controls memory influence)")
+    p2g_sig_val: float = Field(default=10000.0, ge=0, description="Base variance magnitude for memory-derived abstract location uncertainty")
+    do_sample: bool = Field(default=False, description="If False, use distribution means instead of sampling (no observation noise)")
 
 
 class AbstractLocInference(nn.Module):
@@ -81,27 +85,18 @@ class AbstractLocInference(nn.Module):
         allowing correction of path integration drift via loop closure.
     """
 
-    def __init__(self, params: AbstractLocParams):
+    def __init__(self, n_g: List[int], n_p: List[int], config: AbstractLocConfig):
         """Initialize abstract location inference.
 
         Args:
-            params: Architecture configuration (n_f, n_g, n_g_subsampled, g_init_std, g_mem_std, p2g_scale_offset, p2g_sig_val)
+            ...
         """
         super().__init__()
-        self.n_f = params.n_f
-        self.n_g = params.n_g
-        self.n_g_subsampled = list(params.n_g_subsampled)
-        self.p2g_scale_offset = params.p2g_scale_offset
-        self.p2g_sig_val = params.p2g_sig_val
-        self.do_sample = params.do_sample
-        self.separate_ovc = params.separate_ovc
-        self.n_f_g = params.n_f_g
-        self.n_f_ovc = params.n_f_ovc
+        self._config = config
 
         # MLPs for memory-based g inference
         # Project p_x (grounded location from sensory retrieval) to g_mem
-        n_p_per_freq = [sum(params.n_p)] * self.n_f  # Each frequency gets full concatenated p_x
-        self.mlp_mu_g_mem = MLP(in_dim=n_p_per_freq, out_dim=self.n_g, hidden_dim=[2 * g for g in self.n_g])
+        self.mlp_mu_g_mem = MLP(in_dim=[sum(n_p)] * len(n_p), out_dim=n_g, hidden_dim=[config.hidden_multiplier * g for g in n_g])
 
         # Initialize with small random weights
         self.mlp_mu_g_mem.set_weights(-1, [torch.randn_like(w) * params.g_mem_std for w in self.mlp_mu_g_mem.get_weights(-1)])
@@ -112,12 +107,22 @@ class AbstractLocInference(nn.Module):
         n_ovc_modules = self.n_f_ovc if self.separate_ovc else self.n_f
         ovc_start = self.n_f_g if self.separate_ovc else 0
         ovc_dims = self.n_g[ovc_start:]
-        self.mlp_mu_g_shiny = MLP(in_dim=[1] * n_ovc_modules, out_dim=ovc_dims, hidden_dim=[2 * g for g in ovc_dims])
-        self.mlp_sigma_g_shiny = MLP(in_dim=[1] * n_ovc_modules, out_dim=ovc_dims, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in ovc_dims])
+        self.mlp_mu_g_shiny = MLP(in_dim=[1] * n_ovc_modules, out_dim=ovc_dims, hidden_dim=[config.hidden_multiplier * g for g in ovc_dims])
+        self.mlp_sigma_g_shiny = MLP(in_dim=[1] * n_ovc_modules, out_dim=ovc_dims, activation=[torch.tanh, torch.exp], hidden_dim=[config.hidden_multiplier * g for g in ovc_dims])
 
         # Learnable initial g for new environments
-        self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
-        self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * params.g_init_std) for g in self.n_g])
+        self.g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * config.g_init_std) for g in n_g])
+        self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.randn(g) * config.g_init_std) for g in n_g])
+
+    @property
+    def n_f(self) -> int:
+        """Number of frequency modules."""
+        return len(self.n_g)
+
+    @property
+    def n_g(self) -> List[int]:
+        """Number of abstract location neurons per frequency."""
+        return self.mlp_mu_g_mem.out_dim
 
     def forward(self, g_gen: Transition, p_x: Optional[GroundedLocation], locations: List[Dict[str, Any]]) -> AbstractLocation:
         """Infer abstract location by fusing path integration with memory.

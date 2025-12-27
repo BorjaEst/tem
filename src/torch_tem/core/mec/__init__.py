@@ -1,29 +1,40 @@
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Protocol
 
 import torch
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor, nn
 
+from torch_tem.core.mec.abstract import AbstractLocConfig, AbstractLocInference
+from torch_tem.core.mec.projection import Projection, ProjectionConfig
+from torch_tem.core.mec.transition import Transition, TransitionConfig
 from torch_tem.types import AbstractLocation, GroundedLocation, MultiScaleCode
 
-from . import abstract, projection, transition
-from .transition import Transition
+
+class MECConfig(BaseModel):
+    """MEC model configuration parameters."""
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    # Learning projection matrices
+    learn_W_down: bool = Field(default=False, description="If True, downsampling matrices W_down are learnable")
+    learn_W_repeat: bool = Field(default=False, description="If True, expansion matrices W_repeat are learnable")
+
+    # Submodule configurations
+    abstract: AbstractLocConfig = Field(default_factory=AbstractLocConfig, description="Abstract location inference configuration")
+    transition: TransitionConfig = Field(default_factory=TransitionConfig, description="Transition model configuration")
+    projection: ProjectionConfig = Field(default_factory=ProjectionConfig, description="Projection configuration")
 
 
-class MECParams(abstract.AbstractLocParams, transition.TransitionParams):
+class MECContext(Protocol):
     """Protocol for MEC model initialization parameters.
 
-    Combines parameters needed for abstract location inference and transitions.
-
     Attributes:
-        n_g: Abstract location dimensions per frequency module.
-        n_f: Number of frequency modules.
-        batch_size: Batch size for state initialization.
+        ...
     """
 
-    n_g: List[int]
-    n_f: int
-    batch_size: int
+    W_down: List[Tensor]
+    W_repeat: List[Tensor]
 
 
 @dataclass
@@ -61,27 +72,41 @@ class MECModel(nn.Module):
     - Projection to hippocampal input space
     """
 
-    def __init__(self, params: MECParams):
-        """Initialize MEC model.
-
-        Args:
-            params: Configuration with n_g, n_f, and all submodule parameters.
-        """
+    def __init__(self, context: MECContext, config: MECConfig):
+        """Initialize MEC model."""
         super().__init__()
-        self.transition = transition.TransitionModel(params)  # Transition model module
-        self.abstract = abstract.AbstractLocInference(params)  # Abstract location inference module
-        self.projection = projection.Projection(params)  # Projection head for MEC pathway
-        self.batch_size = params.batch_size
+        self._config = config
+
+        # Register W_down ...
+        p = [nn.Parameter(matrix, requires_grad=config.learn_W_down) for matrix in context.W_down]
+        self._W_down = nn.ParameterList(p)
+
+        # Register W_repeat ...
+        p = [nn.Parameter(matrix, requires_grad=config.learn_W_repeat) for matrix in context.W_repeat]
+        self._W_repeat = nn.ParameterList(p)
+
+        self.projection = Projection(self.W_down, self.W_repeat, config.projection)
+        n_g, n_p = self.projection.n_g, self.projection.n_p
+        self.abstract = AbstractLocInference(n_g, n_p, config.abstract)
+        self.transition = Transition(config.transition)
 
     @property
-    def n_g(self) -> List[int]:
-        """Abstract location dimensions per frequency module."""
-        return self.transition.n_g
+    def W_down(self) -> nn.ParameterList:
+        """Downsampling matrices for projection.
+
+        Returns:
+            Parameter list of downsampling matrices, one per frequency module.
+        """
+        return self._W_down
 
     @property
-    def n_f(self) -> int:
-        """Number of frequency modules."""
-        return self.transition.n_f
+    def W_repeat(self) -> nn.ParameterList:
+        """Expansion matrices for projection.
+
+        Returns:
+            Parameter list of expansion matrices, one per frequency module.
+        """
+        return self._W_repeat
 
     def init_state(self, device: torch.device) -> MECState:
         """Initialize MEC state with zeros.
@@ -115,4 +140,4 @@ class MECModel(nn.Module):
         return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
 
 
-__all__ = ["MECParams", "MECState", "MECModel"]
+__all__ = ["MECConfig", "MECState", "MECModel"]

@@ -48,13 +48,14 @@ Usage Examples:
 
 Outputs:
 --------
-When save_plots=true, generates 6 visualizations in outputs/hpc_components/:
+When save_plots=true, generates 7 visualizations in outputs/hpc_components/:
     1. 01_memory_matrices.png - Learned memory structure (M_gen and M_inf)
     2. 02_learning_dynamics.png - Training convergence over time
     3. 03_hierarchical_masks.png - Attractor retrieval mask schedule
-    4. 04_attractor_convergence.png - Query refinement trajectories
-    5. 05_retrieval_quality.png - Performance across noise levels
-    6. 06_memory_structure.png - Eigenvalue spectrum and block analysis
+    4. 04_grounded_location.png - GroundedLocInference demonstration (g ⊗ x → p)
+    5. 05_attractor_convergence.png - Query refinement trajectories
+    6. 06_retrieval_quality.png - Performance across noise levels
+    7. 07_memory_structure.png - Eigenvalue spectrum and block analysis
 """
 
 from pathlib import Path
@@ -160,7 +161,9 @@ if __name__ == "__main__":
     # Update rule: p[t+1] = mask[t] * activation(κ*p[t] + M@p[t]) + (1-mask[t])*p[t]
     attractor = hpc.AttractorDynamics(mask_inf, mask_gen, config.attractor)
 
-    # TODO: We need to add demonstrations about grounded location inference
+    # HPC GroundedLocInference: Conjunctive coding (place cells)
+    # Combines grid cells (g) with sensory input (x) via element-wise product: p = g ⊗ x
+    # In real TEM, g_expanded and x_expanded come from MEC and LEC projections
     ground = hpc.GroundedLocInference(config.grounded)
 
     # HPC MemoryStorage: Hebbian plasticity
@@ -177,6 +180,14 @@ if __name__ == "__main__":
     print(f"  ✓ MemoryStorage: η={config.storage.eta}, λ={config.storage.lambda_}")
     print(f"    Dual memory: {not config.common_memory}")
     print(f"  ✓ AttractorDynamics: {I_ATTRACTOR} iterations with hierarchical masking")
+    print(f"  ✓ GroundedLocInference: Conjunctive coding (g ⊗ x → p)")
+
+    # Quick demonstration of grounded location inference
+    # Create simulated expanded inputs (normally from MEC projection and LEC projection)
+    g_expanded_demo = [torch.randn(2, n_p) for n_p in N_P]  # Grid cells (from MEC)
+    x_expanded_demo = [torch.randn(2, n_p) for n_p in N_P]  # Sensory (from LEC)
+    p_demo = ground(g_expanded_demo, x_expanded_demo)  # Grounded location (place cells)
+    print(f"    Demo: g[{[g.shape for g in g_expanded_demo]}] ⊗ x → p[{[p.shape for p in p_demo]}]")
     print()
 
     # =========================================================================
@@ -195,7 +206,7 @@ if __name__ == "__main__":
 
     for step in range(config.n_training_steps):
         # Generate random grounded location patterns
-        # In real TEM: p = g ⊗ x (grid cells ⊗ sensory)
+        # In real TEM: p = GroundedLocInference(g, x) where g=MEC output, x=LEC output
         p_inferred = torch.randn(config.batch_size, sum(N_P)).softmax(dim=1)
         p_generated = torch.randn(config.batch_size, sum(N_P)).softmax(dim=1)
 
@@ -203,9 +214,12 @@ if __name__ == "__main__":
         M_gen_before = M_gen.clone()
 
         # Apply Hebbian learning (functional interface)
+        # M_gen learns generative pathway associations
         M_gen = storage.update(p_inferred, p_generated, M_gen)
         if M_inf is not None:
-            M_inf = storage.update(p_inferred, p_generated, M_inf)
+            # M_inf learns inference pathway with different data to show distinct learning
+            p_inferred_alt = torch.randn(config.batch_size, sum(N_P)).softmax(dim=1)
+            M_inf = storage.update(p_inferred_alt, p_generated, M_inf)
 
         # Monitor learning dynamics
         m_gen_strength = torch.norm(M_gen).item()
@@ -343,21 +357,13 @@ if __name__ == "__main__":
     print("Phase 6: Generating visualizations...")
 
     # Plot 1: Memory matrices structure
-    fig1 = figures.plot_memory_matrices(
-        M_gen[0],  # Use first batch element for visualization
-        M_for_analysis[0],
-        n_p_per_freq=N_P,
-        n_training_steps=config.n_training_steps,
-    )
+    fig1 = figures.plot_memory_matrices(M_gen[0], M_for_analysis[0], n_p_per_freq=N_P, n_training_steps=config.n_training_steps)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_memory_matrices.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 01_memory_matrices.png")
 
     # Plot 2: Learning dynamics
-    fig2 = figures.plot_learning_curve(
-        memory_strengths,
-        cosine_sims if not config.common_memory else None,
-    )
+    fig2 = figures.plot_learning_curve(memory_strengths, cosine_sims if not config.common_memory else None)
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_learning_dynamics.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 02_learning_dynamics.png")
@@ -369,23 +375,31 @@ if __name__ == "__main__":
         fig3.savefig(config.output_dir / "03_hierarchical_masks.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 03_hierarchical_masks.png")
 
-    # Plot 4: Attractor convergence trajectories
-    fig4 = figures.plot_attractor_convergence(test_queries_list, test_retrievals_list, test_targets_list, n_p_per_freq=N_P)
+    # Plot 4: Grounded location inference demonstration (g ⊗ x → p)
+    # Visualize the place cell activity pattern from the demonstration
+    p_demo_cat = torch.cat(p_demo, dim=1)  # Concatenate all frequencies: [2, sum(N_P)]
+    fig4 = figures.plot_place_cell_patterns(patterns=p_demo_cat, title="Grounded Location Activity (g ⊗ x → p demonstration)", n_samples=2)
     if config.save_plots:
-        fig4.savefig(config.output_dir / "04_attractor_convergence.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 04_attractor_convergence.png")
+        fig4.savefig(config.output_dir / "04_grounded_location.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 04_grounded_location.png")
 
-    # Plot 5: Retrieval quality across noise levels
-    fig5 = figures.plot_retrieval_quality(errors_by_mode, noise_levels, xlabel="Noise Level (logit-space σ)")
+    # Plot 5: Attractor convergence trajectories
+    fig5 = figures.plot_attractor_convergence(test_queries_list, test_retrievals_list, test_targets_list, n_p_per_freq=N_P)
     if config.save_plots:
-        fig5.savefig(config.output_dir / "05_retrieval_quality.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 05_retrieval_quality.png")
+        fig5.savefig(config.output_dir / "05_attractor_convergence.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 05_attractor_convergence.png")
 
-    # Plot 6: Memory structure analysis (eigenvalues and block structure)
-    fig6 = figures.plot_memory_structure_analysis(M_gen[0], n_p_per_freq=N_P)
+    # Plot 6: Retrieval quality across noise levels
+    fig6 = figures.plot_retrieval_quality(errors_by_mode, noise_levels, xlabel="Noise Level (logit-space σ)")
     if config.save_plots:
-        fig6.savefig(config.output_dir / "06_memory_structure.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 06_memory_structure.png")
+        fig6.savefig(config.output_dir / "06_retrieval_quality.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 06_retrieval_quality.png")
+
+    # Plot 7: Memory structure analysis (eigenvalues and block structure)
+    fig7 = figures.plot_memory_structure_analysis(M_gen[0], n_p_per_freq=N_P)
+    if config.save_plots:
+        fig7.savefig(config.output_dir / "07_memory_structure.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: 07_memory_structure.png")
 
     print()
     print("=" * 80)
@@ -416,7 +430,7 @@ if __name__ == "__main__":
     print("=" * 80)
     print()
     if config.save_plots:
-        print(f"All 6 visualizations saved to: {config.output_dir}")
+        print(f"All 7 visualizations saved to: {config.output_dir}")
     else:
         print("Plots not saved (use --save_plots true to save)")
 

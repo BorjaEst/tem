@@ -41,19 +41,16 @@ Architecture:
 
 Usage Examples:
 ---------------
-    # Default: 5×5 grid, 100 timesteps, 3 frequencies, save plots
+    # Default: 5×5 grid, 100 timesteps, save plots
     python examples/lec_components.py
 
-    # Longer walk with more frequencies
-    python examples/lec_components.py --walk_length 200
+    # Configure LEC processor learning
+    python examples/lec_components.py --processor.learn_alpha false
 
-    # Different grid size and observation mode
-    python examples/lec_components.py --grid_size 7 --observation_mode tiled
+    # Configure tiling matrix learning
+    python examples/lec_components.py --learn_w_tile true
 
-    # Custom frequency configuration
-    python examples/lec_components.py --f_initial "[0.95, 0.7, 0.4, 0.15]"
-
-    # Show plots interactively
+    # Show plots interactively without saving
     python examples/lec_components.py --show_plots true --save_plots false
 
     # Full help
@@ -149,7 +146,11 @@ if __name__ == "__main__":
     print("Sensory Processing Pipeline")
     print("=" * 80)
     print(f"Configuration:")
-    ...  # TODO complete the printing here
+    print(f"  Observation space: {N_X} ({int(N_X**0.5)}×{int(N_X**0.5)} grid)")
+    print(f"  Compressed dimension: {N_X_C} (two-hot encoding)")
+    print(f"  Frequencies: {len(F_INITIAL)} ({F_INITIAL})")
+    print(f"  Place cells per frequency: {N_P}")
+    print(f"  Walk length: {WALK_LENGTH} timesteps")
     print()
 
     # =========================================================================

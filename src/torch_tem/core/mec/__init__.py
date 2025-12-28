@@ -140,6 +140,24 @@ class MECModel(nn.Module):
 
     def _build_submodules(self) -> None:
         """Initialize all MEC submodules."""
+        # Build transition model
+        self.transition = TransitionModel(
+            n_g=self._dims.n_g, n_f_grid=self._dims.n_f_grid, n_actions=self._context.n_actions, f_initial=self._context.f_initial, config=self._config.transition
+        )
+
+        # Build abstract location model with W_repeat for legacy mode
+        self.abstract = AbstractLocModel(
+            n_g=self._dims.n_g_grid,
+            n_p=self._dims.n_p[: self._dims.n_f_grid],
+            config=self._config.abstract,
+            W_repeat=self._context.W_repeat[: self._dims.n_f_grid] if self._config.abstract.use_inverse_projection else None,
+        )
+
+        # Build projection
+        self.projection = Projection(self._context.W_down, self._context.W_repeat, self._config.projection)
+
+        # Build OVC if configured
+        self.ovc = ObjectInference(n_g=self._dims.n_g, n_g_ovc=self._dims.n_g_ovc, config=self._config.ovc)
 
     @property
     def n_g(self) -> List[int]:

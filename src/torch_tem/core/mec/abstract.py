@@ -27,7 +27,7 @@ from torch import Tensor
 
 from torch_tem import utils
 from torch_tem.core.mlp import MLP
-from torch_tem.types import AbstractLocation, GroundedLocation, Transition
+from torch_tem.types import AbstractLocation, GroundedLocation, Matrix, Transition
 
 __all__ = ["AbstractLocConfig", "AbstractLocModel"]
 
@@ -39,6 +39,9 @@ class AbstractLocConfig(BaseModel):
 
     # Architecture
     hidden_multiplier: int = Field(default=2, ge=1, description="MLP hidden dimension multiplier: hidden_dim[f] = multiplier * n_g[f]")
+
+    # Legacy parity mode
+    use_inverse_projection: bool = Field(default=False, description="If True, apply inverse projection (p @ W_repeat^T) before MLP (legacy mode)")
 
     # Hyperparameters
     g_mem_std: float = Field(default=0.1, gt=0, description="Memory MLP weight initialization std")
@@ -63,22 +66,37 @@ class AbstractLocModel(nn.Module):
         In INFERENCE mode: p_x retrieved from sensory, enables drift correction
     """
 
-    def __init__(self, n_g: List[int], n_p: List[int], config: AbstractLocConfig):
+    def __init__(self, n_g: List[int], W_repeat: List[Matrix], config: AbstractLocConfig):
         """Initialize spatial inference.
 
         Args:
-            n_g: Grid cell dimensions per frequency
-            n_p: Place cell dimensions per frequency
+            n_g: Grid cell dimensions per frequency (full resolution)
+            W_repeat: Expansion matrices [n_g_subsampled[f], n_p[f]] for legacy mode (optional)
             config: Spatial inference configuration
         """
         super().__init__()
         self._config = config
         self._n_g = n_g
         self._n_f = len(n_g)
+        self._W_repeat = W_repeat
 
-        # Memory → Grid MLP (p_x → mu_g_mem)
-        # Takes concatenated place cells, outputs per-frequency grid cells
-        self.mlp_mu_g_mem = MLP(in_dim=[sum(n_p)] * self.n_f, out_dim=n_g, hidden_dim=[config.hidden_multiplier * g for g in n_g])
+        # Validate configuration
+        if config.use_inverse_projection and W_repeat is None:
+            raise ValueError("use_inverse_projection=True requires W_repeat matrices")
+
+        # Memory → Grid MLP dimensions
+        if config.use_inverse_projection:
+            # Legacy mode: g_downsampled[f] = p_x[f] @ W_repeat[f]^T
+            # Input dimension: n_g_subsampled[f] = W_repeat[f].shape[0]
+            mlp_in_dim = [W.shape[0] for W in W_repeat]
+        else:
+            # Modern mode: concatenate all place cells
+            # Extract n_p from W_repeat: [n_g_subsampled[f], n_p[f]]
+            n_p = [W.shape[1] for W in W_repeat]
+            mlp_in_dim = [sum(n_p)] * self.n_f
+
+        # Memory → Grid MLP (p_x → mu_g_mem or g_downsampled → mu_g_mem)
+        self.mlp_mu_g_mem = MLP(in_dim=mlp_in_dim, out_dim=n_g, hidden_dim=[config.hidden_multiplier * g for g in n_g])
 
         # Initialize with small random weights (legacy parity)
         weights = self.mlp_mu_g_mem.get_weights(-1)
@@ -128,11 +146,18 @@ class AbstractLocModel(nn.Module):
         Returns:
             Memory-derived grid cell estimate with uncertainty
         """
-        # Concatenate all frequencies for MLP input
-        p_x_concat = torch.cat(p_x, dim=-1)
+        # Prepare MLP input based on mode
+        if self._config.use_inverse_projection:
+            # LEGACY MODE: Apply inverse projection first
+            # g_downsampled[f] = p_x[f] @ W_repeat[f]^T
+            mlp_input = [torch.matmul(p_x[f], self._W_repeat[f].t()) for f in range(self._n_f)]
+        else:
+            # MODERN MODE: Direct concatenation
+            p_x_concat = torch.cat(p_x, dim=-1)
+            mlp_input = [p_x_concat] * self._n_f
 
-        # Predict mean: p_x → g_mem
-        mu_g_mem = self.mlp_mu_g_mem([p_x_concat] * self._n_f)
+        # Predict mean: g_downsampled → g (legacy) or p_x → g (modern)
+        mu_g_mem = self.mlp_mu_g_mem(mlp_input)
 
         # Predict uncertainty from retrieval quality
         quality_indicators = self.retrieval_quality(p_x)

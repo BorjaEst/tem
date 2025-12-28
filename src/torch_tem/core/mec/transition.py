@@ -83,18 +83,15 @@ class TransitionModel(nn.Module):
         self.n_actions = n_actions
 
         # Create hierarchical connections
-        self.g_connections = utils.create_g_connections(n_f, n_f_grid, self.n_f_ovc, f_initial)
+        # f_initial only contains grid frequencies; extend if OVC modules exist
+        f_extended = f_initial if self.n_f_ovc == 0 else f_initial + [0.1] * self.n_f_ovc
+        self.g_connections = utils.create_g_connections(n_f_grid, f_extended)
 
         # MLP for action-based transitions
-        self.MLP_D_a = MLP(
-            in_dim=[n_actions] * n_f,
-            out_dim=[sum([n_g[f_from] for f_from in range(n_f) if self.g_connections[f_to][f_from]]) * n_g[f_to] for f_to in range(n_f)],
-            activation=[torch.tanh, None],
-            hidden_dim=[config.d_hidden_dim] * n_f,
-            bias=[True, False],
-        )
-        # Initialize to identity (no change initially)
-        self.MLP_D_a.set_weights(1, 0.0)
+        in_dim = [n_actions] * n_f
+        out_dim = [sum([n_g[f_from] for f_from in range(n_f) if self.g_connections[f_to][f_from]]) * n_g[f_to] for f_to in range(n_f)]
+        self.MLP_D_a = MLP(in_dim, out_dim, activation=[torch.tanh, None], hidden_dim=[config.d_hidden_dim] * n_f, bias=[True, False])
+        self.MLP_D_a.set_weights(1, 0.0)  # Initialize to identity (no change initially)
 
         # No-action transition weights for shiny environments
         self.D_no_a = nn.ParameterList(
@@ -102,14 +99,9 @@ class TransitionModel(nn.Module):
         )
 
         # Uncertainty estimation MLPs
-        # sigma_g depends on g_prev, not action
-        # Hidden dim is 2 * n_g in legacy
-        self.MLP_sigma_g_path = MLP(
-            in_dim=n_g,
-            out_dim=n_g,
-            activation=[torch.tanh, torch.exp],
-            hidden_dim=[2 * g for g in n_g],
-        )
+        in_dim = n_g
+        out_dim = n_g
+        self.MLP_sigma_g_path = MLP(in_dim, out_dim, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
         # Log of standard deviation of abstract location cells when entering a new environment
         # Standard deviation of the prior on g. Initialise with truncated normal

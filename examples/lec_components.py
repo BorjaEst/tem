@@ -88,10 +88,8 @@ from torch_tem.core.lec import DecoderConfig, EncoderConfig, ProcessorConfig, Pr
 class ExampleConfig(BaseSettings):
     """Configuration for LEC sensory processing example.
 
-    Defines environment setup, walk generation, and architecture parameters
-    for demonstrating LEC components in isolation with real environment data.
-
-    ....
+    Defines submodule configurations and output settings for demonstrating
+    LEC sensory processing components in isolation with real environment data.
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="lec_components")

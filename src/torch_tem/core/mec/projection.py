@@ -133,3 +133,68 @@ class Projection(nn.Module):
         """
         p_downsampled = self.repeat_inv(p)
         return self.down_inv(p_downsampled)
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """MEC projection example: Grid cells to hippocampal input.
+
+    Demonstrates bidirectional projection between abstract locations (grid cells)
+    and hippocampal input space using learned downsampling and expansion.
+    """
+    print("=" * 80)
+    print("MEC Projection Example - Grid to Hippocampal Space")
+    print("=" * 80)
+
+    # Configuration
+    n_g = [48, 40, 32]  # Grid cells per frequency
+    n_g_down = [24, 20, 16]  # Downsampled dimensions
+    n_p = [96, 80, 64]  # Hippocampal place cells per frequency
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Grid cells: {n_g}")
+    print(f"  Downsampled: {n_g_down}")
+    print(f"  Place cells: {n_p}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create projection matrices
+    W_down = [torch.randn(n_g[f], n_g_down[f]) for f in range(len(n_g))]
+    W_repeat = [torch.randn(n_g_down[f], n_p[f]) for f in range(len(n_g))]
+
+    # Create configuration and projection
+    config = ProjectionConfig(learn_alpha=True)
+    projection = Projection(W_down, W_repeat, config)
+    print(f"\n✓ Projection initialized")
+
+    # Create abstract location (grid cells)
+    g = [torch.randn(batch_size, n) for n in n_g]
+    print(f"\n✓ Input abstract location: {[g_f.shape for g_f in g]}")
+
+    # Forward projection: g → g_
+    g_ = projection(g)
+    print(f"\n✓ Forward projection (g → g_):")
+    print(f"  Output shape: {[g_f.shape for g_f in g_]}")
+
+    # Inverse projection: p → g
+    p = [torch.randn(batch_size, n) for n in n_p]
+    g_reconstructed = projection.inverse(p)
+    print(f"\n✓ Inverse projection (p → g):")
+    print(f"  Input place cells: {[p_f.shape for p_f in p]}")
+    print(f"  Reconstructed grid: {[g_f.shape for g_f in g_reconstructed]}")
+
+    # Individual operations
+    g_down = projection.downsample(g)
+    print(f"\n✓ Downsample only:")
+    print(f"  Output shape: {[g_f.shape for g_f in g_down]}")
+
+    g_expanded = projection.repeat(g_down)
+    print(f"\n✓ Expand only:")
+    print(f"  Output shape: {[g_f.shape for g_f in g_expanded]}")
+
+    print(f"\n{'=' * 80}")
+    print(f"✓ MEC projection example complete")
+    print(f"{'=' * 80}")

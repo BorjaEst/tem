@@ -155,3 +155,61 @@ class AbstractLocModel(nn.Module):
         """
         quality_fn = lambda f: [p_x[f].norm(dim=-1), torch.zeros_like(p_x[f][:, 0])]
         return [torch.stack(quality_fn(f), dim=-1) for f in range(self.n_f)]
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """Abstract location inference example: Fusing path integration with memory.
+
+    Demonstrates how grid cells are inferred by combining path integration
+    predictions with memory-based corrections.
+    """
+    print("=" * 80)
+    print("Abstract Location Inference Example - Grid Cell Fusion")
+    print("=" * 80)
+
+    # Configuration
+    n_g = [48, 40, 32]  # Grid cells per frequency
+    n_p = [96, 80, 64]  # Place cells per frequency
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Grid cells: {n_g}")
+    print(f"  Place cells: {n_p}")
+    print(f"  Frequencies: {len(n_g)}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create configuration and model
+    config = AbstractLocConfig(hidden_multiplier=2, do_sample=False)
+    abstract = AbstractLocModel(n_g, n_p, config)
+    print(f"\n✓ Abstract location model initialized")
+
+    # Create inputs
+    # Path integration prediction
+    mu_gen = [torch.randn(batch_size, n) for n in n_g]
+    sigma_gen = [torch.ones(batch_size, n) * 0.1 for n in n_g]
+    g_gen = Transition(mean=mu_gen, uncertainty=sigma_gen)
+
+    # Memory-retrieved place cells
+    p_x = [torch.randn(batch_size, n) for n in n_p]
+
+    print(f"\n✓ Inputs created:")
+    print(f"  Path integration: {[g.shape for g in g_gen.mean]}")
+    print(f"  Memory retrieval: {[p.shape for p in p_x]}")
+
+    # Forward pass
+    g = abstract(g_gen, p_x)
+    print(f"\n✓ Forward pass complete")
+    print(f"  Output shape: {[g_f.shape for g_f in g]}")
+
+    # Generative mode (no memory)
+    g_gen_only = abstract(g_gen, None)
+    print(f"\n✓ Generative mode (path integration only):")
+    print(f"  Output shape: {[g_f.shape for g_f in g_gen_only]}")
+
+    print(f"\n{'=' * 80}")
+    print(f"✓ Abstract location inference example complete")
+    print(f"{'=' * 80}")

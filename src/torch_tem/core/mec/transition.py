@@ -251,3 +251,79 @@ class TransitionModel(nn.Module):
         if self.do_sample:
             return [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
         return mu_g
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """Transition model example: Path integration for spatial navigation.
+
+    Demonstrates how the transition model predicts next abstract locations
+    from current locations and actions, with hierarchical connections
+    between frequency modules.
+    """
+    print("=" * 80)
+    print("Transition Model Example - Path Integration")
+    print("=" * 80)
+
+    # Configuration
+    n_g = [48, 40, 32]  # Grid cells per frequency
+    n_f_grid = 3  # Number of grid frequency modules
+    n_actions = 4  # Number of possible actions (up, down, left, right)
+    f_initial = [0.8, 0.5, 0.3]  # Base frequencies
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Grid cells: {n_g}")
+    print(f"  Grid frequencies: {n_f_grid}")
+    print(f"  Actions: {n_actions}")
+    print(f"  Base frequencies: {f_initial}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create configuration and transition model
+    config = TransitionConfig(d_hidden_dim=20, g_init_std=0.5, do_sample=False)
+    transition = TransitionModel(n_g=n_g, n_f_grid=n_f_grid, n_actions=n_actions, f_initial=f_initial, config=config)
+    print(f"\n✓ Transition model initialized")
+
+    # Create current location
+    g_prev = [torch.randn(batch_size, n) for n in n_g]
+    print(f"\n✓ Current location: {[g.shape for g in g_prev]}")
+
+    # Example 1: Action-based transition
+    print(f"\n{'=' * 80}")
+    print(f"Example 1: Action-Based Transition")
+    print(f"{'=' * 80}")
+
+    actions = torch.randint(0, n_actions, (batch_size,))
+    valid_mask = torch.ones(batch_size, dtype=torch.bool)
+    print(f"✓ Actions: {actions}")
+
+    g_next = transition(g_prev, actions, valid_mask)
+    print(f"\n✓ Transition complete:")
+    print(f"  Next location (mean): {[g.shape for g in g_next.mean]}")
+    print(f"  Uncertainty: {[s.shape for s in g_next.uncertainty]}")
+
+    # Example 2: No-action transition (for shiny environments)
+    print(f"\n{'=' * 80}")
+    print(f"Example 2: No-Action Transition")
+    print(f"{'=' * 80}")
+
+    g_next_no_action = transition(g_prev, None, None)
+    print(f"✓ No-action transition complete:")
+    print(f"  Next location (mean): {[g.shape for g in g_next_no_action.mean]}")
+    print(f"  Uncertainty: {[s.shape for s in g_next_no_action.uncertainty]}")
+
+    # Example 3: Sampling
+    print(f"\n{'=' * 80}")
+    print(f"Example 3: Stochastic Sampling")
+    print(f"{'=' * 80}")
+
+    g_sampled = transition.sample(g_next)
+    print(f"✓ Sampled from distribution:")
+    print(f"  Sampled location: {[g.shape for g in g_sampled]}")
+
+    print(f"\n{'=' * 80}")
+    print(f"✓ Transition model example complete")
+    print(f"{'=' * 80}")

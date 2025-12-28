@@ -169,3 +169,66 @@ class ObjectInference(nn.Module):
             Activated OVC responses
         """
         return [torch.nn.functional.leaky_relu(torch.clamp(g_f, min=-1, max=1)) for g_f in g]
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """Object vector cell inference example.
+
+    Demonstrates OVC inference for landmark/object recognition,
+    supporting both merged and separate frequency modes.
+    """
+    print("=" * 80)
+    print("Object Vector Cell (OVC) Inference Example")
+    print("=" * 80)
+
+    # Configuration
+    n_g = [48, 40, 32]  # Total grid cells
+    n_g_ovc = [24, 18, 12]  # OVC dimensions
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Total grid cells: {n_g}")
+    print(f"  OVC dimensions: {n_g_ovc}")
+    print(f"  Batch size: {batch_size}")
+
+    # Example 1: Separate mode
+    print(f"\n{'=' * 80}")
+    print(f"Example 1: Separate OVC Mode")
+    print(f"{'=' * 80}")
+
+    config_separate = ObjectInferenceConfig(n_ovc=n_g_ovc, frequencies=[0.8, 0.5, 0.3], hidden_multiplier=2)  # Independent frequencies
+    ovc_separate = ObjectInference(n_g, n_g_ovc, config_separate)
+    print(f"✓ OVC model initialized (separate mode)")
+
+    # Create inputs
+    mu_gen = [torch.randn(batch_size, n) for n in n_g]
+    sigma_gen = [torch.ones(batch_size, n) * 0.1 for n in n_g]
+    g_gen = Transition(mean=mu_gen, uncertainty=sigma_gen)
+
+    locations = [{"shiny": i % 2 == 0} for i in range(batch_size)]
+
+    # Forward pass
+    g_ovc = ovc_separate(g_gen, locations)
+    print(f"✓ Forward pass complete")
+    print(f"  Output shape: {[g.shape for g in g_ovc]}")
+
+    # Example 2: Merged mode
+    print(f"\n{'=' * 80}")
+    print(f"Example 2: Merged OVC Mode")
+    print(f"{'=' * 80}")
+
+    config_merged = ObjectInferenceConfig(n_ovc=n_g_ovc, frequencies=None, hidden_multiplier=2)  # Share grid frequencies
+    ovc_merged = ObjectInference(n_g, n_g_ovc, config_merged)
+    print(f"✓ OVC model initialized (merged mode)")
+
+    g_ovc_merged = ovc_merged(g_gen, locations)
+    print(f"✓ Forward pass complete")
+    print(f"  Output: {g_ovc_merged} (handled by AbstractLocModel)")
+
+    print(f"\n{'=' * 80}")
+    print(f"✓ OVC inference example complete")
+    print(f"{'=' * 80}")

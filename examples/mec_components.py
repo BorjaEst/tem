@@ -3,16 +3,19 @@
 
 This example demonstrates the Medial Entorhinal Cortex (MEC) components:
 - TransitionModel: Predicts next abstract location from current state + action
-- AbstractLocInference: Fuses path integration estimates with precision weighting
+- AbstractLocModel: Fuses path integration estimates with precision weighting
+- ObjectInference: Object vector cells for landmark recognition (optional)
 - Projection: Downsamples and repeats grid cells for hippocampal binding
 
 The MEC pipeline:
   Transition: (g_t, a) → g_gen (with σ)
-  Inference: g_gen → g_inf
+  Abstract: (g_gen, p_x?) → g_inf
+  [OVC: (g_gen, locations) → g_ovc (optional)]
   Projection: g_inf → g_downsampled (memory) + g_repeated (hippocampus)
 
-Note: This example uses synthetic data and random actions. For LEC sensory
-processing, see lec_components.py.
+Note: This example uses synthetic data and random actions. Transition weights are
+initialized with small random values to demonstrate dynamics (untrained model).
+For LEC sensory processing, see lec_components.py.
 
 Architecture:
 -------------
@@ -21,11 +24,16 @@ Architecture:
         - Output: Predicted next location with uncertainty (g_gen, σ_g_gen)
         - Method: Action-conditioned MLP with hierarchical frequency connections
 
-    MEC AbstractLocInference (mec.abstract.AbstractLocInference):
-        - Input: g_gen (path integration with uncertainty)
+    MEC AbstractLocModel (mec.abstract.AbstractLocModel):
+        - Input: g_gen (path integration with uncertainty), optional p_x (memory)
         - Output: Fused abstract location g_inf [List[n_f] of [B, n_g[f]]]
         - Method: Precision-weighted fusion (inverse variance weighting)
         - Formula: g_inf = Σ(precision_i × g_i) / Σ(precision_i)
+
+    MEC ObjectInference (mec.object.ObjectInference):
+        - Input: g_gen (fallback), locations (environment with 'shiny' field)
+        - Output: Object vector cells [List[n_f_ovc] of [B, n_g_ovc[f]]] or []
+        - Method: Landmark-based OVC activation with learned MLPs
 
     MEC Projection (mec.projection.Projection):
         - Input: Abstract location g
@@ -34,14 +42,15 @@ Architecture:
 
 Usage Examples:
 ---------------
-    # Default: 100 timesteps, 3 frequencies, memory enabled
+    # Default: 100 timesteps, 3 frequencies
     python examples/mec_components.py
 
-    # Longer sequence without memory path
-    python examples/mec_components.py --walk_length 200 --use_memory false
+    # Enable OVC (object vector cells) in merged mode
+    # Note: Merged mode integrates OVC with grid cells (no separate visualization)
+    python examples/mec_components.py --ovc.n_ovc "[4, 3, 2]"
 
-    # Custom frequency configuration
-    python examples/mec_components.py --f_initial "[0.95, 0.7, 0.4]"
+    # Enable sampling for stochastic dynamics
+    python examples/mec_components.py --transition.do_sample true --abstract.do_sample true
 
     # Show plots interactively
     python examples/mec_components.py --show_plots true --save_plots false
@@ -57,6 +66,10 @@ When save_plots=true, generates 5 visualizations in outputs/mec_components/:
     3. 03_g_inf_evolution.png - Abstract location (g_inf) evolution
     4. 04_projection_structure.png - Downsampling and expansion structure
     5. 05_grid_patterns.png - Grid cell activity patterns over time
+
+Note: OVC (object vector cells) can be enabled with --ovc.n_ovc but operates
+in merged mode (integrated with grid cells) and doesn't produce separate visualization
+in this component-level demo.
 """
 
 from pathlib import Path
@@ -134,9 +147,9 @@ if __name__ == "__main__":
     """Run the MEC spatial processing pipeline experiment with visualizations.
 
     This script demonstrates the spatial processing pathway:
-      1. Generate synthetic action sequences
-      2. Initialize MEC components (TransitionModel, AbstractLocModel, Projection)
-      3. Process through the pipeline
+      1. Generate synthetic action sequences and optional landmarks
+      2. Initialize MEC components (TransitionModel, AbstractLocModel, Projection, OVC)
+      3. Process through the pipeline with randomized transition dynamics
       4. Generate visualizations of the complete MEC pathway
     """
     config = ExampleConfig()
@@ -149,6 +162,7 @@ if __name__ == "__main__":
     print(f"  Batch size: {BATCH_SIZE}")
     print(f"  Frequencies: {N_F} ({F_INITIAL[0]:.2f} to {F_INITIAL[-1]:.2f})")
     print(f"  Architecture: n_g={N_G}, n_g_sub={N_G_SUBSAMPLED}")
+    print(f"  OVC enabled: {config.ovc is not None}")
     print()
 
     # =========================================================================
@@ -160,7 +174,16 @@ if __name__ == "__main__":
     # Predicts next abstract location from current state + action
     # Outputs prediction with uncertainty: (g_gen, σ_g_gen)
     transition_model = TransitionModel(n_g=N_G, n_f_grid=N_F, n_actions=N_ACTIONS, f_initial=F_INITIAL, config=config.transition)
+
+    # Initialize transition weights with small random values for demonstration
+    # (In real TEM, these would be learned through training)
+    with torch.no_grad():
+        for param in transition_model.MLP_D_a.parameters():
+            if param.dim() > 1:  # Weight matrices
+                param.data = torch.randn_like(param) * 0.05  # Small random initialization
+
     print(f"  ✓ TransitionModel: Action-conditioned dynamics ({N_ACTIONS} actions)")
+    print(f"    Note: Weights initialized randomly for demonstration (untrained model)")
 
     # MEC AbstractLocModel: Fuses path integration with memory corrections
     # Combines g_gen (always available) with p_x (memory retrieval, optional)
@@ -176,12 +199,19 @@ if __name__ == "__main__":
     print(f"  ✓ Projection: {N_G} → {N_G_SUBSAMPLED} → {N_P}")
 
     # OVC ObjectInference (optional)
-    if config.ovc is not None:
-        n_g_ovc = [6, 5, 4]  # OVC grid cells per frequency (half of n_g_sub)
+    ovc_model = None
+    n_g_ovc = None
+    if config.ovc is not None and config.ovc.n_ovc:
+        n_g_ovc = config.ovc.n_ovc if config.ovc.n_ovc else [6, 5, 4]
         ovc_model = ObjectInference(n_g=N_G, n_g_ovc=n_g_ovc, config=config.ovc)
-        print(f"  ✓ ObjectInference: OVC module enabled ({N_F} frequencies)")
+
+        # Check if OVC is in merged mode (won't produce separate output)
+        if config.ovc.frequencies is None:
+            print(f"  ✓ ObjectInference: OVC module enabled in MERGED mode (integrated with grid cells)")
+            print(f'    Note: Use --ovc.frequencies "[0.8, 0.5, 0.3]" for separate OVC visualization')
+        else:
+            print(f"  ✓ ObjectInference: OVC module enabled in SEPARATE mode ({len(n_g_ovc)} frequencies, dims={n_g_ovc})")
     else:
-        ovc_model = None
         print(f"  ✓ ObjectInference: OVC module disabled")
 
     print()
@@ -189,19 +219,32 @@ if __name__ == "__main__":
     # =========================================================================
     # PHASE 2: Generate Synthetic Data
     # =========================================================================
-    print("Phase 2: Generating synthetic action sequence...")
+    print("Phase 2: Generating synthetic action sequence and landmarks...")
 
     # Random actions for demonstration (in real TEM: from policy/environment)
     actions = torch.randint(0, N_ACTIONS, (WALK_LENGTH, BATCH_SIZE))
 
+    # Generate landmark locations (for OVC demonstration)
+    # Place a "shiny" object every 10 timesteps for half the batch
+    locations_sequence = []
+    for t in range(WALK_LENGTH):
+        batch_locations = []
+        for b in range(BATCH_SIZE):
+            has_shiny = (t % 10 == 0) and (b < BATCH_SIZE // 2)  # Shiny for first half of batch
+            batch_locations.append({"shiny": True if has_shiny else None})
+        locations_sequence.append(batch_locations)
+
+    n_shiny_timesteps = sum(1 for locs in locations_sequence if any(loc["shiny"] for loc in locs))
+
     print(f"  ✓ Generated {WALK_LENGTH} random actions")
+    print(f"  ✓ Generated landmarks: {n_shiny_timesteps} timesteps with 'shiny' objects")
     print()
 
     # =========================================================================
     # PHASE 3: Run MEC Pipeline
     # =========================================================================
     print("Phase 3: Running MEC pipeline...")
-    print("  Pipeline: Transition → Abstract Fusion → Projection")
+    print(f"  Pipeline: Transition → Abstract Fusion → Projection{' → OVC' if ovc_model else ''}")
     print()
 
     # Initialize history storage
@@ -222,12 +265,16 @@ if __name__ == "__main__":
 
         # === Step 2: Abstract Location Fusion ===
         # Fuse path integration with optional memory correction
-        # Note: AbstractLocModel always works, p_x can be None
-        p_x = None  # In this example we don't use memory path
+        # Note: p_x can be None (no memory path in this example)
+        p_x = None  # No memory retrieval in this demo
 
         g_inf = abstract_model(g_gen_transition, p_x)  # List[n_f] of [B, n_g[f]]
 
-        # === Step 3: Projection ===
+        # === Step 3 (Optional): Object Vector Cells ===
+        # Note: OVC in merged mode is integrated into AbstractLocModel
+        # No separate tracking needed for component demo
+
+        # === Step 4: Projection ===
         # Downsample for memory, expand for hippocampus
         g_downsampled = projection_model.downsample(g_inf)  # List[n_f] of [B, n_g_sub[f]]
 
@@ -242,7 +289,8 @@ if __name__ == "__main__":
         # Progress reporting
         if (t + 1) % 20 == 0 or t == 0:
             avg_sigma = sum(s.mean().item() for s in g_gen_transition.uncertainty) / len(g_gen_transition.uncertainty)
-            print(f"  Step {t+1}/{WALK_LENGTH}: avg uncertainty={avg_sigma:.4f}")
+            avg_g = sum(g.abs().mean().item() for g in g_inf) / len(g_inf)
+            print(f"  Step {t+1}/{WALK_LENGTH}: avg_g={avg_g:.4f}, avg_sigma={avg_sigma:.4f}")
 
     print(f"  ✓ Processed {WALK_LENGTH} timesteps through MEC pipeline")
     print()
@@ -301,17 +349,24 @@ if __name__ == "__main__":
     print(f"  Grid cells: {N_G} ({N_F} frequencies)")
     print(f"  Downsampled: {N_G_SUBSAMPLED}")
     print(f"  Place cells: {N_P}")
+    if ovc_model:
+        print(f"  OVC cells: {n_g_ovc} ({len(n_g_ovc)} frequencies)")
     print()
     print(f"Pipeline Flow:")
     print(f"  1. TransitionModel: (g_t, a) → (g_gen, σ_gen)")
     print(f"     - Hierarchical connections between {N_F} frequency modules")
-    print(f"     - Action-conditioned dynamics via MLP")
+    print(f"     - Action-conditioned dynamics via MLP (random weights for demo)")
     print()
     print(f"  2. AbstractLocModel: (g_gen, p_x?) → g_inf")
     print(f"     - Precision-weighted fusion")
     print(f"     - Memory path: DISABLED (p_x=None in this example)")
     print()
-    print(f"  3. Projection: g_inf → (g_down, g_repeat)")
+    if ovc_model:
+        print(f"  3. ObjectInference: (g_gen, locations) → g_ovc")
+        print(f"     - Landmark-based OVC activation")
+        print(f"     - Landmarks detected: {n_shiny_timesteps} timesteps")
+        print()
+    print(f"  {4 if ovc_model else 3}. Projection: g_inf → (g_down, g_repeat)")
     print(f"     - Downsample: {N_G} → {N_G_SUBSAMPLED} (memory indexing)")
     print(f"     - Expand: {N_G_SUBSAMPLED} → {N_P} (hippocampal conjunction)")
     print()
@@ -320,8 +375,10 @@ if __name__ == "__main__":
     print("TEM Theory:")
     print("  • MEC provides spatial 'where' information via grid cells")
     print("  • Path integration maintains spatial coherence during navigation")
-    print("  • Memory corrections reduce drift through Hebbian associations")
+    print("  • Action-conditioned transitions predict next grid cell state")
     print("  • Hierarchical frequencies capture multiple spatial scales")
+    if ovc_model:
+        print("  • OVCs provide 'what' information for landmark/object recognition")
     print("=" * 80)
     print()
     if config.save_plots:

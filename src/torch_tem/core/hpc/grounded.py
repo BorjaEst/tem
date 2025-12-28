@@ -1,21 +1,30 @@
-"""Grounded location inference for the Tolman-Eichenbaum Machine (TEM).
+"""Grounded location inference through conjunctive coding.
 
 Computes hippocampal-like place cell representations by combining abstract location
-(grid cells) with sensory information via outer product: p = g ⊗ x
+(grid cells) with sensory information via element-wise product: p = g ⊙ x.
 
-The outer product creates conjunctive codes that bind spatial location with sensory
-context, analogous to how hippocampal place cells encode location-specific patterns.
+The element-wise product creates conjunctive codes that bind spatial location with
+sensory context, analogous to how hippocampal place cells encode location-specific
+patterns.
 
-Theory:
+Note:
     The outer product g ⊗ x is implemented via Kronecker product matrices:
-    - g_expanded = g @ W_repeat (done by Projection.forward())
-    - x_expanded = x @ W_tile (done by SensoryProjection)
-    - p = (g_expanded ⊙ x_expanded) weighted and activated
+        - g_expanded = g @ W_repeat (done by MEC Projection)
+        - x_expanded = x @ W_tile (done by LEC Projection)
+        - p = (g_expanded ⊙ x_expanded) with activation
 
     This module performs ONLY the final element-wise multiplication and activation,
     as the expansion is already done by upstream modules.
 
-Reference: Whittington et al. (2020). Cell, 183(5), 1249-1263.
+Reference:
+    Whittington et al. (2020). The Tolman-Eichenbaum Machine: Unifying space and
+    relational memory through generalization in the hippocampal formation.
+    Cell, 183(5), 1249-1263.
+
+Typical usage example:
+    >>> config = GroundedLocConfig(activation='leaky_relu')
+    >>> grounded = GroundedLocInference(config)
+    >>> p = grounded(g_expanded, x_expanded)
 """
 
 import torch
@@ -24,6 +33,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from torch_tem import utils
 from torch_tem.types import GroundedLocation, MultiScaleCode
+
+__all__ = ["GroundedLocConfig", "GroundedLocInference"]
 
 
 class GroundedLocConfig(BaseModel):

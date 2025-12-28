@@ -1,4 +1,4 @@
-"""LEC Sensory Processor: Multi-frequency temporal filtering.
+"""LEC Sensory Processor with multi-frequency temporal filtering.
 
 The Processor implements the second stage of the Lateral Entorhinal Cortex (LEC)
 sensory processing pathway. It applies frequency-specific exponential smoothing
@@ -6,10 +6,10 @@ to compressed sensory inputs, creating multiple temporally-filtered views at
 different timescales.
 
 Multi-frequency filtering provides:
-- Temporal credit assignment: Different frequencies capture different timescales
-- Stability: Smoothing reduces noise and improves generalization
-- Hierarchical representation: Lower frequencies = more temporal context
-- Learnable dynamics: Each frequency has a learnable decay rate (alpha)
+    - Temporal credit assignment: Different frequencies capture different timescales
+    - Stability: Smoothing reduces noise and improves generalization
+    - Hierarchical representation: Lower frequencies = more temporal context
+    - Learnable dynamics: Each frequency has a learnable decay rate (alpha)
 
 Architecture:
     Input: Compressed sensory [B, n_o_c]
@@ -21,7 +21,13 @@ Architecture:
 
     where alpha[f] is a learnable decay rate in (0, 1).
 
-    Note: Normalization (f_n) is applied later in the Projection module.
+Note:
+    Normalization (f_n) is applied later in the Projection module.
+
+Typical usage example:
+    >>> config = ProcessorConfig(learn_alpha=True)
+    >>> processor = Processor(f_initial=[0.8, 0.5, 0.3], config=config)
+    >>> filtered = processor(compressed_sensory, previous_state)
 """
 
 from typing import List
@@ -32,6 +38,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
 from torch_tem.types import MultiScaleCode
+
+__all__ = ["ProcessorConfig", "Processor"]
 
 
 class ProcessorConfig(BaseModel):
@@ -136,9 +144,6 @@ class Processor(nn.Module):
             Normalization applied later in Projection module.
         """
         return self.filter_temporal(x_c, x_prev)
-
-
-__all__ = ["Processor", "ProcessorConfig"]
 
 
 # ======================================================================================

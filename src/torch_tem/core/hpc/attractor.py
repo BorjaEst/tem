@@ -1,14 +1,25 @@
-"""Attractor dynamics for the Tolman-Eichenbaum Machine (TEM).
+"""Attractor dynamics for iterative memory retrieval.
 
-This module implements iterative memory retrieval via attractor dynamics, a core mechanism
-in TEM's Hebbian associative memory system. The attractor dynamics refine grounded location
-representations (hippocampal place cells) by iteratively querying the learned memory matrix,
-with hierarchical early-stopping to stabilize low-frequency components first.
+This module implements attractor dynamics, a core mechanism in TEM's Hebbian
+associative memory system. The attractor dynamics refine grounded location
+representations (hippocampal place cells) by iteratively querying the learned
+memory matrix, with hierarchical early-stopping to stabilize low-frequency
+components first.
 
-In TEM, grounded locations p represent the conjunction of abstract locations g (grid cells)
-and sensory observations x (place cells = grid cells ⊗ sensory input). The memory stores
-associations between these grounded locations via Hebbian learning, enabling recall of
-spatial relationships and predictive inference.
+In TEM, grounded locations p represent the conjunction of abstract locations g
+(grid cells) and sensory observations x. The memory stores associations between
+these grounded locations via Hebbian learning, enabling recall of spatial
+relationships and predictive inference.
+
+The attractor update rule is:
+    p_new = mask * activation(κ * p_old + M @ p_old) + (1-mask) * p_old
+
+where mask progressively enables higher frequencies across iterations.
+
+Typical usage example:
+    >>> config = AttractorConfig(kappa=0.8, activation='leaky_relu')
+    >>> attractor = AttractorDynamics(mask_inf, mask_gen, config)
+    >>> p_refined = attractor(p_query, M, for_inference=True)
 """
 
 from typing import List
@@ -18,6 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from torch_tem import utils
 from torch_tem.types import Matrix, MultiScaleCode, Vector
+
+__all__ = ["AttractorConfig", "AttractorDynamics"]
 
 
 class AttractorConfig(BaseModel):

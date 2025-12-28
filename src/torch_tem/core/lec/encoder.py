@@ -1,19 +1,24 @@
-"""LEC Sensory Encoder: Two-hot compression of high-dimensional observations.
+"""LEC Sensory Encoder with n-hot compression.
 
 The Encoder implements the first stage of the Lateral Entorhinal Cortex (LEC)
 sensory processing pathway. It compresses one-hot encoded observations into a
-lower-dimensional two-hot representation using a pre-computed lookup table.
+lower-dimensional n-hot representation using a pre-computed lookup table.
 
-Two-hot encoding provides:
-- Dimensionality reduction: n_o → n_o_c (typically 45 → 10)
-- Distributed representation: Each observation encoded by exactly 2 active units
-- Smooth transitions: Similar observations share one active unit
-- Efficient learning: Sparse activations enable faster credit assignment
+N-hot encoding provides:
+    - Dimensionality reduction: n_o → n_o_c (typically 45 → 10)
+    - Distributed representation: Each observation encoded by exactly n active units
+    - Smooth transitions: Similar observations share active units
+    - Efficient learning: Sparse activations enable faster credit assignment
 
 Architecture:
     Input: One-hot observations [B, n_o]
-    Processing: Lookup table mapping observation index → two-hot code
-    Output: Two-hot compressed sensory [B, n_o_c]
+    Processing: Lookup table mapping observation index → n-hot code
+    Output: N-hot compressed sensory [B, n_o_c]
+
+Typical usage example:
+    >>> config = EncoderConfig(n_hot=2)
+    >>> encoder = Encoder(n_o=45, n_o_c=10, config=config)
+    >>> compressed = encoder(one_hot_observation)
 """
 
 import torch
@@ -23,6 +28,8 @@ from torch import Tensor
 
 from torch_tem import utils
 from torch_tem.types import Observation
+
+__all__ = ["EncoderConfig", "Encoder"]
 
 
 class EncoderConfig(BaseModel):
@@ -89,9 +96,6 @@ class Encoder(nn.Module):
         """
         indices = torch.argmax(x, dim=1)  # Extract active observation index [B]
         return self.encoding_table[indices]  # Batch lookup [B, n_o_c]
-
-
-__all__ = ["Encoder", "EncoderConfig"]
 
 
 # ======================================================================================

@@ -1,4 +1,19 @@
-"""Transition model for torch_tem package."""
+"""Transition model for path integration.
+
+Predicts next abstract location from current location and action through
+learned transition dynamics.
+
+Handles:
+    - Action-based transitions (via MLP_D_a)
+    - No-action transitions for shiny environments (via D_no_a)
+    - Hierarchical connections between frequency modules
+    - Uncertainty estimation (sigma_g)
+
+Typical usage example:
+    >>> # See TransitionConfig protocol for required params
+    >>> transition = TransitionModel(params)
+    >>> g_next = transition(g_prev, action, valid_mask)
+"""
 
 from typing import List, Optional, Protocol, Tuple
 
@@ -11,6 +26,8 @@ from torch import Tensor
 from torch_tem import utils
 from torch_tem.core.mlp import MLP
 from torch_tem.types import AbstractLocation, Transition
+
+__all__ = ["TransitionConfig", "TransitionModel"]
 
 
 class TransitionConfig(Protocol):

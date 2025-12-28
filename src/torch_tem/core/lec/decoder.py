@@ -1,12 +1,19 @@
-"""Observation decoder for torch_tem package.
+"""Observation decoder from place cells to sensory predictions.
 
 This module implements the final generative step from grounded locations (place cells)
 to sensory observations. It completes the generative pathway: g → p → x, allowing
 the model to predict what sensory input should be experienced given an internal
 spatial representation.
 
-The Decoder performs p→x decoding using learned sensory processing
-parameters (w_x, b_x) and tiling matrices (W_tile).
+The decoder performs p→x decoding through:
+    1. Untiling: Project place cells to compressed sensory (p → x_c)
+    2. Scaling: Apply learned weights and biases (w_x, b_x)
+    3. Decoding: MLP expansion to full observation space (x_c → x̂)
+
+Typical usage example:
+    >>> config = DecoderConfig(hidden_multiplier=20)
+    >>> decoder = Decoder(n_o=45, W_tile=tiling_matrices, config=config)
+    >>> prediction = decoder(place_cells)
 """
 
 from typing import List, Protocol
@@ -19,6 +26,8 @@ from torch import Tensor
 from torch_tem import utils
 from torch_tem.core.mlp import MLP
 from torch_tem.types import Matrix, MultiScaleCode, SensoryPrediction
+
+__all__ = ["DecoderConfig", "Decoder"]
 
 
 class DecoderConfig(BaseModel):
@@ -131,9 +140,6 @@ class Decoder(nn.Module):
         """
         x_proj = self.untiling(p)
         return self.decode(self._w_x * x_proj + self._b_x)
-
-
-__all__ = ["Decoder", "DecoderConfig"]
 
 
 # ======================================================================================

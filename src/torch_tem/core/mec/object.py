@@ -1,10 +1,19 @@
-"""Object inference: OVCs from landmark/shiny cues.
+"""Object vector cells (OVCs) for landmark inference.
 
 This module implements object vector cell inference, which provides
 object identity information parallel to spatial location from grid cells.
 
 OVCs respond to specific objects/landmarks regardless of location,
 complementing the spatial codes from grid cells.
+
+Supports two modes:
+    - Merged mode (frequencies=None): OVCs share grid frequencies
+    - Separate mode (frequencies=[...]): OVCs have independent frequency modules
+
+Typical usage example:
+    >>> config = ObjectInferenceConfig(n_ovc=[8, 6, 4], frequencies=[0.8, 0.5, 0.3])
+    >>> ovc = ObjectInference(n_g=[48, 40, 32], n_g_ovc=[24, 18, 12], config=config)
+    >>> g_ovc = ovc(g_gen, locations)
 """
 
 from typing import Any, Dict, List, Optional
@@ -18,6 +27,8 @@ from torch import Tensor
 from torch_tem import utils
 from torch_tem.core.mlp import MLP
 from torch_tem.types import AbstractLocation, Transition
+
+__all__ = ["ObjectInferenceConfig", "ObjectInference"]
 
 
 class ObjectInferenceConfig(BaseModel):
@@ -158,6 +169,3 @@ class ObjectInference(nn.Module):
             Activated OVC responses
         """
         return [torch.nn.functional.leaky_relu(torch.clamp(g_f, min=-1, max=1)) for g_f in g]
-
-
-__all__ = ["ObjectInference", "ObjectInferenceConfig"]

@@ -1,3 +1,24 @@
+"""Lateral Entorhinal Cortex (LEC) module for sensory processing.
+
+This module implements the LEC pathway for sensory observation processing through
+multi-stage transformation:
+    - Encoding: o → o_c (one-hot to two-hot compression)
+    - Processing: o_c → x (temporal filtering at multiple frequencies)
+    - Projection: x → x_ (tiling to hippocampal input space)
+    - Decoding: p → x (place cells to sensory predictions)
+
+The LEC provides sensory context that combines with spatial information from MEC
+to form conjunctive hippocampal representations (place cells).
+
+Typical usage example:
+    >>> config = LECConfig(learn_W_tile=False)
+    >>> context = ... # LECContext with n_o, f_initial, W_tile
+    >>> lec = LECModel(context, config)
+    >>> state = lec.init_state(batch_size=4, device=torch.device('cpu'))
+    >>> state = lec.forward(observation, state)
+    >>> prediction = lec.decode(place_cells)
+"""
+
 from dataclasses import dataclass
 from typing import List, Protocol
 
@@ -10,6 +31,8 @@ from torch_tem.core.lec.encoder import Encoder, EncoderConfig
 from torch_tem.core.lec.processor import Processor, ProcessorConfig
 from torch_tem.core.lec.projection import Projection, ProjectionConfig
 from torch_tem.types import Matrix, MultiScaleCode, Observation, SensoryPrediction
+
+__all__ = ["LECConfig", "LECState", "LECModel"]
 
 
 class LECConfig(BaseModel):
@@ -153,4 +176,79 @@ class LECModel(nn.Module):
         return self.decoder(p)
 
 
-__all__ = ["LECConfig", "LECState", "LECModel", "EncoderConfig", "DecoderConfig", "ProcessorConfig", "ProjectionConfig"]
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """LEC module usage example.
+
+    Demonstrates sensory processing through encoding, temporal filtering,
+    projection, and decoding.
+    """
+    print("=" * 80)
+    print("LEC Module Example - Sensory Processing")
+    print("=" * 80)
+
+    # Configuration
+    n_o = 45  # Observation space
+    n_o_c = 10  # Compressed dimension
+    n_p = [96, 80, 64]  # Place cells per frequency
+    f_initial = [0.8, 0.5, 0.3]  # Initial frequencies
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Observation space: {n_o}")
+    print(f"  Compressed dimension: {n_o_c}")
+    print(f"  Frequencies: {len(f_initial)}")
+    print(f"  Place cells per frequency: {n_p}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create tiling matrices (context)
+    W_tile = [torch.randn(n_o_c, n_p_f) for n_p_f in n_p]
+
+    # Create mock context
+    from dataclasses import dataclass
+
+    @dataclass
+    class MockContext:
+        n_o: int
+        f_initial: list
+        W_tile: list
+
+    context = MockContext(n_o=n_o, f_initial=f_initial, W_tile=W_tile)
+
+    # Create LEC model
+    config = LECConfig(learn_W_tile=False)
+    lec = LECModel(context, config)
+    print(f"\n✓ LEC model initialized")
+
+    # Initialize state
+    device = torch.device("cpu")
+    state = lec.init_state(batch_size, device)
+    print(f"✓ LEC state initialized")
+
+    # Create observation (one-hot)
+    obs_indices = torch.randint(0, n_o, (batch_size,))
+    observation = torch.nn.functional.one_hot(obs_indices, num_classes=n_o).float()
+    print(f"\n✓ Observation created: {observation.shape}")
+
+    # Forward pass
+    with torch.no_grad():
+        state = lec.forward(observation, state)
+
+    print(f"\n✓ Forward pass complete")
+    print(f"  Compressed: {[x.shape for x in state.compressed_observation]}")
+    print(f"  Filtered: {[x.shape for x in state.filtered_observation]}")
+    print(f"  Projected: {[x.shape for x in state.projection]}")
+
+    # Decode from place cells
+    p = [torch.randn(batch_size, n_p_f) for n_p_f in n_p]
+    with torch.no_grad():
+        prediction = lec.decode(p)
+
+    print(f"\n✓ Decoding complete")
+    print(f"  Prediction shape: {prediction.values[0].shape}")
+    print(f"  Sum to 1: {torch.allclose(prediction.values[0].sum(dim=-1), torch.ones(batch_size))}")
+
+    print("\n" + "=" * 80)

@@ -1,9 +1,24 @@
-"""MEC Model with Facade + Strategy pattern.
+"""Medial Entorhinal Cortex (MEC) module for spatial navigation.
+
+This module implements the MEC pathway using Facade and Strategy design patterns
+to provide clean, extensible spatial navigation with optional object vector cells (OVCs).
 
 Architecture:
-- Facade: MECModel provides clean public API, delegates complexity to strategies
-- Strategy: OVCInferenceStrategy handles 3 modes (NoOVC, Merged, Separate)
-- Factory: Helper methods encapsulate construction logic
+    - Facade: MECModel provides clean public API, delegates complexity to strategies
+    - Strategy: OVCInferenceStrategy handles 3 modes (NoOVC, Merged, Separate)
+    - Factory: Helper methods encapsulate construction logic
+
+Supports three OVC modes (auto-detected from context + config):
+    - No OVC: Grid cells only
+    - Merged OVC: OVCs share grid frequencies
+    - Separate OVC: OVCs in independent modules
+
+Typical usage example:
+    >>> config = MECConfig(ovc=None)  # No OVC mode
+    >>> context = ... # MECContext with W_down, W_repeat, n_f_grid
+    >>> mec = MECModel(context, config)
+    >>> state = mec.init_state(batch_size=4, device=torch.device('cpu'))
+    >>> state = mec.forward(p_x, locations, action, state)
 """
 
 from abc import ABC, abstractmethod
@@ -433,3 +448,77 @@ def _create_strategy(config: MECConfig) -> OVCInferenceStrategy:
     if config.ovc.frequencies is None:
         return MergedOVCStrategy()
     raise ValueError("Invalid OVC configuration: Unable to determine inference strategy.")
+
+
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """MEC module usage example.
+
+    Demonstrates spatial navigation with path integration, abstract location
+    inference, and projection to hippocampal space.
+    """
+    print("=" * 80)
+    print("MEC Module Example - Spatial Navigation")
+    print("=" * 80)
+
+    # Configuration
+    n_g = [48, 40, 32]  # Grid cells per frequency
+    n_p = [96, 80, 64]  # Place cells per frequency
+    n_f_grid = 3
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Frequencies: {len(n_g)}")
+    print(f"  Grid cells per frequency: {n_g}")
+    print(f"  Place cells per frequency: {n_p}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create projection matrices (context)
+    W_down = [torch.randn(n_g_f, n_g_f // 2) for n_g_f in n_g]
+    W_repeat = [torch.randn(n_g_f // 2, n_p_f) for n_g_f, n_p_f in zip(n_g, n_p)]
+
+    # Create mock context
+    from dataclasses import dataclass
+
+    @dataclass
+    class MockContext:
+        n_f_grid: int
+        W_down: list
+        W_repeat: list
+
+    context = MockContext(n_f_grid=n_f_grid, W_down=W_down, W_repeat=W_repeat)
+
+    # Create MEC model (No OVC mode)
+    config = MECConfig(ovc=None)
+    mec = MECModel(context, config)
+    print(f"\n✓ MEC model initialized (mode: No OVC)")
+    print(f"  n_g: {mec.n_g}")
+    print(f"  n_p: {mec.n_p}")
+
+    # Initialize state
+    device = torch.device("cpu")
+    state = mec.init_state(batch_size, device)
+    print(f"✓ MEC state initialized")
+
+    # Simulate forward pass
+    p_x = None  # Generative mode (no sensory retrieval)
+    locations = [{"shiny": None} for _ in range(batch_size)]
+    action = torch.randint(0, 4, (batch_size,))
+
+    print(f"\n✓ Simulated inputs:")
+    print(f"  p_x: {p_x} (generative mode)")
+    print(f"  action: {action.shape}")
+
+    # Forward pass
+    with torch.no_grad():
+        state = mec.forward(p_x, locations, action, state)
+
+    print(f"\n✓ Forward pass complete")
+    print(f"  Abstract location: {[g.shape for g in state.abstract_location]}")
+    print(f"  Projection: {[g.shape for g in state.projection]}")
+    print(f"  Transition mean: {[g.shape for g in state.transition_stats.mean]}")
+
+    print("\n" + "=" * 80)

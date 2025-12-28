@@ -1,22 +1,34 @@
-"""Hebbian memory storage for the Tolman-Eichenbaum Machine (TEM).
+"""Hebbian memory storage with plasticity.
 
 This module implements the associative memory system that stores spatial relationships
 via Hebbian plasticity. The memory matrices learn associations between grounded locations
 (place cells) by updating based on co-activation patterns during exploration.
 
 In TEM, the memory system serves as the bridge between:
-1. Inference: Retrieving grounded locations from sensory input (x → p via memory)
-2. Generation: Predicting grounded locations from abstract transitions (g → p via memory)
+    1. Inference: Retrieving grounded locations from sensory input (x → p via memory)
+    2. Generation: Predicting grounded locations from abstract transitions (g → p via memory)
 
 The Hebbian update rule implements a biologically-inspired learning mechanism where
 synaptic connections strengthen when pre- and post-synaptic neurons fire together,
 with gradual decay (forgetting) over time.
+
+The Hebbian update rule is:
+    M_new = λ*M + η*(p_inf + p_gen) ⊗ (p_inf - p_gen)
+
+where λ is memory retention and η is learning rate.
+
+Typical usage example:
+    >>> config = StorageConfig(lambda_=0.9, eta=0.5)
+    >>> storage = MemoryStorage(update_mask, config)
+    >>> M_new = storage.update(p_inferred, p_generated, M)
 """
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field
 
 from torch_tem.types import Matrix, Vector
+
+__all__ = ["StorageConfig", "MemoryStorage"]
 
 
 class StorageConfig(BaseModel):

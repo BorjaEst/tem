@@ -1,26 +1,31 @@
-"""MEC Projection: Abstract location to hippocampal input.
+"""MEC Projection to hippocampal input space.
 
 Projects abstract location (grid cells) to hippocampal input space using
 learned downsampling and expansion matrices. This enables the hippocampus
-to form conjunctive place cell representations (p = g ⊗ x).
+to form conjunctive place cell representations (p = g ⊙ x).
 
 The projection pipeline:
-1. Downsample: g → g_downsampled (dimensionality reduction)
-2. Repeat/Expand: g_downsampled → g_ (hippocampal input space)
+    1. Downsample: g → g_downsampled (dimensionality reduction)
+    2. Repeat/Expand: g_downsampled → g_ (hippocampal input space)
 
 This module also provides inverse operations for memory-based inference.
+
+Typical usage example:
+    >>> config = ProjectionConfig(learn_alpha=True)
+    >>> projection = Projection(W_down, W_repeat, config)
+    >>> g_ = projection(abstract_location)
+    >>> g_reconstructed = projection.inverse(place_cells)
 """
 
-from typing import List, Literal, Protocol
+from typing import List
 
-import numpy as np
 import torch
 import torch.nn as nn
 from pydantic import BaseModel, ConfigDict, Field
-from torch import Tensor
 
-from torch_tem import utils
 from torch_tem.types import AbstractLocation, Matrix, MultiScaleCode
+
+__all__ = ["ProjectionConfig", "Projection"]
 
 
 class ProjectionConfig(BaseModel):

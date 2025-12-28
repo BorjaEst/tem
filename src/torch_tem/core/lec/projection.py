@@ -1,16 +1,21 @@
-"""LEC Projection: Sensory to hippocampal projection with tiling.
+"""LEC Projection to hippocampal space with tiling.
 
 In TEM theory, the Lateral Entorhinal Cortex (LEC) projects filtered sensory
 information to the hippocampus via outer product with grid cells. This module
 implements the sensory projection pathway (x → x̃) using learned tiling matrices.
 
 The projection creates hippocampal inputs by:
-1. Normalizing filtered sensory per frequency: x_norm = f_n(x)
-2. Tiling to hippocampal dimension: x_tiled = x_norm @ W_tile^T
-3. Frequency-specific weighting: x̃ = sigmoid(w_p) * x_tiled
+    1. Normalizing filtered sensory per frequency: x_norm = f_n(x)
+    2. Tiling to hippocampal dimension: x_tiled = x_norm @ W_tile^T
+    3. Frequency-specific weighting: x̃ = sigmoid(w_p) * x_tiled
 
 This allows the hippocampus to form conjunctive codes p that bind sensory
 information (from LEC) with spatial location (from MEC via grid cells g).
+
+Typical usage example:
+    >>> config = ProjectionConfig(learn_w_p=True)
+    >>> projection = Projection(W_tile=tiling_matrices, config=config)
+    >>> projected = projection(filtered_sensory)
 """
 
 from typing import List
@@ -21,6 +26,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
 from torch_tem.types import Matrix, MultiScaleCode
+
+__all__ = ["ProjectionConfig", "Projection"]
 
 
 class ProjectionConfig(BaseModel):
@@ -143,9 +150,6 @@ class Projection(nn.Module):
         """
         x_norm = self.normalize(x)
         return self.tiling(x_norm)
-
-
-__all__ = ["ProjectionConfig", "Projection"]
 
 
 # ======================================================================================

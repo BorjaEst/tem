@@ -1,13 +1,21 @@
-"""Spatial inference: Grid cells from path integration + memory.
+"""Spatial inference through grid cells.
 
 This module implements the spatial component of abstract location inference,
 combining path integration predictions with memory-corrected estimates.
 
 Sources combined:
-1. Path integration (g_gen) - from transition model
-2. Memory retrieval (p_x → g_mem) - learned MLP mapping
+    1. Path integration (g_gen) - from transition model
+    2. Memory retrieval (p_x → g_mem) - learned MLP mapping
 
 Uses precision-weighted fusion to combine estimates based on uncertainty.
+
+In generative mode (p_x=None), only path integration is used.
+In inference mode (p_x provided), memory enables drift correction.
+
+Typical usage example:
+    >>> config = AbstractLocConfig(hidden_multiplier=2)
+    >>> abstract = AbstractLocModel(n_g=[48, 40, 32], n_p=[96, 80, 64], config=config)
+    >>> g = abstract(g_gen, p_x)
 """
 
 from typing import List, Optional
@@ -20,6 +28,8 @@ from torch import Tensor
 from torch_tem import utils
 from torch_tem.core.mlp import MLP
 from torch_tem.types import AbstractLocation, GroundedLocation, Transition
+
+__all__ = ["AbstractLocConfig", "AbstractLocModel"]
 
 
 class AbstractLocConfig(BaseModel):
@@ -144,6 +154,3 @@ class AbstractLocModel(nn.Module):
             Quality indicators [n_f] of [B, 2] (norm, reconstruction_error)
         """
         return [torch.stack([p_x[f].norm(dim=-1), torch.zeros_like(p_x[f][:, 0])], dim=-1) for f in range(self.n_f)]
-
-
-__all__ = ["AbstractLocModel", "AbstractLocConfig"]

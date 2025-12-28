@@ -1,22 +1,23 @@
-"""Hippocampus (HPC) module: Memory storage and retrieval for TEM.
+"""Hippocampus (HPC) module for memory storage and retrieval.
 
 This module implements the hippocampal memory system responsible for storing
 and retrieving grounded location representations through Hebbian plasticity
 and attractor dynamics.
 
-Components:
-    Memory: High-level interface combining storage and retrieval
-    MemoryStorage: Hebbian memory matrices with plasticity updates
-    AttractorDynamics: Iterative pattern completion for memory retrieval
+The hippocampus maintains associative memory between abstract locations (g)
+and grounded locations (p) through Hebbian learning. Attractor dynamics
+enable pattern completion, allowing partial cues to retrieve full memories.
 
-Theory:
-    The hippocampus maintains associative memory between abstract locations (g)
-    and grounded locations (p) through Hebbian learning. Attractor dynamics
-    enable pattern completion, allowing partial cues to retrieve full memories.
-
-    The dual-memory architecture (M_gen/M_inf) supports bidirectional inference:
+The dual-memory architecture (M_gen/M_inf) supports bidirectional inference:
     - M_gen: Grid → Place mapping for generative pathway
     - M_inf: Sensory → Place mapping for inference pathway (optional)
+
+Typical usage example:
+    >>> config = HPCConfig(common_memory=False)
+    >>> context = ... # HPCContext with masks
+    >>> hpc = HPCModel(context, config)
+    >>> state = hpc.init_state(batch_size=4, device=torch.device('cpu'))
+    >>> state = hpc.forward(g_, x_, p_generated, state)
 """
 
 from dataclasses import dataclass
@@ -30,6 +31,8 @@ from torch_tem.core.hpc.attractor import AttractorConfig, AttractorDynamics
 from torch_tem.core.hpc.grounded import GroundedLocConfig, GroundedLocInference
 from torch_tem.core.hpc.storage import MemoryStorage, StorageConfig
 from torch_tem.types import BatchedMemory, GroundedLocation, MultiScaleCode
+
+__all__ = ["HPCConfig", "HPCState", "HPCModel"]
 
 
 class HPCConfig(BaseModel):
@@ -191,4 +194,83 @@ class HPCModel(nn.Module):
         return [M_gen, M_inf]
 
 
-__all__ = ["HPCConfig", "HPCState", "HPCModel", "AttractorConfig", "GroundedLocConfig", "StorageConfig"]
+# ======================================================================================
+# USAGE EXAMPLE
+# ======================================================================================
+
+if __name__ == "__main__":
+    """HPC module usage example.
+
+    Demonstrates hippocampal memory system with grounded location inference,
+    attractor dynamics retrieval, and Hebbian plasticity updates.
+    """
+    print("=" * 80)
+    print("HPC Module Example - Memory Storage and Retrieval")
+    print("=" * 80)
+
+    # Configuration
+    n_p = [96, 80, 64]  # Place cells per frequency
+    n_p_total = sum(n_p)
+    i_attractor = 3
+    batch_size = 4
+
+    print(f"\nConfiguration:")
+    print(f"  Frequencies: {len(n_p)}")
+    print(f"  Place cells per frequency: {n_p}")
+    print(f"  Total place cells: {n_p_total}")
+    print(f"  Attractor iterations: {i_attractor}")
+    print(f"  Batch size: {batch_size}")
+
+    # Create hierarchical masks for attractor
+    masks_inf = [torch.ones(n_p_total) for _ in range(i_attractor)]
+    masks_gen = [torch.ones(n_p_total) for _ in range(i_attractor)]
+    update_mask = torch.ones(n_p_total, n_p_total)
+
+    # Create mock context
+    from dataclasses import dataclass
+
+    @dataclass
+    class MockContext:
+        mask_inference: list = None
+        mask_generative: list = None
+        update_mask: torch.Tensor = None
+
+    context = MockContext(mask_inference=masks_inf, mask_generative=masks_gen, update_mask=update_mask)
+
+    # Create HPC model
+    config = HPCConfig(common_memory=False)
+    hpc = HPCModel(context, config)
+    print(f"\n✓ HPC model initialized (common_memory={config.common_memory})")
+
+    # Initialize state
+    device = torch.device("cpu")
+    state = hpc.init_state(batch_size, device)
+    print(f"✓ HPC state initialized: {len(state.memory)} memory matrices")
+
+    # Simulate forward pass
+    g_ = [torch.randn(batch_size, n) for n in n_p]
+    x_ = [torch.randn(batch_size, n) for n in n_p]
+    p_generated = [torch.randn(batch_size, n) for n in n_p]
+
+    print(f"\n✓ Simulated inputs:")
+    print(f"  g_ (grid cells): {[g.shape for g in g_]}")
+    print(f"  x_ (sensory): {[x.shape for x in x_]}")
+    print(f"  p_generated: {[p.shape for p in p_generated]}")
+
+    # Forward pass
+    with torch.no_grad():
+        state = hpc.forward(g_, x_, p_generated, state)
+
+    print(f"\n✓ Forward pass complete")
+    print(f"  Grounded location: {[p.shape for p in state.grounded_location]}")
+    print(f"  Memory matrices: {[M.shape if M is not None else None for M in state.memory]}")
+
+    # Test retrieval
+    query = [torch.randn(batch_size, n) for n in n_p]
+    with torch.no_grad():
+        p_retrieved = hpc.retrieve(query, for_inference=True, state=state)
+
+    print(f"\n✓ Memory retrieval complete")
+    print(f"  Retrieved pattern: {[p.shape for p in p_retrieved]}")
+
+    print("\n" + "=" * 80)

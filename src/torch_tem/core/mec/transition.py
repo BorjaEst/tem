@@ -10,12 +10,18 @@ Handles:
     - Uncertainty estimation (sigma_g)
 
 Typical usage example:
-    >>> # See TransitionConfig protocol for required params
-    >>> transition = TransitionModel(params)
+    >>> config = TransitionConfig(d_hidden_dim=20, g_init_std=0.5)
+    >>> transition = TransitionModel(
+    ...     n_g=[48, 40, 32],
+    ...     n_f_grid=3,
+    ...     n_actions=4,
+    ...     f_initial=[0.8, 0.5, 0.3],
+    ...     config=config
+    ... )
     >>> g_next = transition(g_prev, action, valid_mask)
 """
 
-from typing import List, Optional, Protocol, Tuple
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -30,62 +36,61 @@ from torch_tem.types import AbstractLocation, Transition
 __all__ = ["TransitionConfig", "TransitionModel"]
 
 
-class TransitionConfig(Protocol):
-    """Minimal interface for TransitionModel.
+class TransitionConfig(BaseModel):
+    """Transition model configuration (hyperparameters only).
 
-    The TransitionModel requires architectural parameters to:
-    - Initialize action-based transition MLPs (MLP_D_a) with proper dimensions
-    - Create hierarchical g_connections between frequency modules
-    - Initialize uncertainty estimation networks (MLP_sigma_g_path)
-    - Set up prior distributions for abstract location initialization
-
-    Required attributes:
-        n_f: Total number of frequency modules
-        n_f_g: Number of grid cell frequency modules
-        n_f_ovc: Number of object-vector cell frequency modules
-        n_g: List of abstract location neurons per frequency [n_f]
-        n_actions: Number of possible actions
-        f_initial: Base frequency values for hierarchical connections [n_f_g]
-        d_hidden_dim: Hidden layer width for transition MLP
-        g_init_std: Standard deviation for initializing g prior distribution
-        do_sample: Whether to sample from transition distribution (vs using mean)
+    Attributes:
+        d_hidden_dim: Hidden layer width for transition MLP.
+        g_init_std: Standard deviation for initializing abstract location prior.
+        do_sample: Whether to sample from transition distribution (vs using mean).
     """
 
-    n_f: int
-    n_f_g: int
-    n_f_ovc: int
-    n_g: List[int]
-    n_actions: int
-    f_initial: List[float]
-    d_hidden_dim: int
-    g_init_std: float
-    do_sample: bool
+    model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
+
+    d_hidden_dim: int = Field(default=20, ge=1, description="Hidden layer width for transition MLP")
+    g_init_std: float = Field(default=0.5, gt=0, description="Standard deviation for initializing g prior distribution")
+    do_sample: bool = Field(default=False, description="Whether to sample from transition distribution (vs using mean)")
 
 
 class TransitionModel(nn.Module):
     """Predicts next abstract location from current location and action.
 
     Handles:
-    - Action-based transitions (via MLP_D_a)
-    - No-action transitions for shiny environments (via D_no_a)
-    - Hierarchical connections between frequency modules
-    - Uncertainty estimation (sigma_g)
+        - Action-based transitions (via MLP_D_a)
+        - No-action transitions for shiny environments (via D_no_a)
+        - Hierarchical connections between frequency modules
+        - Uncertainty estimation (sigma_g)
     """
 
-    def __init__(self, params: TransitionConfig):
+    def __init__(self, n_g: List[int], n_f_grid: int, n_actions: int, f_initial: List[float], config: TransitionConfig):
+        """Initialize transition model.
+
+        Args:
+            n_g: Abstract location dimensions per frequency [n_f].
+            n_f_grid: Number of grid cell frequency modules.
+            n_actions: Number of possible actions.
+            f_initial: Base frequency values for hierarchical connections [n_f_grid].
+            config: Transition configuration (hyperparameters).
+        """
         super().__init__()
-        self.n_f = n_f = params.n_f
-        self.n_g = params.n_g
-        self.n_actions = params.n_actions
-        self.do_sample = params.do_sample
-        self.g_connections = utils.create_g_connections(n_f, params.n_f_g, params.n_f_ovc, params.f_initial)
+        self._config = config
+
+        # Architectural constants
+        self.n_g = n_g
+        self.n_f = n_f = len(n_g)
+        self.n_f_grid = n_f_grid
+        self.n_f_ovc = n_f - n_f_grid
+        self.n_actions = n_actions
+
+        # Create hierarchical connections
+        self.g_connections = utils.create_g_connections(n_f, n_f_grid, self.n_f_ovc, f_initial)
 
         # MLP for action-based transitions
         self.MLP_D_a = MLP(
-            in_dim=[self.n_actions] * self.n_f,
-            out_dim=[sum([self.n_g[f_from] for f_from in range(self.n_f) if self.g_connections[f_to][f_from]]) * self.n_g[f_to] for f_to in range(self.n_f)],
+            in_dim=[n_actions] * n_f,
+            out_dim=[sum([n_g[f_from] for f_from in range(n_f) if self.g_connections[f_to][f_from]]) * n_g[f_to] for f_to in range(n_f)],
             activation=[torch.tanh, None],
-            hidden_dim=[params.d_hidden_dim] * self.n_f,
+            hidden_dim=[config.d_hidden_dim] * n_f,
             bias=[True, False],
         )
         # Initialize to identity (no change initially)
@@ -93,24 +98,29 @@ class TransitionModel(nn.Module):
 
         # No-action transition weights for shiny environments
         self.D_no_a = nn.ParameterList(
-            [nn.Parameter(torch.zeros(sum([self.n_g[f_from] for f_from in range(self.n_f) if self.g_connections[f_to][f_from]]) * self.n_g[f_to])) for f_to in range(self.n_f)]
+            [nn.Parameter(torch.zeros(sum([n_g[f_from] for f_from in range(n_f) if self.g_connections[f_to][f_from]]) * n_g[f_to])) for f_to in range(n_f)]
         )
 
         # Uncertainty estimation MLPs
         # sigma_g depends on g_prev, not action
         # Hidden dim is 2 * n_g in legacy
         self.MLP_sigma_g_path = MLP(
-            in_dim=self.n_g,
-            out_dim=self.n_g,
+            in_dim=n_g,
+            out_dim=n_g,
             activation=[torch.tanh, torch.exp],
-            hidden_dim=[2 * g for g in self.n_g],
+            hidden_dim=[2 * g for g in n_g],
         )
 
         # Log of standard deviation of abstract location cells when entering a new environment
         # Standard deviation of the prior on g. Initialise with truncated normal
         self.logsig_g_init = nn.ParameterList(
-            [nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=self.n_g[f], loc=0, scale=params.g_init_std), dtype=torch.float)) for f in range(self.n_f)]
+            [nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=n_g[f], loc=0, scale=config.g_init_std), dtype=torch.float)) for f in range(n_f)]
         )
+
+    @property
+    def do_sample(self) -> bool:
+        """Whether to sample from transition distribution."""
+        return self._config.do_sample
 
     def forward(self, g_prev: AbstractLocation, a: Optional[Tensor] = None, valid_mask: Optional[Tensor] = None) -> Transition:
         """Main forward pass.

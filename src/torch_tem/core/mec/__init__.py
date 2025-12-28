@@ -60,14 +60,18 @@ class MECContext(Protocol):
     """Protocol for MEC model initialization parameters (architectural constants).
 
     Attributes:
-        n_f_grid: Number of grid-only modules (determines OVC mode)
-        W_down: Downsampling matrices defining n_g dimensions
-        W_repeat: Expansion matrices defining n_p dimensions
+        f_initial: Base frequency values for hierarchical connections [n_f_grid].
+        W_down: Downsampling matrices defining n_g dimensions.
+        W_repeat: Expansion matrices defining n_p dimensions.
+        n_actions: Number of possible actions from environment.
+        n_f_grid: Number of grid-only modules (determines OVC mode).
     """
 
-    n_f_grid: int
+    f_initial: List[float]
     W_down: List[Tensor]
     W_repeat: List[Tensor]
+    n_actions: int
+    n_f_grid: int
 
 
 @dataclass
@@ -116,29 +120,26 @@ class MECModel(nn.Module):
         """Initialize MEC model.
 
         Args:
-            context: Architectural constants (W_down, W_repeat, n_f_grid)
+            context: Architectural constants (W_down, W_repeat, n_f_grid, f_initial, n_actions)
             config: Hyperparameters (learning, OVC config, submodule configs)
         """
         super().__init__()
         self._config = config
+        self._dims = dims = resolve_dimensions(context, config)
 
-        # Resolve dimensions and build submodules
-        self._dims = resolve_dimensions(context, config)
-        self._build_projection_matrices(context)
-        self._build_submodules()
+        # Register projection matrices as parameters or buffers based on config
+        self._W_down = nn.ParameterList([nn.Parameter(matrix, requires_grad=config.learn_W_down) for matrix in context.W_down])
+        self._W_repeat = nn.ParameterList([nn.Parameter(matrix, requires_grad=config.learn_W_repeat) for matrix in context.W_repeat])
+
+        # Initialize submodules
+        self.projection = Projection(self._W_down, self._W_repeat, config.projection)
+        self.abstract = AbstractLocModel(self._dims.n_g_grid, self._dims.n_p[: len(self._dims.n_g_grid)], config.abstract)
+        self.transition = TransitionModel(n_g=dims.n_g, n_f_grid=dims.n_f_grid, n_actions=context.n_actions, f_initial=context.f_initial, config=config.transition)
+        self.ovc = ObjectInference(self._dims.n_g, self._dims.n_g_ovc, self._config.ovc)
         self._strategy = _create_strategy(config)
-
-    def _build_projection_matrices(self, context: MECContext) -> None:
-        """Register projection matrices as parameters."""
-        self._W_down = nn.ParameterList([nn.Parameter(matrix, requires_grad=self._config.learn_W_down) for matrix in context.W_down])
-        self._W_repeat = nn.ParameterList([nn.Parameter(matrix, requires_grad=self._config.learn_W_repeat) for matrix in context.W_repeat])
 
     def _build_submodules(self) -> None:
         """Initialize all MEC submodules."""
-        self.projection = Projection(self._W_down, self._W_repeat, self._config.projection)
-        self.abstract = AbstractLocModel(self._dims.n_g_grid, self._dims.n_p[: len(self._dims.n_g_grid)], self._config.abstract)
-        self.transition = TransitionModel(self._config.transition)
-        self.ovc = ObjectInference(self._dims.n_g, self._dims.n_g_ovc, self._config.ovc)
 
     @property
     def n_g(self) -> List[int]:

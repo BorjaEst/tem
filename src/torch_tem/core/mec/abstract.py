@@ -153,4 +153,5 @@ class AbstractLocModel(nn.Module):
         Returns:
             Quality indicators [n_f] of [B, 2] (norm, reconstruction_error)
         """
-        return [torch.stack([p_x[f].norm(dim=-1), torch.zeros_like(p_x[f][:, 0])], dim=-1) for f in range(self.n_f)]
+        quality_fn = lambda f: [p_x[f].norm(dim=-1), torch.zeros_like(p_x[f][:, 0])]
+        return [torch.stack(quality_fn(f), dim=-1) for f in range(self.n_f)]

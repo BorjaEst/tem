@@ -71,7 +71,7 @@ class AbstractLocModel(nn.Module):
 
         Args:
             n_g: Grid cell dimensions per frequency (full resolution)
-            W_repeat: Expansion matrices [n_g_subsampled[f], n_p[f]] for legacy mode (optional)
+            W_repeat: Expansion matrices [n_p[f], n_g_subsampled[f]]
             config: Spatial inference configuration
         """
         super().__init__()
@@ -80,9 +80,8 @@ class AbstractLocModel(nn.Module):
         self._n_f = len(n_g)
         self._W_repeat = W_repeat
 
-        # Validate configuration
-        if config.use_inverse_projection and W_repeat is None:
-            raise ValueError("use_inverse_projection=True requires W_repeat matrices")
+        # Infer n_p from W_repeat (W_repeat[f].shape = [n_p[f], n_g_subsampled[f]])
+        self._n_p = [W.shape[1] for W in W_repeat]
 
         # Memory → Grid MLP dimensions
         if config.use_inverse_projection:

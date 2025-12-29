@@ -11,7 +11,7 @@ Supports two modes:
     - Separate mode (frequencies=[...]): OVCs have independent frequency modules
 
 Typical usage example:
-    >>> config = ObjectInferenceConfig(n_ovc=[8, 6, 4], frequencies=[0.8, 0.5, 0.3])
+    >>> config = ObjectInferenceConfig(n_g_ovc=[8, 6, 4], frequencies=[0.8, 0.5, 0.3])
     >>> ovc = ObjectInference(n_g=[48, 40, 32], n_g_ovc=[24, 18, 12], config=config)
     >>> g_ovc = ovc(g_gen, locations)
 """
@@ -41,16 +41,14 @@ class ObjectInferenceConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
 
-    # OVC dimensions
-    n_ovc: List[int] = Field(default_factory=list, description="OVC neuron counts per frequency. Empty list = disabled.")
+    # OVC dimensions (explicit n_g, not neuron counts)
+    n_g_ovc: List[int] = Field(default_factory=list, description="OVC abstract location dimensions per module")
 
     # Mode selector (replaces separate_modules boolean)
-    frequencies: Optional[List[float]] = Field(
-        default=None, description="Frequency values for OVC modules. " "None = merged mode (share grid frequencies). " "List[float] = separate mode (independent OVC modules)."
-    )
+    frequencies: List[float] = Field(default=list, description="Frequency values for OVC modules. " "None = merged mode (shared). " "List[float] = separate mode (independent)")
 
     # Hyperparameters
-    hidden_multiplier: int = Field(default=2, ge=1, description="MLP hidden dimension multiplier: hidden_dim[f] = multiplier * n_ovc[f]")
+    hidden_multiplier: int = Field(default=2, ge=1, description="MLP hidden dimension multiplier: hidden_dim[f] = multiplier * n_g_ovc[f]")
     g_init_std: float = Field(default=0.5, gt=0, description="Initial OVC state std")
 
 
@@ -67,13 +65,13 @@ class ObjectInference(nn.Module):
        - Forward returns OVC activations
     """
 
-    def __init__(self, n_g: List[int], n_g_ovc: List[int], config: Optional[ObjectInferenceConfig]):
+    def __init__(self, n_g: List[int], n_g_ovc: List[int], config: ObjectInferenceConfig):
         """Initialize object inference.
 
         Args:
             n_g: Total abstract location dimensions (from W_down context)
             n_g_ovc: OVC dimensions - either portion (merged) or full (separate)
-            config: OVC configuration (None = disabled)
+            config: OVC configuration (empty n_g_ovc = disabled)
         """
         super().__init__()
         self._config = config
@@ -95,12 +93,12 @@ class ObjectInference(nn.Module):
     @property
     def enabled(self) -> bool:
         """Check if OVC is enabled in separate mode."""
-        return self._config is not None and len(self._n_g_ovc) > 0 and self._config.frequencies is not None  # None = merged mode
+        return bool(self._n_g_ovc) and self._config.frequencies is not None  # None = merged mode
 
     @property
     def is_merged(self) -> bool:
         """Check if OVC is in merged mode (shares grid frequencies)."""
-        return self._config is not None and len(self._n_g_ovc) > 0 and self._config.frequencies is None
+        return bool(self._n_g_ovc) and self._config.frequencies is None
 
     @property
     def n_f(self) -> int:
@@ -200,7 +198,7 @@ if __name__ == "__main__":
     print(f"Example 1: Separate OVC Mode")
     print(f"{'=' * 80}")
 
-    config_separate = ObjectInferenceConfig(n_ovc=n_g_ovc, frequencies=[0.8, 0.5, 0.3], hidden_multiplier=2)  # Independent frequencies
+    config_separate = ObjectInferenceConfig(n_g_ovc=n_g_ovc, frequencies=[0.8, 0.5, 0.3], hidden_multiplier=2)  # Independent frequencies
     ovc_separate = ObjectInference(n_g, n_g_ovc, config_separate)
     print(f"✓ OVC model initialized (separate mode)")
 
@@ -221,7 +219,7 @@ if __name__ == "__main__":
     print(f"Example 2: Merged OVC Mode")
     print(f"{'=' * 80}")
 
-    config_merged = ObjectInferenceConfig(n_ovc=n_g_ovc, frequencies=None, hidden_multiplier=2)  # Share grid frequencies
+    config_merged = ObjectInferenceConfig(n_g_ovc=n_g_ovc, frequencies=None, hidden_multiplier=2)  # Share grid frequencies
     ovc_merged = ObjectInference(n_g, n_g_ovc, config_merged)
     print(f"✓ OVC model initialized (merged mode)")
 

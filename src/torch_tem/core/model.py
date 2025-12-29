@@ -16,9 +16,10 @@ from typing import Dict, List, Optional, Protocol, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 from torch import nn
 
-from torch_tem.core.hpc import HPCConfig, HPCModel, HPCState
-from torch_tem.core.lec import LECConfig, LECModel, LECState
-from torch_tem.core.mec import MECConfig, MECModel, MECState
+from torch_tem.core.hpc import HPCConfig, HPCContext, HPCModel, HPCState
+from torch_tem.core.lec import LECConfig, LECContext, LECModel, LECState
+from torch_tem.core.mec import MECConfig, MECContext, MECModel, MECState
+from torch_tem.data.environment import Environment
 
 from torch_tem.types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
 from torch_tem.types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
@@ -45,15 +46,21 @@ class TEMContext(Protocol):
     """Protocol for TEM model initialization parameters.
 
     Attributes:
-        n_o: Number of sensory observation neurons
-        f_initial: Initial frequency values for temporal filtering
-        W_tile: Tiling matrices for LEC projection, one per frequency module
-        W_down: Downsampling matrices for MEC projection, one per frequency module
-        W_repeat: Expansion matrices for MEC projection, one per frequency module
+        env: Environment instance (provides n_observations, n_actions, n_locations)
+        f_initial: Grid frequency values for hierarchical connections [n_f_grid]
+        n_g_grid: Grid cell dimensions per frequency [n_f_grid]
+        W_tile: Tiling matrices for LEC projection [n_f_total]
+        W_down: Downsampling matrices for MEC projection [n_f_total]
+        W_repeat: Expansion matrices for MEC projection [n_f_total]
+
+    Note:
+        n_g = n_g_grid + n_g_ovc (from config.mec.ovc.n_g_ovc)
+        n_f_total = len(n_g)
     """
 
-    n_o: int
+    env: Environment
     f_initial: List[float]
+    n_g_grid: List[int]
     W_tile: List[Matrix]
     W_down: List[Matrix]
     W_repeat: List[Matrix]
@@ -153,20 +160,28 @@ class TEMModel(nn.Module):
         """Initialize TEM model.
 
         Args:
-            config: Configuration with all component parameters and training settings.
+            context: Model initialization parameters (architecture)
+            config: Configuration with all component parameters and training settings
         """
         super().__init__()
         self._config = config  # Store model configuration
+        n_o = context.env.n_observations  # Number of sensory observation neurons
+        n_a = context.env.n_actions  # Number of possible actions
+
+        # Build component contexts
+        lec_context = LECContext(n_o=n_o, W_tile=context.W_tile)
+        mec_context = MECContext(
+            n_a=n_a,
+            n_g_grid=context.n_g_grid,
+            W_down=context.W_down,
+            W_repeat=context.W_repeat,
+        )
+        hpc_context = HPCContext(f_initial=context.f_initial)
 
         # Initialize components
-        self.hpc = HPCModel(config.hpc)  # Hippocampus with memory and grounded inference
-        self.lec = LECModel(config.lec)  # LEC pathway module
-        self.mec = MECModel(config.mec)  # MEC pathway module
-
-    @property
-    def config(self) -> TEMConfig:
-        """Return the TEM model configuration."""
-        return self._config
+        self.lec = LECModel(lec_context, config.lec)  # LEC pathway module
+        self.mec = MECModel(mec_context, config.mec)  # MEC pathway module
+        self.hpc = HPCModel(hpc_context, config.hpc)  # Hippocampus with memory and grounded inference
 
     def init_state(self, x: Observation) -> TEMState:
         """Initialize TEM state from first observation.

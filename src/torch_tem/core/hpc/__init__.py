@@ -32,7 +32,7 @@ from torch_tem.core.hpc.grounded import GroundedLocConfig, GroundedLocInference
 from torch_tem.core.hpc.storage import MemoryStorage, StorageConfig
 from torch_tem.types import BatchedMemory, GroundedLocation, MultiScaleCode
 
-__all__ = ["HPCConfig", "HPCState", "HPCModel"]
+__all__ = ["HPCConfig", "HPCContext", "HPCState", "HPCModel"]
 
 
 class HPCConfig(BaseModel):

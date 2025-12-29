@@ -32,7 +32,7 @@ from torch_tem.core.lec.processor import Processor, ProcessorConfig
 from torch_tem.core.lec.projection import Projection, ProjectionConfig
 from torch_tem.types import Matrix, MultiScaleCode, Observation, SensoryPrediction
 
-__all__ = ["LECConfig", "LECState", "LECModel"]
+__all__ = ["LECConfig", "LECContext", "LECState", "LECModel"]
 
 
 class LECConfig(BaseModel):
@@ -54,7 +54,7 @@ class LECContext(Protocol):
     """Protocol for LEC model initialization parameters.
 
     Attributes:
-        n_o: Number of sensory observation neurons
+        n_o: Number of sensory observation neurons (from environment)
         f_initial: Initial frequency values for temporal filtering
         W_tile: Tiling matrices for projection, one per frequency module
     """

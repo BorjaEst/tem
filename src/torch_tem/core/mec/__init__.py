@@ -35,7 +35,7 @@ from torch_tem.core.mec.projection import Projection, ProjectionConfig
 from torch_tem.core.mec.transition import TransitionConfig, TransitionModel
 from torch_tem.types import AbstractLocation, GroundedLocation, MultiScaleCode, Transition
 
-__all__ = ["MECConfig", "MECState", "MECModel"]
+__all__ = ["MECConfig", "MECContext", "MECState", "MECModel"]
 
 
 class MECConfig(BaseModel):
@@ -52,8 +52,8 @@ class MECConfig(BaseModel):
     transition: TransitionConfig = Field(default_factory=TransitionConfig, description="Transition model configuration")
     projection: ProjectionConfig = Field(default_factory=ProjectionConfig, description="Projection configuration")
 
-    # Optional OVC extension
-    ovc: Optional[ObjectInferenceConfig] = Field(default=None, description="OVC configuration. None = disabled")
+    # OVC extension
+    ovc: ObjectInferenceConfig = Field(default_factory=ObjectInferenceConfig, description="OVC configuration. Empty = disabled")
 
 
 class MECContext(Protocol):
@@ -61,17 +61,17 @@ class MECContext(Protocol):
 
     Attributes:
         f_initial: Base frequency values for hierarchical connections [n_f_grid].
-        W_down: Downsampling matrices defining n_g dimensions.
-        W_repeat: Expansion matrices defining n_p dimensions.
+        n_g_grid: Grid cell dimensions per frequency [n_f_grid].
+        W_down: Downsampling matrices defining n_g dimensions [n_f_total].
+        W_repeat: Expansion matrices defining n_p dimensions [n_f_total].
         n_actions: Number of possible actions from environment.
-        n_f_grid: Number of grid-only modules (determines OVC mode).
     """
 
     f_initial: List[float]
+    n_g_grid: List[int]
     W_down: List[Tensor]
     W_repeat: List[Tensor]
     n_actions: int
-    n_f_grid: int
 
 
 @dataclass
@@ -133,31 +133,10 @@ class MECModel(nn.Module):
 
         # Initialize submodules
         self.projection = Projection(self._W_down, self._W_repeat, config.projection)
-        self.abstract = AbstractLocModel(self._dims.n_g_grid, self._dims.n_p[: len(self._dims.n_g_grid)], config.abstract)
+        self.abstract = AbstractLocModel(dims.n_g_grid, context.W_repeat[: dims.n_f_grid], config.abstract)
         self.transition = TransitionModel(n_g=dims.n_g, n_f_grid=dims.n_f_grid, n_actions=context.n_actions, f_initial=context.f_initial, config=config.transition)
-        self.ovc = ObjectInference(self._dims.n_g, self._dims.n_g_ovc, self._config.ovc)
+        self.ovc = ObjectInference(dims.n_g, dims.n_g_ovc, config.ovc)
         self._strategy = _create_strategy(config)
-
-    def _build_submodules(self) -> None:
-        """Initialize all MEC submodules."""
-        # Build transition model
-        self.transition = TransitionModel(
-            n_g=self._dims.n_g, n_f_grid=self._dims.n_f_grid, n_actions=self._context.n_actions, f_initial=self._context.f_initial, config=self._config.transition
-        )
-
-        # Build abstract location model with W_repeat for legacy mode
-        self.abstract = AbstractLocModel(
-            n_g=self._dims.n_g_grid,
-            n_p=self._dims.n_p[: self._dims.n_f_grid],
-            config=self._config.abstract,
-            W_repeat=self._context.W_repeat[: self._dims.n_f_grid] if self._config.abstract.use_inverse_projection else None,
-        )
-
-        # Build projection
-        self.projection = Projection(self._context.W_down, self._context.W_repeat, self._config.projection)
-
-        # Build OVC if configured
-        self.ovc = ObjectInference(n_g=self._dims.n_g, n_g_ovc=self._dims.n_g_ovc, config=self._config.ovc)
 
     @property
     def n_g(self) -> List[int]:
@@ -274,106 +253,114 @@ class DimensionConfig:
     n_f_ovc: int
 
 
-def _extract_base_dimensions(context: MECContext) -> Tuple[List[int], List[int], int, int, int]:
-    """Extract basic dimensions from context matrices.
+def _extract_base_dimensions(context: MECContext, config: MECConfig) -> Tuple[List[int], List[int], int, int, int]:
+    """Extract and compute dimensions from context and config.
+
+    Universal formula: n_g = context.n_g_grid + config.ovc.n_g_ovc
+
+    This works for all modes:
+    - No OVC: n_g = [48,40,32] + [] = [48,40,32]
+    - Separate: n_g = [48,40,32] + [24,18,12] = [48,40,32,24,18,12]
+    - Merged: n_g = [72,58,44] + [] = [72,58,44] (OVC already in n_g_grid)
+
+    Args:
+        context: MEC context with n_g_grid and matrices
+        config: MEC configuration with n_g_ovc list
 
     Returns:
-        Tuple of (n_g, n_p, n_f_total, n_f_grid, n_f_ovc)
+        (n_g, n_p, n_f_total, n_f_grid, n_f_ovc)
     """
-    n_g = [W.shape[0] for W in context.W_down]
-    n_p = [W.shape[1] for W in context.W_repeat]
+    # Universal additive formula
+    n_g_grid = context.n_g_grid
+    n_g_ovc_config = config.ovc.n_g_ovc
+    n_g = n_g_grid + n_g_ovc_config
+
+    # Derive counts
+    n_f_grid = len(n_g_grid)
+    n_f_ovc = len(n_g_ovc_config)
     n_f_total = len(n_g)
-    n_f_grid = context.n_f_grid
-    n_f_ovc = n_f_total - n_f_grid
+
+    # Extract place cell dimensions from matrices
+    n_p = [W.shape[1] for W in context.W_repeat]
+
     return n_g, n_p, n_f_total, n_f_grid, n_f_ovc
 
 
-def _validate_no_ovc_mode(n_f_ovc: int, n_f_total: int) -> None:
-    """Validate configuration for No OVC mode."""
-    if n_f_ovc != 0:
+def _validate_dimensions(context: MECContext, config: MECConfig, n_g: List[int], n_f_grid: int, n_f_total: int) -> None:
+    """Validate dimension consistency between context and config.
+
+    Ensures W_down/W_repeat matrices match the expected dimensions from
+    context.n_g_grid + config.ovc.n_g_ovc.
+    """
+    # Validate matrix dimensions match n_g
+    if len(context.W_down) != n_f_total:
         raise ValueError(
-            f"No OVC mode requires n_f_grid == n_f_total. "
-            f"Context allocates {n_f_ovc} OVC modules. "
-            f"Set n_f_grid={n_f_total} to disable OVC."
+            f"W_down matrix count mismatch: expected {n_f_total} matrices, got {len(context.W_down)}. "
+            f"Ensure len(W_down) == len(n_g_grid) + len(n_g_ovc)."
         )  # fmt: skip
 
-
-def _validate_separate_ovc_mode(n_f_ovc: int, n_f_total: int, n_ovc_list: List[int], frequencies: List[float], n_g: List[int], n_f_grid: int) -> None:
-    """Validate configuration for Separate OVC mode."""
-    if n_f_ovc == 0:
+    if len(context.W_repeat) != n_f_total:
         raise ValueError(
-            f"Separate OVC mode requires n_f_grid < n_f_total. "
-            f"Context has n_f_grid={n_f_grid}, n_f_total={n_f_total}. "
-            f"Set n_f_grid < {n_f_total} to allocate OVC modules. "
+            f"W_repeat matrix count mismatch: expected {n_f_total} matrices, got {len(context.W_repeat)}. "
+            f"Ensure len(W_repeat) == len(n_g_grid) + len(n_g_ovc)."
         )  # fmt: skip
 
-    if len(n_ovc_list) != n_f_ovc:
-        raise ValueError(
-            f"Separate OVC mode: Config specifies {len(n_ovc_list)} OVC modules "
-            f"but context allocates {n_f_ovc} modules (n_f_total - n_f_grid). "
-            f"Ensure len(config.ovc.n_ovc) == {n_f_ovc}."
-        )  # fmt: skip
-
-    # Validate dimension consistency (n_g_ovc = 3 * n_ovc)
-    n_g_ovc = n_g[n_f_grid:]
-    for f, (actual, expected_base) in enumerate(zip(n_g_ovc, n_ovc_list)):
-        expected = 3 * expected_base
-        if actual != expected:
+    # Validate W_down first dimension matches n_g
+    for f, (W, expected_dim) in enumerate(zip(context.W_down, n_g)):
+        if W.shape[0] != expected_dim:
             raise ValueError(
-                f"Separate OVC module {f}: Dimension mismatch. "
-                f"Context has {actual} neurons but config expects {expected} (3 * {expected_base}). "
-                f"Verify W_down matrices match config.ovc.n_ovc."
+                f"W_down[{f}] dimension mismatch: expected shape[0]={expected_dim}, got {W.shape[0]}. "
+                f"W_down dimensions must match n_g = n_g_grid + n_g_ovc."
             )  # fmt: skip
-
-
-def _validate_merged_ovc_mode(n_f_ovc: int, n_f_total: int, n_ovc_list: List[int]) -> None:
-    """Validate configuration for Merged OVC mode."""
-    if n_f_ovc != 0:
-        raise ValueError(
-            f"Merged OVC mode requires n_f_grid == n_f_total. "
-            f"Context allocates {n_f_ovc} separate OVC modules. "
-            f"Set n_f_grid={n_f_total} for merged mode."
-        )  # fmt: skip
-
-    if len(n_ovc_list) != n_f_total:
-        raise ValueError(
-            f"Merged OVC mode: config.ovc.n_ovc must match all frequency modules. "
-            f"Expected {n_f_total} modules but got {len(n_ovc_list)}. "
-            f"Ensure len(config.ovc.n_ovc) == {n_f_total}."
-        )  # fmt: skip
 
 
 def resolve_dimensions(context: MECContext, config: MECConfig) -> DimensionConfig:
     """Resolve dimensions from context and config.
 
-    Single source of truth for dimension calculation. Validates consistency
-    between context (architectural constants) and config (hyperparameters).
+    Universal formula: n_g = context.n_g_grid + config.ovc.n_g_ovc
+
+    This single formula handles all three modes:
+    - No OVC: n_g_ovc=[] → n_g = n_g_grid
+    - Separate: n_g_ovc=[24,18,12] → n_g = n_g_grid + n_g_ovc (separate modules)
+    - Merged: n_g_ovc=[] → n_g = n_g_grid (OVC portions already in n_g_grid)
 
     Args:
-        context: Architectural constants (W_down, W_repeat, n_f_grid)
-        config: Hyperparameters (ovc config)
+        context: Architectural constants (n_g_grid, W_down, W_repeat)
+        config: Hyperparameters (ovc.n_g_ovc list)
 
     Returns:
         Validated dimension configuration
 
     Raises:
-        ValueError: If context and config are incompatible
+        ValueError: If context and config dimensions are incompatible
     """
-    n_g, n_p, n_f_total, n_f_grid, n_f_ovc = _extract_base_dimensions(context)
+    # Extract dimensions using universal additive formula
+    n_g, n_p, n_f_total, n_f_grid, n_f_ovc = _extract_base_dimensions(context, config)
 
-    # Mode A: No OVC
-    if config.ovc is None:
-        _validate_no_ovc_mode(n_f_ovc, n_f_total)
-        return DimensionConfig(n_g=n_g, n_p=n_p, n_g_grid=n_g, n_g_ovc=[], n_f_total=n_f_total, n_f_grid=n_f_grid, n_f_ovc=0)
+    # Validate dimension consistency
+    _validate_dimensions(context, config, n_g, n_f_grid, n_f_total)
 
-    # Mode C: Separate OVC modules
-    if config.ovc.frequencies is not None:
-        _validate_separate_ovc_mode(n_f_ovc, n_f_total, config.ovc.n_ovc, config.ovc.frequencies, n_g, n_f_grid)
-        return DimensionConfig(n_g=n_g, n_p=n_p, n_g_grid=n_g[:n_f_grid], n_g_ovc=n_g[n_f_grid:], n_f_total=n_f_total, n_f_grid=n_f_grid, n_f_ovc=n_f_ovc)
+    # Determine n_g_ovc portions based on mode
+    # The key difference between modes is what n_g_ovc represents in DimensionConfig
+    if not config.ovc.n_g_ovc:
+        # Mode A (No OVC): Empty list
+        n_g_ovc_portions = []
+    elif config.ovc.frequencies is not None:
+        # Mode C (Separate): Use actual OVC module dimensions from n_g
+        n_g_ovc_portions = n_g[n_f_grid:]
+    else:
+        # Mode B (Merged): Use config portions (these are base counts, not full dimensions)
+        n_g_ovc_portions = config.ovc.n_g_ovc
 
-    # Mode B: Merged OVC (frequencies=None)
-    _validate_merged_ovc_mode(n_f_ovc, n_f_total, config.ovc.n_ovc)
-    return DimensionConfig(n_g=n_g, n_p=n_p, n_g_grid=n_g, n_g_ovc=[3 * ovc for ovc in config.ovc.n_ovc], n_f_total=n_f_total, n_f_grid=n_f_grid, n_f_ovc=0)
+    return DimensionConfig(
+        n_g=n_g,
+        n_p=n_p,
+        n_g_grid=context.n_g_grid,
+        n_g_ovc=n_g_ovc_portions,
+        n_f_total=n_f_total,
+        n_f_grid=n_f_grid,
+        n_f_ovc=n_f_ovc,
+    )
 
 
 # ============================================================================
@@ -454,19 +441,22 @@ class SeparateOVCStrategy(OVCInferenceStrategy):
 def _create_strategy(config: MECConfig) -> OVCInferenceStrategy:
     """Factory method to create appropriate OVC inference strategy.
 
+    Strategy selection based on config.ovc:
+    - Empty n_g_ovc → NoOVCStrategy
+    - frequencies != None → SeparateOVCStrategy
+    - frequencies == None → MergedOVCStrategy
+
     Args:
         config: MEC configuration
 
     Returns:
         OVC inference strategy instance
     """
-    if config.ovc is None:
+    if not config.ovc.n_g_ovc:
         return NoOVCStrategy()
     if config.ovc.frequencies is not None:
         return SeparateOVCStrategy()
-    if config.ovc.frequencies is None:
-        return MergedOVCStrategy()
-    raise ValueError("Invalid OVC configuration: Unable to determine inference strategy.")
+    return MergedOVCStrategy()
 
 
 # ======================================================================================

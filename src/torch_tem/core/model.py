@@ -11,19 +11,55 @@ components for maintainability and testability.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Protocol, Tuple
 
+from pydantic import BaseModel, ConfigDict, Field
 from torch import nn
 
-from torch_tem.config import ModelConfig
-from torch_tem.core import hpc, lec, mec
+from torch_tem.core.hpc import HPCConfig, HPCModel, HPCState
+from torch_tem.core.lec import LECConfig, LECModel, LECState
+from torch_tem.core.mec import MECConfig, MECModel, MECState
 
 from torch_tem.types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
 from torch_tem.types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
-from torch_tem.types import BatchedMemory  # isort: skip
+from torch_tem.types import Matrix, BatchedMemory  # isort: skip
 
 
-@dataclass
+class TEMConfig(BaseModel):
+    """TEM model configuration parameters.
+
+    Combines configurations for all TEM components:
+    - LEC pathway (sensory processing)
+    - MEC pathway (abstract location processing)
+    - HPC pathway (memory and grounded inference)
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    lec: LECConfig = Field(default_factory=LECConfig, description="LEC pathway configuration")
+    mec: MECConfig = Field(default_factory=MECConfig, description="MEC pathway configuration")
+    hpc: HPCConfig = Field(default_factory=HPCConfig, description="HPC pathway configuration")
+
+
+class TEMContext(Protocol):
+    """Protocol for TEM model initialization parameters.
+
+    Attributes:
+        n_o: Number of sensory observation neurons
+        f_initial: Initial frequency values for temporal filtering
+        W_tile: Tiling matrices for LEC projection, one per frequency module
+        W_down: Downsampling matrices for MEC projection, one per frequency module
+        W_repeat: Expansion matrices for MEC projection, one per frequency module
+    """
+
+    n_o: int
+    f_initial: List[float]
+    W_tile: List[Matrix]
+    W_down: List[Matrix]
+    W_repeat: List[Matrix]
+
+
+@dataclass(frozen=True)
 class TEMState:
     """State container for the TEM model.
 
@@ -35,9 +71,9 @@ class TEMState:
         mec: Medial entorhinal cortex state.
     """
 
-    hpc: hpc.HPCState  # Hippocampal state with memory codes
-    lec: lec.LECState  # LEC pathway state with sensory codes
-    mec: mec.MECState  # MEC pathway state with abstract locations
+    hpc: HPCState  # Hippocampal state with memory codes
+    lec: LECState  # LEC pathway state with sensory codes
+    mec: MECState  # MEC pathway state with abstract locations
     pathways: Optional[Tuple[GroundedLocation, GroundedLocation]] = None
 
     def detach(self) -> "TEMState":
@@ -113,22 +149,22 @@ class TEMModel(nn.Module):
     Memory updates via Hebbian learning strengthen associations between co-active patterns.
     """
 
-    def __init__(self, params: ModelConfig):
+    def __init__(self, context: TEMContext, config: TEMConfig):
         """Initialize TEM model.
 
         Args:
-            params: Configuration with all component parameters and training settings.
+            config: Configuration with all component parameters and training settings.
         """
         super().__init__()
-        self._config = params  # Store model configuration
+        self._config = config  # Store model configuration
 
         # Initialize components
-        self.hpc = hpc.HPCModel(params.hpc)  # Hippocampus with memory and grounded inference
-        self.lec = lec.LECModel(params.lec)  # LEC pathway module
-        self.mec = mec.MECModel(params.mec)  # MEC pathway module
+        self.hpc = HPCModel(config.hpc)  # Hippocampus with memory and grounded inference
+        self.lec = LECModel(config.lec)  # LEC pathway module
+        self.mec = MECModel(config.mec)  # MEC pathway module
 
     @property
-    def config(self) -> ModelConfig:
+    def config(self) -> TEMConfig:
         """Return the TEM model configuration."""
         return self._config
 
@@ -141,10 +177,10 @@ class TEMModel(nn.Module):
         Returns:
             Initial TEM state with zero-initialized locations.
         """
-        lec_state = self.lec.init_state(x.device)  # Initialize LEC state
-        mec_state = self.mec.init_state(x.device)  # Initialize MEC state
-        hpc_state = self.hpc.init_state(x.device)  # Initialize HPC state
-        return TEMState(lec=lec_state, mec=mec_state, hpc=hpc_state)
+        hpc_state: HPCState = self.hpc.init_state(x.device)  # Initialize HPC state
+        lec_state: LECState = self.lec.init_state(x.device)  # Initialize LEC state
+        mec_state: MECState = self.mec.init_state(x.device)  # Initialize MEC state
+        return TEMState(hpc=hpc_state, lec=lec_state, mec=mec_state)
 
     def forward(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
         """Forward pass through TEM model.
@@ -163,20 +199,20 @@ class TEMModel(nn.Module):
         """
 
         # LEC Pathway: Process sensory input to prepare for memory retrieval
-        state_lec = self.lec(x, state.lec)
+        state_lec: LECState = self.lec(x, state.lec)
         x_ = state_lec.projection  # Projected sensory code for HPC retrieval
         p_x = self.hpc.retrieve(x_, for_inference=True, state=state.hpc)
 
         # MEC Pathway: Infer abstract location from action and previous location
-        state_mec = self.mec(p_x, locations, a, state.mec)
+        state_mec: MECState = self.mec(p_x, locations, a, state.mec)
         g_ = state_mec.projection  # Projected abstract location for HPC retrieval
         p_g = self.hpc.retrieve(g_, for_inference=False, state=state.hpc)
 
         # HPC Pathway: Infer grounded location and update memory
-        state_hpc = self.hpc(g_, x_, p_g, state.hpc)
+        state_hpc: HPCState = self.hpc(g_, x_, p_g, state.hpc)
 
         # Store pathways for teacher forcing in loss computation
-        return TEMState(lec=state_lec, mec=state_mec, hpc=state_hpc, pathways=(p_x, p_g))
+        return TEMState(hpc=state_hpc, lec=state_lec, mec=state_mec, pathways=(p_x, p_g))
 
     def inference(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> LocationInference:
         """Infer current location from sensory observation.
@@ -194,12 +230,12 @@ class TEMModel(nn.Module):
             LocationInference with abstract location (g) and grounded location (p).
         """
         # LEC Pathway: Process sensory input to prepare for memory retrieval
-        state_lec = self.lec(x, state.lec)  # Process sensory input through LEC
+        state_lec: LECState = self.lec(x, state.lec)  # Process sensory input through LEC
         x_ = state_lec.projection  # Projected sensory code for HPC retrieval
         p_x = self.hpc.retrieve(x_, for_inference=True, state=state.hpc)
 
         # MEC Pathway: Infer abstract location from action and previous location
-        state_mec = self.mec(p_x, locations, a, state.mec)  # Infer abstract location via MEC
+        state_mec: MECState = self.mec(p_x, locations, a, state.mec)  # Infer abstract location via MEC
         g_ = state_mec.projection
 
         # HPC Pathway: Infer grounded location from abstract location and sensory input

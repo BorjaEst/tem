@@ -5,14 +5,50 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import lightning as L
 import torch
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor, optim
 
 from torch_tem import losses
-from torch_tem.config import TrainingConfig
 from torch_tem.core import TEMModel, TEMState
 from torch_tem.data import Environment, TEMDataModule
-from torch_tem.losses import LossOutput
+from torch_tem.losses import LossConfig, LossOutput
 from torch_tem.types import Observation, WalkBatch
+
+
+class TrainingConfig(BaseModel):
+    """Training and optimization configuration.
+
+    This configuration is intentionally scoped to parameters that are currently
+    used by the Lightning training loop:
+
+    - Truncated BPTT rollout length.
+    - Learning rate schedule parameters.
+    - Loss term weights.
+
+    Model structure and inference behaviour belong in `ModelConfig`.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    # ===================================================================================
+    # ROLLOUT LENGTH
+    # ===================================================================================
+
+    n_rollout: int = Field(default=20, ge=1, description="Unroll length for BPTT (timesteps per optimisation step)")
+
+    # ===================================================================================
+    # LEARNING RATE SCHEDULE
+    # ===================================================================================
+
+    lr_max: float = Field(default=9.4e-4, gt=0, description="Maximum learning rate")
+    lr_decay_rate: float = Field(default=0.5, gt=0, le=1, description="StepLR decay factor (gamma)")
+    lr_decay_steps: int = Field(default=400, ge=1, description="StepLR step_size (number of optimizer steps between decays)")
+
+    # ===================================================================================
+    # LOSS
+    # ===================================================================================
+
+    loss: LossConfig = Field(default_factory=LossConfig, description="Loss weight configuration")
 
 
 class TEMLightningModule(L.LightningModule):

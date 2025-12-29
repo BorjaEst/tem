@@ -33,10 +33,31 @@ from typing import Literal, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
-from torch_tem.config import LossConfig
 from torch_tem.types import AbstractLocation, GroundedLocation, SensoryPrediction, Transition
+
+
+class LossConfig(BaseModel):
+    """Loss weight configuration for TEM training.
+
+    This configuration encapsulates the weights assigned to each loss component
+    during training. These weights influence the relative importance of different
+    objectives such as reconstruction accuracy, location grounding, and regularization.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    # ===================================================================================
+    # LOSS WEIGHTS
+    # ===================================================================================
+
+    weights_x: float = Field(default=1.0, ge=0, description="Weight of reconstruction/prediction losses on x")
+    weights_p: float = Field(default=1.0, ge=0, description="Weight of grounded location losses on p")
+    weights_g: float = Field(default=1.0, ge=0, description="Weight of abstract location losses on g")
+    weights_reg_g: float = Field(default=0.01, ge=0, description="Weight of regularisation loss on abstract location")
+    weights_reg_p: float = Field(default=0.02, ge=0, description="Weight of regularisation loss on grounded location")
 
 
 @dataclass

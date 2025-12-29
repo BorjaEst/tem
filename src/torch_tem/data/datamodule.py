@@ -10,15 +10,74 @@ Batch contract (time-major):
 """
 
 import functools
-from typing import Optional
+from typing import List, Literal, Optional, Union
 
 import lightning as L
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 from torch.utils.data import DataLoader
 
-from torch_tem.config.datamodule import DataModuleConfig
-from torch_tem.data.environment import Environment
-from torch_tem.data.policies import PolicyGenerator
+from torch_tem.data.environment import Environment, EnvironmentConfig
+from torch_tem.data.policies import PolicyConfig, PolicyGenerator, RandomPolicyConfig
 from torch_tem.data.walks import WalkDataset, WalkGenerator
+
+
+class DataModuleConfig(BaseModel):
+    """DataModule configuration: environment, walks, policies, batching, and data splits.
+
+    This is the single source of truth for all data generation parameters.
+    Defines how training/validation/test data is generated and delivered to the model.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=False)
+
+    # ===================================================================================
+    # ENVIRONMENT and POLICY
+    # ===================================================================================
+
+    environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig, description="Environment configuration")
+    policy: PolicyConfig = Field(default_factory=RandomPolicyConfig, description="Action selection policy for walk generation")
+
+    # ===================================================================================
+    # SEQUENCE SHAPE (BPTT)
+    # ===================================================================================
+
+    sequence_length: int = Field(default=100, ge=1, description="Number of timesteps per walk (T). Sole source of sequence length for the DataModule.")
+    return_locations: bool = Field(default=True, description="If True, include location IDs as third element of the batch tuple.")
+
+    # ===================================================================================
+    # DATA SPLITS
+    # ===================================================================================
+
+    n_train_batches: int = Field(default=1000, ge=1, description="Number of training batches per epoch")
+    n_val_batches: int = Field(default=10, ge=0, description="Number of validation batches")
+    n_test_batches: int = Field(default=10, ge=0, description="Number of test batches")
+    seed: Optional[int] = Field(default=None, description="Random seed for reproducible environment/walk generation")
+
+    # ===================================================================================
+    # DATALOADER SETTINGS
+    # ===================================================================================
+
+    batch_size: int = Field(default=16, ge=1, description="Number of walks per batch")
+    num_workers: int = Field(default=0, ge=0, description="Number of DataLoader worker processes (0 = main process only)")
+    pin_memory: bool = Field(default=False, description="Pin memory for faster GPU transfer")
+    drop_last: bool = Field(default=False, description="Drop last incomplete batch")
+
+    # ===================================================================================
+    # HELPER PROPERTIES
+    # ===================================================================================
+
+    def build_model_config(self, base: Optional[ModelConfig] = None, **overrides) -> ModelConfig:
+        """Construct ModelConfig matching this DataModule configuration.
+
+        Args:
+            base: Optional base ModelConfig to override. If None, uses default ModelConfig.
+            **overrides: Additional ModelConfig fields to override.
+
+        Returns:
+            ModelConfig instance with n_locations and n_observations set.
+        """
+        overrides["batch_size"] = self.batch_size
+        return self.environment.build_model_config(base=base, **overrides)
 
 
 class TEMDataModule(L.LightningDataModule):

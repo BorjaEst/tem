@@ -6,14 +6,22 @@ object identity information parallel to spatial location from grid cells.
 OVCs respond to specific objects/landmarks regardless of location,
 complementing the spatial codes from grid cells.
 
-Supports two modes:
-    - Merged mode (frequencies=None): OVCs share grid frequencies
+OVC portions are allocated backwards from the end of n_g_grid:
+    - Merged mode (frequencies=[]): OVCs share grid frequencies
     - Separate mode (frequencies=[...]): OVCs have independent frequency modules
 
-Typical usage example:
-    >>> config = ObjectInferenceConfig(n_g_ovc=[8, 6, 4], frequencies=[0.8, 0.5, 0.3])
-    >>> ovc = ObjectInference(n_g=[48, 40, 32], n_g_ovc=[24, 18, 12], config=config)
-    >>> g_ovc = ovc(g_gen, locations)
+Examples:
+    # Full merged: n_g=[20,30,40], n_g_ovc=[10,10,10] → n_g_grid=[10,20,30]
+    >>> config = ObjectInferenceConfig(n_g_ovc=[10, 10, 10], frequencies=[])
+    >>> ovc = ObjectInference(n_g=[20, 30, 40], config=config)
+
+    # Partial merged: n_g=[10,30,40], n_g_ovc=[10,10] → n_g_grid=[10,20,30]
+    >>> config = ObjectInferenceConfig(n_g_ovc=[10, 10], frequencies=[])
+    >>> ovc = ObjectInference(n_g=[10, 30, 40], config=config)
+
+    # Merged + separate: n_g=[10,30,40,10], n_g_ovc=[10,10,10], f_ovc=[0.1] → n_g_grid=[10,20,30]
+    >>> config = ObjectInferenceConfig(n_g_ovc=[10, 10, 10], frequencies=[0.1])
+    >>> ovc = ObjectInference(n_g=[10, 30, 40, 10], config=config)
 """
 
 from typing import Any, Dict, List, Optional
@@ -34,18 +42,24 @@ __all__ = ["ObjectInferenceConfig", "ObjectInference"]
 class ObjectInferenceConfig(BaseModel):
     """Configuration for object vector cell inference.
 
-    Supports two modes via the `frequencies` field:
-    - Merged mode: frequencies=None → OVCs share grid frequencies
-    - Separate mode: frequencies=[...] → OVCs have independent frequency modules
+    OVC portions allocated backwards from end of n_g_grid:
+
+    Examples:
+        Full merged: n_g=[20,30,40], n_g_ovc=[10,10,10], f_ovc=[] → n_g_grid=[10,20,30]
+        Partial merged: n_g=[10,30,40], n_g_ovc=[10,10], f_ovc=[] → n_g_grid=[10,20,30]
+        Merged+separate: n_g=[10,30,40,10], n_g_ovc=[10,10,10], f_ovc=[0.1] → n_g_grid=[10,20,30]
+        Full separate: n_g=[10,20,30,10], n_g_ovc=[10], f_ovc=[0.1] → n_g_grid=[10,20,30]
+
+    Modes (determined by frequencies):
+        Merged: frequencies=[] → OVCs share grid frequencies
+        Separate: frequencies=[...] → OVCs have independent modules
     """
 
     model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
 
-    # OVC dimensions (explicit n_g, not neuron counts)
-    n_g_ovc: List[int] = Field(default_factory=list, description="OVC abstract location dimensions per module")
-
-    # Mode selector (replaces separate_modules boolean)
-    frequencies: List[float] = Field(default=list, description="Frequency values for OVC modules. " "None = merged mode (shared). " "List[float] = separate mode (independent)")
+    # OVC dimensions (allocated backwards from end of n_g_grid)
+    n_g_ovc: List[int] = Field(default_factory=list, description="OVC portions to allocate backwards from grid modules")
+    frequencies: List[float] = Field(default=list, description="Frequency values for separate OVC modules. [] = merged mode, [0.1, ...] = separate mode")
 
     # Hyperparameters
     hidden_multiplier: int = Field(default=2, ge=1, description="MLP hidden dimension multiplier: hidden_dim[f] = multiplier * n_g_ovc[f]")
@@ -55,30 +69,35 @@ class ObjectInferenceConfig(BaseModel):
 class ObjectInference(nn.Module):
     """Object inference: OVCs from landmark/shiny object cues.
 
-    Supports two modes (determined by config.frequencies):
-    1. Merged mode (frequencies=None): OVCs share grid frequencies
-       - n_g_ovc indicates portion within each grid module
+    OVC portions allocated backwards from end of n_g_grid. Supports:
+    1. Merged mode (frequencies=[]): OVCs share grid frequencies
+       - config.n_g_ovc allocated backwards from last grid modules
        - Forward returns [] (handled by AbstractLocModel)
 
     2. Separate mode (frequencies=[...]): OVCs have independent modules
-       - n_g_ovc are full OVC module dimensions
-       - Forward returns OVC activations
+       - config.n_g_ovc includes merged portions + separate modules
+       - Forward returns OVC activations for separate modules
+
+    See resolve_dimensions() in __init__.py for dimension computation.
     """
 
-    def __init__(self, n_g: List[int], n_g_ovc: List[int], config: ObjectInferenceConfig):
+    def __init__(self, n_g: List[int], config: ObjectInferenceConfig):
         """Initialize object inference.
 
         Args:
             n_g: Total abstract location dimensions (from W_down context)
-            n_g_ovc: OVC dimensions - either portion (merged) or full (separate)
-            config: OVC configuration (empty n_g_ovc = disabled)
+            config: OVC configuration with n_g_ovc (empty = disabled)
+
+        Note:
+            Dimension computation handled by resolve_dimensions() in __init__.py.
+            n_g_ovc portions allocated backwards from end of n_g_grid.
         """
         super().__init__()
         self._config = config
         self._n_g = n_g
-        self._n_g_ovc = n_g_ovc
 
         if self.enabled:
+            n_g_ovc = self._config.n_g_ovc
             n_f_ovc = len(n_g_ovc)
 
             # Shiny → OVC MLPs (only for enabled separate OVC)
@@ -93,22 +112,22 @@ class ObjectInference(nn.Module):
     @property
     def enabled(self) -> bool:
         """Check if OVC is enabled in separate mode."""
-        return bool(self._n_g_ovc) and self._config.frequencies is not None  # None = merged mode
+        return bool(self._config.n_g_ovc) and self._config.frequencies is not None  # [] = merged mode
 
     @property
     def is_merged(self) -> bool:
         """Check if OVC is in merged mode (shares grid frequencies)."""
-        return bool(self._n_g_ovc) and self._config.frequencies is None
+        return bool(self._config.n_g_ovc) and not self._config.frequencies  # Empty list = merged
 
     @property
     def n_f(self) -> int:
         """Number of OVC frequency modules."""
-        return len(self._n_g_ovc) if self.enabled else 0
+        return len(self._config.n_g_ovc) if self.enabled else 0
 
     @property
     def n_g_ovc(self) -> List[int]:
-        """OVC dimensions per frequency."""
-        return self._n_g_ovc if self.enabled else []
+        """OVC dimensions from config."""
+        return self._config.n_g_ovc
 
     def forward(self, g_gen: Transition, locations: List[Dict[str, Any]]) -> AbstractLocation:
         """Infer object location from landmarks/shiny cues.
@@ -184,23 +203,34 @@ if __name__ == "__main__":
     print("=" * 80)
 
     # Configuration
-    n_g = [48, 40, 32]  # Total grid cells
-    n_g_ovc = [24, 18, 12]  # OVC dimensions
     batch_size = 4
 
-    print(f"\nConfiguration:")
-    print(f"  Total grid cells: {n_g}")
-    print(f"  OVC dimensions: {n_g_ovc}")
-    print(f"  Batch size: {batch_size}")
-
-    # Example 1: Separate mode
+    # Example 1: Full merged
+    # n_g=[20,30,40], n_g_ovc=[10,10,10] → n_g_grid=[10,20,30]
     print(f"\n{'=' * 80}")
-    print(f"Example 1: Separate OVC Mode")
+    print(f"Example 1: Full Merged Mode")
     print(f"{'=' * 80}")
+    n_g = [20, 30, 40]
+    config_merged = ObjectInferenceConfig(n_g_ovc=[10, 10, 10], frequencies=[], hidden_multiplier=2)
+    ovc_merged = ObjectInference(n_g, config_merged)
+    print(f"✓ OVC model initialized (merged mode)")
+    print(f"  n_g: {n_g}")
+    print(f"  n_g_ovc: {config_merged.n_g_ovc}")
+    print(f"  Expected n_g_grid: [10, 20, 30]")
 
-    config_separate = ObjectInferenceConfig(n_g_ovc=n_g_ovc, frequencies=[0.8, 0.5, 0.3], hidden_multiplier=2)  # Independent frequencies
-    ovc_separate = ObjectInference(n_g, n_g_ovc, config_separate)
+    # Example 2: Separate mode
+    # n_g=[10,30,40,10], n_g_ovc=[10,10,10], f_ovc=[0.1] → n_g_grid=[10,20,30]
+    print(f"\n{'=' * 80}")
+    print(f"Example 2: Merged + Separate Mode")
+    print(f"{'=' * 80}")
+    n_g = [10, 30, 40, 10]
+    config_separate = ObjectInferenceConfig(n_g_ovc=[10, 10, 10], frequencies=[0.1], hidden_multiplier=2)
+    ovc_separate = ObjectInference(n_g, config_separate)
     print(f"✓ OVC model initialized (separate mode)")
+    print(f"  n_g: {n_g}")
+    print(f"  n_g_ovc: {config_separate.n_g_ovc}")
+    print(f"  f_ovc: {config_separate.frequencies}")
+    print(f"  Expected n_g_grid: [10, 20, 30]")
 
     # Create inputs
     mu_gen = [torch.randn(batch_size, n) for n in n_g]
@@ -211,21 +241,9 @@ if __name__ == "__main__":
 
     # Forward pass
     g_ovc = ovc_separate(g_gen, locations)
-    print(f"✓ Forward pass complete")
+    print(f"\n✓ Forward pass complete")
     print(f"  Output shape: {[g.shape for g in g_ovc]}")
-
-    # Example 2: Merged mode
-    print(f"\n{'=' * 80}")
-    print(f"Example 2: Merged OVC Mode")
-    print(f"{'=' * 80}")
-
-    config_merged = ObjectInferenceConfig(n_g_ovc=n_g_ovc, frequencies=None, hidden_multiplier=2)  # Share grid frequencies
-    ovc_merged = ObjectInference(n_g, n_g_ovc, config_merged)
-    print(f"✓ OVC model initialized (merged mode)")
-
-    g_ovc_merged = ovc_merged(g_gen, locations)
-    print(f"✓ Forward pass complete")
-    print(f"  Output: {g_ovc_merged} (handled by AbstractLocModel)")
+    print(f"  Separate OVC modules only (merged handled by AbstractLocModel)")
 
     print(f"\n{'=' * 80}")
     print(f"✓ OVC inference example complete")

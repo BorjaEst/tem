@@ -48,25 +48,57 @@ class TEMContext(Protocol):
     Attributes:
         env: Environment instance (provides n_observations, n_actions, n_locations)
         f_initial: Grid frequency values for hierarchical connections [n_f_grid]
-        n_g_grid: Grid cell dimensions per frequency [n_f_grid]
         W_tile: Tiling matrices for LEC projection [n_f_total]
         W_down: Downsampling matrices for MEC projection [n_f_total]
         W_repeat: Expansion matrices for MEC projection [n_f_total]
-
-    Note:
-        n_g = n_g_grid + n_g_ovc (from config.mec.ovc.n_g_ovc)
-        n_f_total = len(n_g)
     """
 
     env: Environment
     f_initial: List[float]
-    n_g_grid: List[int]
     W_tile: List[Matrix]
     W_down: List[Matrix]
     W_repeat: List[Matrix]
 
+    @property
+    def n_o(self) -> int: ...
 
-@dataclass(frozen=True)
+    @property
+    def n_a(self) -> int: ...
+
+    @property
+    def n_f(self) -> int: ...
+
+
+@dataclass
+class StandardTEMContext:
+    """Standard implementation of TEMContext protocol.
+
+    Provides default property implementations deriving values from core fields.
+    Structurally conforms to TEMContext protocol without explicit inheritance.
+    """
+
+    env: Environment
+    f_initial: List[float]
+    W_tile: List[Matrix]
+    W_down: List[Matrix]
+    W_repeat: List[Matrix]
+
+    @property
+    def n_o(self) -> int:
+        """Number of sensory observation neurons."""
+        return self.env.n_observations
+
+    @property
+    def n_a(self) -> int:
+        """Number of possible actions."""
+        return self.env.n_actions
+
+    @property
+    def n_f(self) -> int:
+        """Number of frequency modules."""
+        return len(self.W_down)
+
+
 class TEMState:
     """State container for the TEM model.
 
@@ -165,23 +197,11 @@ class TEMModel(nn.Module):
         """
         super().__init__()
         self._config = config  # Store model configuration
-        n_o = context.env.n_observations  # Number of sensory observation neurons
-        n_a = context.env.n_actions  # Number of possible actions
-
-        # Build component contexts
-        lec_context = LECContext(n_o=n_o, W_tile=context.W_tile)
-        mec_context = MECContext(
-            n_a=n_a,
-            n_g_grid=context.n_g_grid,
-            W_down=context.W_down,
-            W_repeat=context.W_repeat,
-        )
-        hpc_context = HPCContext(f_initial=context.f_initial)
 
         # Initialize components
-        self.lec = LECModel(lec_context, config.lec)  # LEC pathway module
-        self.mec = MECModel(mec_context, config.mec)  # MEC pathway module
-        self.hpc = HPCModel(hpc_context, config.hpc)  # Hippocampus with memory and grounded inference
+        self.hpc = HPCModel(context, config.hpc)  # Hippocampus with memory and grounded inference
+        self.lec = LECModel(context, config.lec)  # LEC pathway module
+        self.mec = MECModel(context, config.mec)  # MEC pathway module
 
     def init_state(self, x: Observation) -> TEMState:
         """Initialize TEM state from first observation.

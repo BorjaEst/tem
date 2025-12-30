@@ -19,7 +19,7 @@ g_ = [g_[f] @ W_repeat[f] for f ...]  # Expand: [12,10,8] → [96,80,64]
 
 ```python
 # Single-step random projection
-W_random = create_W_random_projection(n_g, n_p, sparsity=0.15)
+W_random = create_random_projection(n_g, n_p, sparsity=0.15)
 g_ = [g[f] @ W_random[f] for f in range(n_f)]
 ```
 
@@ -33,7 +33,7 @@ g_ = [g[f] @ W_random[f] for f in range(n_f)]
 
 **Implementation Status:**
 
-- [x] Utility function added: `create_W_random_projection()` in `src/torch_tem/utils/matrices.py`
+- [x] Utility function added: `create_random_projection()` in `src/torch_tem/utils/matrices.py`
 - [ ] Update `Projection` in `src/torch_tem/core/projection.py`
 - [ ] Update inverse projection in `AbstractLocInference._compute_memory_estimate()`
 - [ ] Add configuration flag: `use_random_projection: bool` (default: False for compatibility)

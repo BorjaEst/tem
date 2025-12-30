@@ -30,11 +30,10 @@ Example:
     >>> output.total.backward()
 """
 
-from torch_tem import config, core, data, losses, types, utils
+from torch_tem import core, data, losses, types, utils
 from torch_tem.core import hpc, lec, mec, model
 
 __all__ = [
-    "config",
     "core",
     "data",
     "hpc",

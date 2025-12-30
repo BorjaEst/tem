@@ -52,68 +52,70 @@ def squared_error_freq(value: Union[Vector, MultiScaleCode], target: Union[Vecto
     return torch.sum((value - target) ** 2, dim=1) * 0.5
 
 
-def create_repeat_matrices(n_g_subsampled: List[int], n_x: List[int]) -> List[Matrix]:
-    """Create repeat matrices for outer product computation.
+def create_downsample_matrix(n: List[int], n_subsampled: List[int]) -> List[Matrix]:
+    """Create downsampling matrices.
 
-    Matrix for repeating abstract location g to do outer product with sensory
-    information x using elementwise product after matrix multiplication.
-
-    Args:
-        n_g_subsampled: Subsampled abstract location dimensions per frequency
-        n_x: Sensory dimensions per frequency
-
-    Returns:
-        List of repeat matrices, one per frequency module
-    """
-    return [torch.tensor(np.kron(np.eye(g), np.ones((1, x))), dtype=torch.float) for g, x in zip(n_g_subsampled, n_x)]
-
-
-def create_tiling_matrices(n_p: List[int], n_o_c: int) -> List[Matrix]:
-    """Create tile matrices for LEC sensory projection to hippocampal space.
-
-    Creates Kronecker product matrices that tile compressed sensory (x_c) to
-    hippocampal place cell dimensions (n_p).
-
-    Architectural constraint: n_p[f] must equal n_g_subsampled[f] * n_o_c to
-    enable element-wise product p = g_ ⊙ x̃ in the hippocampus.
+    Downsampling matrix to go from cells to compressed cells for
+    indexing memories by simply taking only the first n_subsampled cells.
 
     Args:
-        n_p: Place cell dimensions per frequency (output size).
-        n_o_c: Compressed sensory dimension (input size).
-
-    Returns:
-        List of tile matrices [n_o_c, n_p[f]], one per frequency module.
-
-    Raises:
-        ValueError: If n_p[f] is not divisible by n_o_c.
-    """
-    # Validate divisibility
-    if any(p % n_o_c != 0 for p in n_p):
-        raise ValueError(f"n_p must be divisible by n_o_c. Got n_p={n_p}, n_o_c={n_o_c}")
-
-    # Infer tiling factor from output dimension and input dimension
-    n_tiles = [p // n_o_c for p in n_p]
-    return [torch.tensor(np.kron(np.ones((1, n_tile)), np.eye(n_o_c)), dtype=torch.float) for n_tile in n_tiles]
-
-
-def create_g_downsample(n_g: List[int], n_g_subsampled: List[int]) -> List[Matrix]:
-    """Create downsampling matrices for abstract location.
-
-    Downsampling matrix to go from grid cells to compressed grid cells for
-    indexing memories by simply taking only the first n_g_subsampled grid cells.
-
-    Args:
-        n_g: Full abstract location dimensions per frequency
-        n_g_subsampled: Subsampled abstract location dimensions per frequency
+        n: Full input dimensions per frequency
+        n_subsampled: Subsampled output dimensions per frequency
 
     Returns:
         List of downsampling matrices, one per frequency module
     """
-    return [torch.cat([torch.eye(dim_out, dtype=torch.float), torch.zeros((dim_in - dim_out, dim_out), dtype=torch.float)]) for dim_in, dim_out in zip(n_g, n_g_subsampled)]
+    # Matrix shape: [n_in, n_out] where we select first n_out columns
+    # For input x: [B, n_in], result is x @ W_down = [B, n_out]
+    return [torch.cat([torch.eye(dim_out, dtype=torch.float), torch.zeros((dim_in - dim_out, dim_out), dtype=torch.float)]) for dim_in, dim_out in zip(n, n_subsampled)]
 
 
-def create_W_random_projection(n_g: List[int], n_p: List[int], sparsity: float = 1.0, seed: Optional[int] = None) -> List[Matrix]:
-    """Create random fixed projection matrices from entorhinal cortex to hippocampus.
+def create_repeat_matrices(n_subsampled: List[int], n: List[int]) -> List[Matrix]:
+    """Create repeat matrices.
+
+    Matrix for repeating cells information using elementwise product
+    after matrix multiplication.
+
+    Args:
+        n_subsampled: Subsampled input dimensions per frequency
+        n: Full output dimensions per frequency
+
+    Returns:
+        List of repeat matrices, one per frequency module
+    """
+    # Matrix shape: [n_subsampled, n_p] where each row is repeated
+    # For input g: [B, n_subsampled], result is g @ W_repeat = [B, n_p]
+    # Uses Kronecker product: eye(n_subsampled) ⊗ ones(1, n_p/n_subsampled)
+    return [torch.tensor(np.kron(np.eye(dim_in), np.ones((1, dim_out // dim_in))), dtype=torch.float) for dim_in, dim_out in zip(n_subsampled, n)]
+
+
+def create_tiling_matrices(n_in: List[int], n_out: List[int]) -> List[Matrix]:
+    """Create tile matrices.
+
+    Tiling matrix to project from one cortical region to another by repeating
+    the input representation multiple times.
+
+    Args:
+        n_in: Input dimensions per frequency module
+        n_out: Output dimensions per frequency module
+
+    Returns:
+        List of tile matrices, one per frequency module.
+    """
+    # Matrix shape: [n_in, n_out] where each input is tiled
+    # For input x_c: [B, n_in], result is x_c @ W_tile = [B, n_out]
+    # Uses Kronecker product: ones(1, n_tiles) ⊗ eye(n_in)
+    # where n_tiles = n_out / n_in
+
+    # Validate divisibility
+    if any(out % inp != 0 for out, inp in zip(n_out, n_in)):
+        raise ValueError(f"n_out must be divisible by n_in. Got n_out={n_out}, n_in={n_in}")
+
+    return [torch.tensor(np.kron(np.ones((1, out // inp)), np.eye(inp)), dtype=torch.float) for inp, out in zip(n_in, n_out)]
+
+
+def create_random_projection(n_in: List[int], n_out: List[int], sparsity: float = 1.0, seed: Optional[int] = None) -> List[Matrix]:
+    """Create random fixed projection matrices.
 
     Biologically-inspired alternative to downsampling + W_repeat expansion.
     Models the random connectivity from EC (grid cells) to HPC (place cells)
@@ -128,8 +130,8 @@ def create_W_random_projection(n_g: List[int], n_p: List[int], sparsity: float =
     biological connectivity patterns (~10-20% in real circuits).
 
     Args:
-        n_g: Full abstract location dimensions per frequency (EC grid cells)
-        n_p: Grounded location dimensions per frequency (HPC place cells)
+        n_in: Input dimensions per frequency module
+        n_out: Output dimensions per frequency module
         sparsity: Connection probability (1.0 = fully connected, 0.1 = 10% connectivity)
         seed: Random seed for reproducibility (optional)
 
@@ -139,7 +141,7 @@ def create_W_random_projection(n_g: List[int], n_p: List[int], sparsity: float =
     Example:
         >>> n_g = [36, 30, 24]  # Grid cell dimensions
         >>> n_p = [96, 80, 64]  # Place cell dimensions
-        >>> W_random = create_W_random_projection(n_g, n_p, sparsity=0.15)
+        >>> W_random = create_random_projection(n_g, n_p, sparsity=0.15)
         >>> # Use in projection head:
         >>> g_ = [g[f] @ W_random[f] for f in range(n_f)]
 
@@ -151,7 +153,7 @@ def create_W_random_projection(n_g: List[int], n_p: List[int], sparsity: float =
         torch.manual_seed(seed)
 
     matrices = []
-    for g_dim, p_dim in zip(n_g, n_p):
+    for g_dim, p_dim in zip(n_in, n_out):
         # Random Gaussian initialization scaled by input dimension
         # This ensures variance is maintained across the projection
         W = torch.randn(g_dim, p_dim, dtype=torch.float) / np.sqrt(g_dim)
@@ -168,37 +170,37 @@ def create_W_random_projection(n_g: List[int], n_p: List[int], sparsity: float =
     return matrices
 
 
-def create_encoding_table(n_o: int, n_o_c: int, n_hot: int = 2) -> List[Vector]:
+def create_encoding_table(n_in: int, n_out: int, n_hot: int = 2) -> List[Vector]:
     """Create n-hot encoding lookup table.
 
     Generates a lookup table for converting one-hot observations to n-hot
     compressed representations. Each observation is encoded using exactly
-    `n_hot` active units from `n_o_c` dimensions.
+    `n_hot` active units from `n_out` dimensions.
 
     Args:
-        n_o: Number of possible observations (must be <= C(n_o_c, n_hot))
-        n_o_c: Compressed sensory dimension
+        n_in: Number of possible observations (must be <= C(n_out, n_hot))
+        n_out: Compressed sensory dimension
         n_hot: Number of active units per code (1, 2, 3, etc.)
-            - n_hot=1: One-hot (identity, no compression unless n_o > n_o_c)
+            - n_hot=1: One-hot (identity, no compression unless n_in > n_out)
             - n_hot=2: Two-hot (default, typically 45 → 10)
             - n_hot=3: Three-hot (more distributed, e.g., 220 → 12)
 
     Returns:
-        List of n-hot code tensors, one per possible observation [n_o, n_o_c]
+        List of n-hot code tensors, one per possible observation [n_in, n_out]
 
     Raises:
-        ValueError: If n_o > C(n_o_c, n_hot) (too many observations for compression)
+        ValueError: If n_in > C(n_out, n_hot) (too many observations for compression)
 
     Example:
         >>> # Two-hot encoding: 45 observations → 10 dimensions
-        >>> table = create_encoding_table(n_o=45, n_o_c=10, n_hot=2)
+        >>> table = create_encoding_table(n_in=45, n_out=10, n_hot=2)
         >>> len(table)
         45
         >>> table[0].sum()
         2.0
 
         >>> # Three-hot encoding: 220 observations → 12 dimensions
-        >>> table = create_encoding_table(n_o=220, n_o_c=12, n_hot=3)
+        >>> table = create_encoding_table(n_in=220, n_out=12, n_hot=3)
         >>> len(table)
         220
         >>> table[0].sum()
@@ -206,16 +208,16 @@ def create_encoding_table(n_o: int, n_o_c: int, n_hot: int = 2) -> List[Vector]:
     """
 
     # Validate: number of observations must not exceed possible n-hot codes
-    max_codes = int(comb(n_o_c, n_hot))
-    if n_o > max_codes:
-        raise ValueError(f"Cannot encode {n_o} observations with {n_hot}-hot codes in {n_o_c} dimensions. " f"Maximum possible codes: C({n_o_c}, {n_hot}) = {max_codes}")
+    max_codes = int(comb(n_out, n_hot))
+    if n_in > max_codes:
+        raise ValueError(f"Cannot encode {n_in} observations with {n_hot}-hot codes in {n_out} dimensions. " f"Maximum possible codes: C({n_out}, {n_hot}) = {max_codes}")
 
     # Generate all possible n-hot codes using combinations
-    # combinations(range(n_o_c), n_hot) gives all ways to choose n_hot positions
+    # combinations(range(n_out), n_hot) gives all ways to choose n_hot positions
     encoding_table = []
-    for active_positions in combinations(range(n_o_c), n_hot):
+    for active_positions in combinations(range(n_out), n_hot):
         # Create zero vector
-        code = [0] * n_o_c
+        code = [0] * n_out
         # Activate n_hot positions
         for pos in active_positions:
             code[pos] = 1
@@ -223,28 +225,28 @@ def create_encoding_table(n_o: int, n_o_c: int, n_hot: int = 2) -> List[Vector]:
         encoding_table.append(torch.tensor(code, dtype=torch.float))
 
         # Stop when we have enough codes for all observations
-        if len(encoding_table) >= n_o:
+        if len(encoding_table) >= n_in:
             break
 
     return encoding_table
 
 
-def create_two_hot_table(n_o: int, n_o_c: int) -> List[Vector]:
+def create_two_hot_table(n_in: int, n_out: int) -> List[Vector]:
     """Create two-hot encoding lookup table (backward compatibility wrapper).
 
-    DEPRECATED: Use create_encoding_table(n_o, n_o_c, n_hot=2) instead.
+    DEPRECATED: Use create_encoding_table(n_in, n_out, n_hot=2) instead.
 
     This function is maintained for backward compatibility. New code should use
     the more general create_encoding_table() function.
 
     Args:
-        n_o: Number of possible observations
-        n_o_c: Compressed sensory dimension
+        n_in: Number of possible observations
+        n_out: Compressed sensory dimension
 
     Returns:
         List of two-hot code tensors, one per possible observation
     """
-    return create_encoding_table(n_o, n_o_c, n_hot=2)
+    return create_encoding_table(n_in, n_out, n_hot=2)
 
 
 def split_to_frequencies(p_flat: Vector, n_p: List[int]) -> GroundedLocation:

@@ -28,10 +28,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from torch_tem.config.datamodule import DistancePolicyConfig, EnvironmentConfig, MixedPolicyConfig, PolicyConfig, QLearningPolicyConfig, RandomPolicyConfig, ShinyPolicyConfig
-from torch_tem.data.environment import Environment, EnvLocation
-from torch_tem.data.policies import PolicyGenerator
-from torch_tem.data.shiny import ShinyEnvironmentBuilder
+from torch_tem.data.environment import Environment, EnvironmentConfig, EnvLocation
+from torch_tem.data.policies import DistancePolicyConfig, MixedPolicyConfig, PolicyConfig, PolicyGenerator, QLearningPolicyConfig, RandomPolicyConfig
+from torch_tem.data.shiny import ShinyEnvironmentBuilder, ShinyPolicyConfig
 from torch_tem.types import Action, Location, Observation, Vector, WalkBatch, WalkSample
 
 

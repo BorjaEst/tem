@@ -10,10 +10,10 @@ Batch contract (time-major):
 """
 
 import functools
-from typing import List, Literal, Optional, Union
+from typing import Optional
 
 import lightning as L
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 from torch.utils.data import DataLoader
 
 from torch_tem.data.environment import Environment, EnvironmentConfig
@@ -61,23 +61,6 @@ class DataModuleConfig(BaseModel):
     num_workers: int = Field(default=0, ge=0, description="Number of DataLoader worker processes (0 = main process only)")
     pin_memory: bool = Field(default=False, description="Pin memory for faster GPU transfer")
     drop_last: bool = Field(default=False, description="Drop last incomplete batch")
-
-    # ===================================================================================
-    # HELPER PROPERTIES
-    # ===================================================================================
-
-    def build_model_config(self, base: Optional[ModelConfig] = None, **overrides) -> ModelConfig:
-        """Construct ModelConfig matching this DataModule configuration.
-
-        Args:
-            base: Optional base ModelConfig to override. If None, uses default ModelConfig.
-            **overrides: Additional ModelConfig fields to override.
-
-        Returns:
-            ModelConfig instance with n_locations and n_observations set.
-        """
-        overrides["batch_size"] = self.batch_size
-        return self.environment.build_model_config(base=base, **overrides)
 
 
 class TEMDataModule(L.LightningDataModule):

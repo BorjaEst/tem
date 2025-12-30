@@ -136,7 +136,7 @@ BATCH_SIZE = 4  # Batch size
 DEVICE = torch.device("cpu")  # Change to "cuda" if GPU is available
 
 # Build MEC down and repeat from constants
-W_down = utils.create_g_downsample(N_G, N_G_SUBSAMPLED)
+W_down = utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED)
 W_repeat = utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P)
 
 

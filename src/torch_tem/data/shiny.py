@@ -8,9 +8,8 @@ from typing import List, Optional
 
 import numpy as np
 
-from torch_tem.config import EnvironmentConfig, ShinyPolicyConfig
-from torch_tem.data.environment import Environment, EnvLocation
-from torch_tem.data.policies import PolicyGenerator
+from torch_tem.data.environment import Environment, EnvironmentConfig, EnvLocation
+from torch_tem.data.policies import PolicyGenerator, ShinyPolicyConfig
 
 
 class ShinyEnvironmentBuilder:

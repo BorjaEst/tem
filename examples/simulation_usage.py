@@ -62,9 +62,9 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import figures
-from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.core.model import Simulation, TEMModel
-from torch_tem.data import Environment, WalkGenerator
+from torch_tem.core.model import Simulation, TEMConfig, TEMModel
+from torch_tem.data.environment import Environment, EnvironmentConfig
+from torch_tem.data.walks import WalkGenerator
 
 
 # ==============================================================================
@@ -80,19 +80,10 @@ class ExampleConfig(BaseSettings):
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="simulation_usage")
 
     # Environment configuration
-    grid_size: int = Field(default=4, ge=3, le=10, description="Grid size for square environment")
-    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation assignment strategy")
+    environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig, description="Environment configuration parameters")
 
-    # Walk generation
-    walk_length: int = Field(default=200, ge=20, le=500, description="Number of timesteps in walk")
-
-    # Architecture configuration
-    f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5], description="Spatial frequencies per module")
-    n_g_subsampled: List[int] = Field(default_factory=lambda: [10, 8], description="Grid cells per frequency module")
-    n_o_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension")
-
-    # Memory configuration
-    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
+    # TEM model architecture
+    tem: TEMConfig = Field(default_factory=TEMConfig, description="TEM model configuration parameters")
 
     # Output configuration
     output_dir: Path = Field(default=Path("outputs/simulation"), description="Directory for plots")
@@ -130,17 +121,10 @@ def main():
     print("Phase 1: Initializing environment and model...")
 
     # Create environment configuration
-    env_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
+    env_config = EnvironmentConfig(config.environment)
 
     # Create model configuration
-    model_config = ModelConfig(
-        n_o=env_config.n_locations,
-        n_o_c=config.n_o_c,
-        n_g_subsampled=config.n_g_subsampled,
-        f_initial=config.f_initial,
-        batch_size=1,
-        eta=config.eta,
-    )
+    model_config = TEMConfig(config.tem)
 
     # Initialize TEM model
     model = TEMModel(model_config)

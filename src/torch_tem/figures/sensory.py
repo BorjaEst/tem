@@ -142,7 +142,7 @@ def plot_temporal_filtering(
     x_c_np = x_c_stacked.detach().cpu().numpy()
     im0 = axes[0].imshow(x_c_np.T, aspect="auto", cmap=cmap, interpolation="nearest")
     axes[0].set_ylabel("Feature Dim", fontsize=10)
-    axes[0].set_title("Original Compressed Sensory (x_c)", fontsize=11, fontweight="bold")
+    axes[0].set_title("Original Compressed Sensory (o_c)", fontsize=11, fontweight="bold")
     plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
     # Plot each frequency channel
@@ -205,7 +205,7 @@ def plot_frequency_comparison(
     # Plot original - extract feature from list of timesteps
     x_c_feature = torch.stack([x_c_history[t][feature_idx] for t in range(T)])
     x_c_feature_np = x_c_feature.detach().cpu().numpy()
-    ax.plot(range(T), x_c_feature_np, label="Original (x_c)", linewidth=2, color="black", linestyle="--", alpha=0.7, zorder=n_f + 1)
+    ax.plot(range(T), x_c_feature_np, label="Original (o_c)", linewidth=2, color="black", linestyle="--", alpha=0.7, zorder=n_f + 1)
 
     # Plot each frequency
     colors = plt.cm.viridis(np.linspace(0, 1, n_f))

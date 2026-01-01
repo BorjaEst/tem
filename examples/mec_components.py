@@ -42,12 +42,14 @@ Architecture:
 
 Usage Examples:
 ---------------
-    # Default: 100 timesteps, 3 frequencies
+    # Default: 100 timesteps, 4 total modules (all grid)
     python examples/mec_components.py
 
-    # Enable OVC (object vector cells) in merged mode
-    # Note: Merged mode integrates OVC with grid cells (no separate visualization)
-    python examples/mec_components.py --ovc.n_ovc "[4, 3, 2]"
+    # Enable OVC in merged mode (4 grid modules with OVC portions)
+    python examples/mec_components.py --ovc.n_g_ovc "[10, 10, 10, 10]"
+
+    # Enable OVC in separate mode (3 grid + 1 separate OVC module)
+    python examples/mec_components.py --ovc.n_g_ovc "[10, 10, 10]" --ovc.frequencies "[0.25]"
 
     # Enable sampling for stochastic dynamics
     python examples/mec_components.py --transition.do_sample true --abstract.do_sample true
@@ -67,7 +69,7 @@ When save_plots=true, generates 5 visualizations in outputs/mec_components/:
     4. 04_projection_structure.png - Downsampling and expansion structure
     5. 05_grid_patterns.png - Grid cell activity patterns over time
 
-Note: OVC (object vector cells) can be enabled with --ovc.n_ovc but operates
+Note: OVC (object vector cells) can be enabled with --ovc.n_g_ovc but operates
 in merged mode (integrated with grid cells) and doesn't produce separate visualization
 in this component-level demo.
 """
@@ -124,13 +126,14 @@ class ExampleConfig(BaseSettings):
         return v
 
 
-# Model architecture; not configurable via CLI
-N_G_SUBSAMPLED = [12, 10, 8]  # Downsampled grid cells per frequency (3 modules)
-N_F = len(N_G_SUBSAMPLED)  # Number of frequency modules
-N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # Grid cells per frequency [36, 30, 24]
-N_P = [2 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # Place cells per frequency [24, 20, 16]
+# Model architecture - Total module capacity (not configurable via CLI)
+# Config determines how modules are split between grid and OVC
+N_G_SUBSAMPLED = [12, 10, 8, 10]  # Downsampled cells per frequency (4 total: max 3 grid + 1 OVC)
+N_F = len(N_G_SUBSAMPLED)  # Total number of frequency modules
+N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # Total cells per frequency [36, 30, 24, 30]
+N_P = [2 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # Place cells per frequency [24, 20, 16, 20]
 N_ACTIONS = 5  # Number of possible actions
-F_INITIAL = [0.9, 0.6, 0.3]  # Initial frequency values
+F_INITIAL = [0.9, 0.6, 0.3, 0.25]  # Frequency values for all modules
 WALK_LENGTH = 100  # Timesteps in sequence
 BATCH_SIZE = 4  # Batch size
 DEVICE = torch.device("cpu")  # Change to "cuda" if GPU is available
@@ -154,15 +157,20 @@ if __name__ == "__main__":
     """
     config = ExampleConfig()
 
+    # Compute n_f_grid based on OVC config (how many modules are grid vs OVC)
+    n_f_ovc_separate = len(config.ovc.frequencies) if config.ovc else 0
+    n_f_grid = N_F - n_f_ovc_separate
+
     print("=" * 80)
     print("MEC Spatial Processing Pipeline")
     print("=" * 80)
     print(f"Configuration:")
     print(f"  Sequence length: {WALK_LENGTH} timesteps")
     print(f"  Batch size: {BATCH_SIZE}")
-    print(f"  Frequencies: {N_F} ({F_INITIAL[0]:.2f} to {F_INITIAL[-1]:.2f})")
+    print(f"  Total modules: {N_F} ({n_f_grid} grid + {n_f_ovc_separate} separate OVC)")
+    print(f"  Frequencies: {F_INITIAL}")
     print(f"  Architecture: n_g={N_G}, n_g_sub={N_G_SUBSAMPLED}")
-    print(f"  OVC enabled: {config.ovc is not None}")
+    print(f"  OVC config: n_g_ovc={config.ovc.n_g_ovc if config.ovc else []}, frequencies={config.ovc.frequencies if config.ovc else []}")
     print()
 
     # =========================================================================
@@ -173,7 +181,7 @@ if __name__ == "__main__":
     # MEC TransitionModel: Path integration via action-conditioned dynamics
     # Predicts next abstract location from current state + action
     # Outputs prediction with uncertainty: (g_gen, σ_g_gen)
-    transition_model = TransitionModel(n_g=N_G, n_f_grid=N_F, n_actions=N_ACTIONS, f_initial=F_INITIAL, config=config.transition)
+    transition_model = TransitionModel(n_g=N_G, n_f_grid=n_f_grid, n_actions=N_ACTIONS, f_initial=F_INITIAL, config=config.transition)
 
     # Initialize transition weights with small random values for demonstration
     # (In real TEM, these would be learned through training)
@@ -187,9 +195,9 @@ if __name__ == "__main__":
 
     # MEC AbstractLocModel: Fuses path integration with memory corrections
     # Combines g_gen (always available) with p_x (memory retrieval, optional)
-    # Uses precision-weighted Bayesian fusion
-    abstract_model = AbstractLocModel(n_g=N_G, W_repeat=W_repeat, config=config.abstract)
-    print(f"  ✓ AbstractLocModel: Precision-weighted fusion ({N_F} frequencies)")
+    # Uses precision-weighted Bayesian fusion (grid modules only)
+    abstract_model = AbstractLocModel(n_g=N_G[:n_f_grid], W_repeat=W_repeat[:n_f_grid], config=config.abstract)
+    print(f"  ✓ AbstractLocModel: Precision-weighted fusion ({n_f_grid} grid frequencies)")
 
     # MEC Projection: Downsamples and expands grid cells for hippocampal input
     # Downsamples g_inf for memory indexing: g → g_downsampled
@@ -201,14 +209,14 @@ if __name__ == "__main__":
     # OVC ObjectInference (optional)
     ovc_model = None
     n_g_ovc = None
-    if config.ovc is not None and config.ovc.n_ovc:
-        n_g_ovc = config.ovc.n_ovc if config.ovc.n_ovc else [6, 5, 4]
-        ovc_model = ObjectInference(n_g=N_G, n_g_ovc=n_g_ovc, config=config.ovc)
+    if config.ovc is not None and config.ovc.n_g_ovc:
+        n_g_ovc = config.ovc.n_g_ovc if config.ovc.n_g_ovc else [6, 5, 4]
+        ovc_model = ObjectInference(n_g=N_G, config=config.ovc)
 
         # Check if OVC is in merged mode (won't produce separate output)
-        if config.ovc.frequencies is None:
+        if not config.ovc.frequencies:
             print(f"  ✓ ObjectInference: OVC module enabled in MERGED mode (integrated with grid cells)")
-            print(f'    Note: Use --ovc.frequencies "[0.8, 0.5, 0.3]" for separate OVC visualization')
+            print(f"    OVC dims: {n_g_ovc}, allocated backwards from grid modules")
         else:
             print(f"  ✓ ObjectInference: OVC module enabled in SEPARATE mode ({len(n_g_ovc)} frequencies, dims={n_g_ovc})")
     else:
@@ -314,8 +322,8 @@ if __name__ == "__main__":
         fig2.savefig(config.output_dir / "02_uncertainty_evolution.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 02_uncertainty_evolution.png")
 
-    # Plot 3: g_inf evolution
-    fig3 = figures.plot_g_inf_evolution(g_inf_history=g_inf_history, n_frequencies=N_F)
+    # Plot 3: g_inf evolution (grid modules only)
+    fig3 = figures.plot_g_inf_evolution(g_inf_history=g_inf_history, n_frequencies=n_f_grid)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_g_inf_evolution.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 03_g_inf_evolution.png")
@@ -328,15 +336,17 @@ if __name__ == "__main__":
         fig4.savefig(config.output_dir / "04_projection_structure.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 04_projection_structure.png")
 
-    # Plot 5: Grid temporal evolution
-    # Convert history to tensor format: List[T] of List[n_f] of [B, n_g[f]]
-    # to List[n_f] of [T, B, n_g[f]]
+    # Plot 5: Grid temporal evolution (grid modules only)
+    # Convert history to tensor format: List[T] of List[n_f_grid] of [B, n_g[f]]
+    # to List[n_f_grid] of [T, B, n_g[f]]
     g_inf_sequences = []
-    for f in range(N_F):
+    for f in range(n_f_grid):
         g_f_seq = torch.stack([g_inf_history[t][f] for t in range(WALK_LENGTH)])  # [T, B, n_g[f]]
         g_inf_sequences.append(g_f_seq)
 
-    fig5 = figures.plot_grid_temporal_evolution(g_sequences=g_inf_sequences, frequencies=F_INITIAL, title="Multi-frequency Grid Cell Temporal Evolution", n_cells_per_freq=5)
+    fig5 = figures.plot_grid_temporal_evolution(
+        g_sequences=g_inf_sequences, frequencies=F_INITIAL[:n_f_grid], title="Multi-frequency Grid Cell Temporal Evolution (Grid Modules)", n_cells_per_freq=5
+    )
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_grid_patterns.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 05_grid_patterns.png")
@@ -346,15 +356,17 @@ if __name__ == "__main__":
     print("MEC Pipeline Summary")
     print("=" * 80)
     print(f"Architecture:")
-    print(f"  Grid cells: {N_G} ({N_F} frequencies)")
-    print(f"  Downsampled: {N_G_SUBSAMPLED}")
-    print(f"  Place cells: {N_P}")
-    if ovc_model:
-        print(f"  OVC cells: {n_g_ovc} ({len(n_g_ovc)} frequencies)")
+    print(f"  Total modules: {N_F} ({n_f_grid} grid + {n_f_ovc_separate} separate OVC)")
+    print(f"  Grid cells: {N_G[:n_f_grid]} (first {n_f_grid} modules)")
+    print(f"  Downsampled: {N_G_SUBSAMPLED[:n_f_grid]}")
+    print(f"  Place cells: {N_P[:n_f_grid]}")
+    if n_f_ovc_separate > 0:
+        print(f"  OVC cells: {N_G[n_f_grid:]} (last {n_f_ovc_separate} modules)")
+        print(f"  OVC config: {config.ovc.n_g_ovc}")
     print()
     print(f"Pipeline Flow:")
     print(f"  1. TransitionModel: (g_t, a) → (g_gen, σ_gen)")
-    print(f"     - Hierarchical connections between {N_F} frequency modules")
+    print(f"     - Hierarchical connections: {n_f_grid} grid + {n_f_ovc_separate} OVC modules")
     print(f"     - Action-conditioned dynamics via MLP (random weights for demo)")
     print()
     print(f"  2. AbstractLocModel: (g_gen, p_x?) → g_inf")

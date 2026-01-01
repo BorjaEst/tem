@@ -101,7 +101,7 @@ def parameters():
     params["do_sample"] = False
     # Decide whether to use inferred ground location while inferring new abstract location, instead of only previous grounded location (James's infer_g_type)
     params["use_p_inf"] = True
-    # Decide whether to use seperate grid modules that recieve shiny information for object vector cells. To disable OVC, set this False, and set n_ovc to [0 for _ in range(len(params['n_g_subsampled']))]
+    # Decide whether to use seperate grid modules that recieve shiny information for object vector cells. To disable OVC, set this False, and set n_g_ovc to [0 for _ in range(len(params['n_g_subsampled']))]
     params["separate_ovc"] = False
     # Standard deviation for initial initial g (which will then be learned)
     params["g_init_std"] = 0.5
@@ -117,13 +117,13 @@ def parameters():
     # a) No additional modules, no additional object vector neurons (e.g. when not using shiny environments): [0 for _ in range(len(params['n_g_subsampled']))], and separate_ovc set to False
     # b) No additional modules, but n additional object vector neurons in each grid module: [n for _ in range(len(params['n_g_subsampled']))], and separate_ovc set to False
     # c) Additional separate object vector modules, with n, m neurons: [n, m], and separate_ovc set to True
-    params["n_ovc"] = [0 for _ in range(len(params["n_g_subsampled"]))]
+    params["n_g_ovc"] = [0 for _ in range(len(params["n_g_subsampled"]))]
     # Add neurons for object vector cells. Add new modules if object vector cells get separate modules, or else add neurons to existing modules
     params["n_g_subsampled"] = (
-        params["n_g_subsampled"] + params["n_ovc"] if params["separate_ovc"] else [grid + ovc for grid, ovc in zip(params["n_g_subsampled"], params["n_ovc"])]
+        params["n_g_subsampled"] + params["n_g_ovc"] if params["separate_ovc"] else [grid + ovc for grid, ovc in zip(params["n_g_subsampled"], params["n_g_ovc"])]
     )
     # Number of hierarchical frequency modules for object vector cells
-    params["n_f_ovc"] = len(params["n_ovc"]) if params["separate_ovc"] else 0
+    params["n_f_ovc"] = len(params["n_g_ovc"]) if params["separate_ovc"] else 0
     # Number of hierarchical frequency modules for grid cells
     params["n_f_g"] = len(params["n_g_subsampled"]) - params["n_f_ovc"]
     # Total number of modules

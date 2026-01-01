@@ -59,7 +59,7 @@ class ObjectInferenceConfig(BaseModel):
 
     # OVC dimensions (allocated backwards from end of n_g_grid)
     n_g_ovc: List[int] = Field(default_factory=list, description="OVC portions to allocate backwards from grid modules")
-    frequencies: List[float] = Field(default=list, description="Frequency values for separate OVC modules. [] = merged mode, [0.1, ...] = separate mode")
+    frequencies: List[float] = Field(default_factory=list, description="Frequency values for separate OVC modules. [] = merged mode, [0.1, ...] = separate mode")
 
     # Hyperparameters
     hidden_multiplier: int = Field(default=2, ge=1, description="MLP hidden dimension multiplier: hidden_dim[f] = multiplier * n_g_ovc[f]")

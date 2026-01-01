@@ -68,9 +68,7 @@ When save_plots=true, generates 7 visualizations in outputs/lec_components/:
     7. 07_reconstruction_quality.png - Comparison of original vs decoded observations
 """
 
-import math
 from pathlib import Path
-from typing import Literal
 
 import matplotlib.pyplot as plt
 import torch
@@ -80,6 +78,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch_tem import data, figures, utils
 from torch_tem.core import lec
 from torch_tem.core.lec import DecoderConfig, EncoderConfig, ProcessorConfig, ProjectionConfig
+from torch_tem.data.environment import EnvironmentConfig
 
 
 # ==============================================================================
@@ -155,7 +154,6 @@ if __name__ == "__main__":
     # PHASE 1: Environment and Walk Generation
     # =========================================================================
     print("Phase 1: Generating walk trajectory...")
-    from torch_tem.config import EnvironmentConfig
 
     env_config = EnvironmentConfig(n_observations=N_X)
     env = data.Environment(env_config)

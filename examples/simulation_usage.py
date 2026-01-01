@@ -64,6 +64,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch_tem import figures
 from torch_tem.core.model import Simulation, TEMConfig, TEMModel
 from torch_tem.data.environment import Environment, EnvironmentConfig
+from torch_tem.data.policies import PolicyConfig, PolicyGenerator, RandomPolicyConfig
 from torch_tem.data.walks import WalkGenerator
 
 
@@ -81,6 +82,7 @@ class ExampleConfig(BaseSettings):
 
     # Environment configuration
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig, description="Environment configuration parameters")
+    policy: PolicyConfig = Field(default_factory=RandomPolicyConfig, description="Policy configuration for walk generation")
 
     # TEM model architecture
     tem: TEMConfig = Field(default_factory=TEMConfig, description="TEM model configuration parameters")

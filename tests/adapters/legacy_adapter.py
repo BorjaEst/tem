@@ -97,7 +97,7 @@ def _create_merged_architecture(params: Dict[str, Any]):
         n_o=params["n_o"],
         n_o_c=params["n_o_c"],
         n_g_subsampled=params["n_g_subsampled"][: params["n_f_g"]],  # Exclude OVC if separate
-        n_ovc=params.get("n_ovc", []),
+        n_g_ovc=params.get("n_g_ovc", []),
         f_initial=params["f_initial"][: len(params["n_g_subsampled"]) - params.get("n_f_ovc", 0)],
         separate_ovc=params.get("separate_ovc", False),
         # Network initialization

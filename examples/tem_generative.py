@@ -1,105 +1,52 @@
 #!/usr/bin/env python3
 """Complete TEM generative pipeline example.
 
-This example demonstrates the generative pathway of TEM, showing how the model
-generates sensory predictions from abstract location and memory.
+This example demonstrates the full torch_tem generative pipeline using subcomponents.
 
 Pipeline Stages (TEM Manuscript - Generative):
 ----------------------------------------------
-Following the generative steps from the TEM manuscript:
-
-1. Abstract location transition: g_t ~ transition(g_{t-1}, a_t)
-2. Project to hippocampus: g_ = W_repeat·f_down(g_t)
-3. Retrieve from memory: p_g = attractor(g_, M_gen)
-4. Generate sensory prediction: x_hat = decoder(p_g)
-
-Note: The manuscript uses a pre-learned memory M_gen without online updates
-during generation. This example pre-generates the memory from walk data.
-
-Data Flow (Manuscript Notation):
---------------------------------
-    a_t (action)
-    → g_t (abstract location from transition)
-    → g_ (projected to hippocampus)
-    → p_g (pattern completion via memory)
-    → x_hat (sensory prediction via decoder)
-
-Memory Initialization:
-----------------------
-    M_gen is pre-generated from a training walk to establish hippocampal
-    associations before generation begins. No online updates during generation.
+1. Transition: g_t = transition(g_{t-1}, a_t)
+2. Project to HPC: g_ = projection(g)
+3. Memory retrieval: p_g = attractor(g_, M_gen)
+4. Decode sensory: x_hat = decoder(p_g)
 
 Usage Examples:
 ---------------
-    # Default: 100 timesteps, save plots
     python examples/tem_generative.py
+    python examples/tem_generative.py --mec.transition.d_hidden_dim 30
+    python examples/tem_generative.py --show_plots false
 
-    # Longer walk with different architecture
-    python examples/tem_generative.py --walk_length 200 --n_o_c 12
-
-    # Different grid size and observation mode
-    python examples/tem_generative.py --grid_size 7 --observation_mode tiled
-
-    # Show plots interactively
-    python examples/tem_generative.py --show_plots true --save_plots false
-
-    # Full help
-    python examples/tem_generative.py --help
-
-Outputs:
---------
-When save_plots=true, generates 5 visualizations in outputs/generation_location/:
-    1. 01_environment.png - Grid layout
-    2. 02_walk_trajectory.png - Agent trajectory
-    3. 03_grid_evolution.png - Abstract location over time
-    4. 04_sensory_predictions.png - True vs predicted observations
-    5. 05_memory_structure.png - Pre-learned memory matrix
+Outputs: 5 visualizations in outputs/generation_location/
 """
 
 from pathlib import Path
-from typing import List, Literal
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import core, data, figures, hpc, lec, mec, utils
-from torch_tem.config import EnvironmentConfig, ModelConfig
+from torch_tem import figures, utils
+from torch_tem.core.hpc import HPCConfig, HPCContext, HPCModel
+from torch_tem.core.lec import LECConfig, LECContext, LECModel
+from torch_tem.core.mec import MECConfig, MECContext, MECModel, MECState
+from torch_tem.data.environment import Environment, EnvironmentConfig
+from torch_tem.data.policies import RandomPolicyConfig
+from torch_tem.data.walks import WalkGenerator
 
 
 # ==============================================================================
 # Configuration
 # ==============================================================================
 class ExampleConfig(BaseSettings):
-    """Configuration for complete TEM generative pipeline example.
-
-    This config implements all generative-related protocols:
-    - TransitionConfig
-    - ProjectionConfig
-    - DecoderParams
-    - MemoryParams (generative pathway)
-    """
+    """Configuration for TEM generative pipeline example."""
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="tem_generative")
 
-    # Environment configuration
-    grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for synthetic environment")
-    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
-
-    # Walk generation
-    walk_length: int = Field(default=100, ge=20, le=500, description="Steps in the walk sequence")
-
-    # Architecture configuration
-    f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
-    n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
-    n_o_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
-
-    # Memory configuration
-    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
-    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
-    kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
+    # Component configurations
+    lec: LECConfig = Field(default_factory=LECConfig, description="LEC pathway configuration")
+    mec: MECConfig = Field(default_factory=MECConfig, description="MEC pathway configuration")
+    hpc: HPCConfig = Field(default_factory=HPCConfig, description="HPC pathway configuration")
 
     # Output
     output_dir: Path = Field(default=Path("outputs/generation_location"), description="Directory for saving plots")
@@ -109,315 +56,202 @@ class ExampleConfig(BaseSettings):
     @field_validator("output_dir")
     @classmethod
     def create_output_dir(cls, v: Path) -> Path:
-        """Create output directory if it doesn't exist."""
         v.mkdir(parents=True, exist_ok=True)
         return v
+
+
+# Model architecture; not configurable via CLI
+GRID_SIZE = 5
+OBSERVATION_MODE = "unique"
+WALK_LENGTH_TRAIN = 50  # Training walk for memory
+WALK_LENGTH_GEN = 100  # Generation walk
+BATCH_SIZE = 1
+DEVICE = torch.device("cpu")
+
+N_G_SUBSAMPLED = [12, 10, 8]
+N_F = len(N_G_SUBSAMPLED)
+N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]
+N_P = [2 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]
+N_O_C = 8
+F_INITIAL = [0.9, 0.6, 0.3]
+I_ATTRACTOR = 3
+MAX_FREQ_GEN = [3, 3, 3]
+
+W_down = utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED)
+W_repeat = utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P)
+W_tile = utils.create_tiling_matrices([N_O_C] * N_F, N_P)
+p_update_mask = utils.create_p_update_mask(N_P, N_F, N_F, 0, F_INITIAL)
+mask_gen = utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_GEN)
 
 
 # ==============================================================================
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
-    """Run the complete TEM generative pipeline with visualizations."""
     config = ExampleConfig()
-
-    # Create config objects with proper field mapping
-    environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
-    # Calculate total actions (directional + static if enabled)
-    total_actions = environment_config.n_actions + (1 if environment_config.has_static_action else 0)
-    model_config = ModelConfig(
-        n_o=environment_config.n_locations,
-        n_o_c=config.n_o_c,
-        n_g_subsampled=config.n_g_subsampled,
-        f_initial=config.f_initial,
-        n_actions=total_actions,
-        eta=config.eta,
-        kappa=config.kappa,
-        batch_size=1,  # Single walk trajectory
-    )
 
     print("=" * 80)
     print("Complete TEM Generative Pipeline")
     print("=" * 80)
     print(f"Configuration:")
-    print(f"  Environment: {config.grid_size}×{config.grid_size} grid ({config.observation_mode} observations)")
-    print(f"  Walk length: {config.walk_length} timesteps")
-    print(f"  Actions: {total_actions} (4 directional + {1 if environment_config.has_static_action else 0} static)")
-    print(f"  Frequencies: {model_config.n_f} ({model_config.f_initial[0]:.2f} to {model_config.f_initial[-1]:.2f})")
-    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_o_c={model_config.n_o_c}")
+    print(f"  Environment: {GRID_SIZE}×{GRID_SIZE} grid ({OBSERVATION_MODE})")
+    print(f"  Training walk: {WALK_LENGTH_TRAIN} timesteps")
+    print(f"  Generation walk: {WALK_LENGTH_GEN} timesteps")
+    print(f"  Architecture: n_g={N_G}, n_p={N_P}, n_o_c={N_O_C}")
     print()
 
     # =========================================================================
-    # PHASE 1: Environment and Walk Generation
+    # PHASE 1: Environment and Training Walk
     # =========================================================================
-    print("Phase 1: Generating walk trajectory...")
-    env = data.Environment(environment_config)
-    env.validate()
+    print("Phase 1: Generating training walk for memory...")
 
-    policy_gen = data.PolicyGenerator(env)
-    policy = policy_gen.random_policy()
+    env_config = EnvironmentConfig(width=GRID_SIZE, height=GRID_SIZE, observation_mode=OBSERVATION_MODE)
+    env = Environment(env_config)
+    walk_gen = WalkGenerator(env=env, policy_config=RandomPolicyConfig())
 
-    walk_gen = data.WalkGenerator(env)
-    walks = walk_gen.generate_walks(n_walks=1, walk_length=config.walk_length, policy=policy)
-    walk = walks[0]
+    # Training walk
+    train_data = walk_gen.generate_walk(length=WALK_LENGTH_TRAIN)
+    train_obs = train_data.observations.unsqueeze(1).to(DEVICE)
+    train_actions = train_data.actions.unsqueeze(1).to(DEVICE)
+    train_locs = train_data.locations.unsqueeze(1).to(DEVICE)
 
-    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_o]
-    locations = torch.as_tensor(walk.locations, dtype=torch.long)  # [T]
-    print(f"  ✓ Generated walk: {len(walk)} timesteps")
+    # Generation walk (actions only)
+    gen_data = walk_gen.generate_walk(length=WALK_LENGTH_GEN)
+    gen_actions = gen_data.actions.unsqueeze(1).to(DEVICE)
+    gen_locs = gen_data.locations.unsqueeze(1).to(DEVICE)
+
+    print(f"  ✓ Environment: {env.n_locations} locations, {env.n_observations} observations")
+    print(f"  ✓ Training walk: {WALK_LENGTH_TRAIN} timesteps")
+    print(f"  ✓ Generation walk: {WALK_LENGTH_GEN} actions")
     print()
 
     # =========================================================================
-    # PHASE 2: Initialize All Components
+    # PHASE 2: Initialize Components
     # =========================================================================
-    print("Phase 2: Initializing generative components...")
+    print("Phase 2: Initializing components...")
 
-    # MEC: Abstract location processing
-    transition = mec.transition.TransitionModel(model_config)
-    mec_projection = mec.projection.Projection(model_config)
-    print(f"  ✓ TransitionModel: g_{{t-1}}, a_t → g_t")
-    print(f"  ✓ Projection: g → g_ (downsample + repeat)")
-    print()
+    # LEC model
+    lec_context = LECContext(n_o=env.n_observations, f_initial=F_INITIAL, W_tile=W_tile)
+    lec_model = LECModel(lec_context, config.lec)
+    print(f"  ✓ LEC: Encoder, Processor, Projection, Decoder")
 
-    # Decoder: Hippocampus to sensory space
-    decoder = lec.decoder.Decoder(model_config)
-    # Create W_tile for decoder (only needs first frequency matrix)
-    W_tile_0 = torch.randn(model_config.n_o_c, model_config.n_p[0]) / np.sqrt(model_config.n_p[0])
-    print(f"  ✓ Decoder: p → x̂ (place cells to sensory prediction)")
-    print()
+    # MEC model
+    mec_context = MECContext(W_down=W_down, W_repeat=W_repeat, n_f_grid=N_F, f_initial=F_INITIAL, n_actions=env.n_actions)
+    mec_model = MECModel(mec_context, config.mec)
+    print(f"  ✓ MEC: TransitionModel, Projection, AbstractLocModel")
 
-    # =========================================================================
-    # PHASE 3: Pre-generate Memory from Training Walk
-    # =========================================================================
-    print("Phase 3: Pre-generating memory from training walk...")
-
-    # Generate training walk for memory learning
-    training_walk_length = config.walk_length  # Use same length for simplicity
-    training_walks = walk_gen.generate_walks(n_walks=1, walk_length=training_walk_length, policy=policy)
-    training_walk = training_walks[0]
-
-    # Simulate training: collect grid cell patterns
-    g_training = []
-    g_state = [torch.randn(1, model_config.n_g[f]) * 0.1 for f in range(model_config.n_f)]
-
-    for t in range(training_walk_length):
-        action = training_walk.actions[t].unsqueeze(0)
-        g_trans = transition(g_state, action)
-        g_state = g_trans.mean
-        g_training.append([g_f.detach() for g_f in g_state])
-
-    # Generate memory from training patterns
-    memory_gen = data.MemoryMatrixGenerator(model_config)
-    M_gen_init, M_inf_init = memory_gen.from_walk(g_training, lambda g: mec_projection.repeat(mec_projection.downsample(g)))
-
-    # Initialize memory matrices externally (functional interface)
-    n_p_total = sum(model_config.n_p)
-    M_gen = M_gen_init.unsqueeze(0)  # Add batch dimension: [B, N, N]
-    M_inf = M_inf_init.unsqueeze(0) if not model_config.common_memory else None
-
-    # Initialize attractor for retrieval
-    mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
-    mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
-    mem_attractor = hpc.attractor.AttractorDynamics(model_config, mask_inf, mask_gen)
-
-    print(f"  ✓ Generated memory from {training_walk_length} training steps")
-    print(f"  ✓ Memory: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
-    print(f"  ✓   - {model_config.i_attractor} attractor iterations")
+    # HPC model
+    hpc_context = HPCContext(mask_inference=mask_gen, mask_generative=mask_gen, update_mask=p_update_mask)
+    hpc_model = HPCModel(hpc_context, config.hpc)
+    print(f"  ✓ HPC: MemoryStorage, AttractorDynamics, GroundedLocInference")
     print()
 
     # =========================================================================
-    # PHASE 4: Initialize Component States
+    # PHASE 3: Pre-learn Memory from Training Walk
     # =========================================================================
-    print("Phase 4: Initializing component states...")
-    # Initialize grid cell state (random start)
-    g_prev = [torch.randn(1, model_config.n_g[f]) * 0.1 for f in range(model_config.n_f)]
-    # Initialize sensory processor state (zeros for first timestep)
-    x_prev = [torch.zeros(1, model_config.n_x[f]) for f in range(model_config.n_f)]
-    print(f"  ✓ Grid cell state initialized: {model_config.n_g}")
-    print(f"  ✓ Sensory processor state initialized: {model_config.n_x}")
+    print("Phase 3: Pre-learning memory from training walk...")
+
+    lec_state = lec_model.init_state(BATCH_SIZE, DEVICE)
+    mec_state = mec_model.init_state(BATCH_SIZE, DEVICE)
+    hpc_state = hpc_model.init_state(BATCH_SIZE, DEVICE)
+
+    # Run inference on training walk to build memory
+    for t in range(WALK_LENGTH_TRAIN):
+        o_c = lec_model.encoder(train_obs[t])
+        lec_state = lec_model.processor(o_c, lec_state)
+        x = lec_state.x_prev
+        x_proj = lec_model.projection(x)
+
+        p_x = hpc_model.attractor(x_proj, hpc_state.memory[0])
+
+        a_t = train_actions[t] if t > 0 else None
+        transition_out = mec_model.transition(mec_state.g, a_t, mec_state.sigma_g)
+        g = mec_model.abstract(transition_out, p_x)
+        g_proj = mec_model.projection(g)
+
+        p_out = hpc_model.grounded(g_proj, x_proj)
+        p = p_out.location
+
+        hpc_state = hpc_model.storage(p, p, hpc_state)
+        mec_state = MECState(g=g, sigma_g=transition_out.sigma_g)
+
+    M_gen = hpc_state.memory[0].clone()  # Save learned memory
+    print(f"  ✓ Memory learned from {WALK_LENGTH_TRAIN} timesteps")
     print()
 
     # =========================================================================
-    # PHASE 5: Run Complete Generative Pipeline
+    # PHASE 4: Generative Loop
     # =========================================================================
-    print("Phase 5: Running complete generative pipeline...")
+    print("Phase 4: Running generative pipeline...")
 
-    # History tracking
-    g_history = []  # g: abstract location evolution
-    g__history = []  # g_: projected abstract location
-    p_g_history = []  # p_g: retrieved place cells
-    x_pred_history = []  # x̂: sensory predictions
+    # Reset state for generation
+    mec_state = mec_model.init_state(BATCH_SIZE, DEVICE)
 
-    for t in range(config.walk_length):
-        action_t = walk.actions[t].unsqueeze(0)  # [B] = [1]
+    g_history = []
+    p_history = []
+    x_pred_history = []
 
-        # ============================================================
-        # Step 1 (Manuscript): Abstract location transition
-        # g_t ~ N(μ_g(g_{t-1}, a_t), Σ_g)
-        # ============================================================
-        g_gen = transition(g_prev, action_t)  # Returns Transition(mean, uncertainty)
-        g = g_gen.mean  # List[n_f] of [B, n_g[f]]
-        g_history.append([g_f[0].detach() for g_f in g])
+    for t in range(WALK_LENGTH_GEN):
+        # MEC: g_{t-1}, a_t → g_t (path integration)
+        a_t = gen_actions[t] if t > 0 else None
+        state_mec: MECState = mec_model(None, locations, a_t, mec_state)
 
-        # ============================================================
-        # Step 2 (Manuscript): Project to hippocampus
-        # g_ = W_repeat·f_down(g)
-        # ============================================================
-        g_downsampled = mec_projection.downsample(g)  # List[n_f] of [B, n_g_sub[f]]
-        g_ = mec_projection.repeat(g_downsampled)  # List[n_f] of [B, n_p[f]]
-        g__history.append([g_f[0].detach() for g_f in g_])
+        # MEC: g → g_ (projection)
+        g_ = mec_model.projection
 
-        # ============================================================
-        # Step 3 (Manuscript): Retrieve from memory
-        # p_g = attractor(g_, M_gen)
-        # ============================================================
-        p_g = mem_attractor(g_, M_gen, for_inference=False)  # List[n_f] of [B, n_p[f]]
-        p_g_flat = torch.cat(p_g, dim=1)  # [B, sum(n_p)]
-        p_g_history.append(p_g_flat[0].detach())
+        # HPC: g_ → p_g (memory retrieval)
+        p_g = hpc_model.retrieve(g_, for_inference=False, state=hpc_state)
 
-        # ============================================================
-        # Step 4 (Manuscript): Generate sensory prediction
-        # x̂ = decoder(p_g, W_tile_0)
-        # ============================================================
-        x_pred_result = decoder(p_g, W_tile_0)  # Returns SensoryPrediction
-        x_pred = x_pred_result.values[0]  # First frequency: [B, n_o]
-        x_pred_history.append(x_pred[0].detach())
+        # LEC: p_g → x_hat (decode sensory prediction)
+        x_pred = lec_model.decoder(p_g)
 
-        # Update state for next iteration
-        g_prev = g
+        # Update state
+        mec_state = MECState(g=
 
-    print(f"  ✓ Processed {config.walk_length} timesteps")
-    print(f"  ✓ Followed 4-step generative process:")
-    print(f"      1. Abstract location transition (g)")
-    print(f"      2. Project to hippocampus (g_)")
-    print(f"      3. Retrieve from memory (p_g)")
-    print(f"      4. Generate sensory prediction (x̂)")
-    print(f"  ✓ Used pre-learned memory (no online updates)")
+        # Store
+        g_history.append([g_f.detach().cpu() for g_f in g])
+        p_history.append([p_f.detach().cpu() for p_f in p_g])
+        x_pred_history.append([x_f.detach().cpu() for x_f in x_pred])
+
+        if (t + 1) % 20 == 0:
+            print(f"  Processed {t + 1}/{WALK_LENGTH_GEN}")
+
+    print(f"  ✓ Complete")
     print()
 
     # =========================================================================
-    # PHASE 6: Generate Visualizations
+    # PHASE 5: Visualizations
     # =========================================================================
-    print("Phase 6: Generating visualizations...")
+    print("Phase 5: Generating visualizations...")
 
-    # Compute prediction accuracy
-    x_pred_tensor = torch.stack(x_pred_history)  # [T, n_o]
-    x_true_tensor = torch.stack(observations)  # [T, n_o]
-    predictions = x_pred_tensor.argmax(dim=-1)
-    truth = x_true_tensor.argmax(dim=-1)
-    prediction_acc = (predictions == truth).float().mean().item()
-
-    # Plot 1: Environment layout
-    fig1 = figures.plot_environment_layout(env, title=f"Environment: {config.grid_size}×{config.grid_size} Grid")
+    fig1 = figures.data.plot_environment(env)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
-        print(f"  ✓ Saved: 01_environment.png")
 
-    # Plot 2: Walk trajectory
-    fig2 = figures.plot_walks(env, [walk], title=f"Walk Trajectory ({config.walk_length} steps)")
+    fig2 = figures.data.plot_walk(env, gen_locs.squeeze().cpu().numpy())
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
-        print(f"  ✓ Saved: 02_walk_trajectory.png")
 
-    # Plot 3: Abstract location evolution (Step 1)
-    # Show evolution of abstract location g over time
-    g_array = torch.stack([torch.cat(g_t) for g_t in g_history]).cpu().numpy()  # [T, sum(n_g)]
-    fig3, ax = plt.subplots(figsize=(12, 6))
-    im = ax.imshow(g_array.T, aspect="auto", cmap="viridis", interpolation="nearest")
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("Abstract Location Dimension")
-    ax.set_title(f"Step 1: Abstract Location Evolution (g) - {sum(model_config.n_g)} dims")
-    plt.colorbar(im, ax=ax, label="Activation")
-    plt.tight_layout()
+    fig3 = figures.patterns.plot_abstract_location(g_history, F_INITIAL)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_grid_evolution.png", dpi=150, bbox_inches="tight")
-        print(f"  ✓ Saved: 03_grid_evolution.png")
 
-    # Plot 4: Sensory predictions (Step 4)
-    # Compare true observations vs generated predictions
-    fig4, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-
-    # True observations
-    x_true_np = x_true_tensor.cpu().numpy()  # [T, n_o]
-    im1 = axes[0].imshow(x_true_np.T, aspect="auto", cmap="Blues", interpolation="nearest")
-    axes[0].set_ylabel("Location ID")
-    axes[0].set_title("True Observations (Ground Truth)")
-    plt.colorbar(im1, ax=axes[0])
-
-    # Predicted observations
-    x_pred_np = x_pred_tensor.cpu().numpy()  # [T, n_o]
-    im2 = axes[1].imshow(x_pred_np.T, aspect="auto", cmap="Oranges", interpolation="nearest")
-    axes[1].set_ylabel("Location ID")
-    axes[1].set_xlabel("Timestep")
-    axes[1].set_title(f"Step 4: Generated Predictions (Accuracy: {prediction_acc:.1%})")
-    plt.colorbar(im2, ax=axes[1])
-
-    fig4.suptitle("Generative Model: x̂ = decoder(p_g)", fontsize=14, y=0.995)
-    plt.tight_layout()
+    fig4 = figures.sensory.plot_sensory_predictions(x_pred_history, F_INITIAL)
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_sensory_predictions.png", dpi=150, bbox_inches="tight")
-        print(f"  ✓ Saved: 04_sensory_predictions.png")
 
-    # Plot 5: Memory structure (pre-learned)
-    # Show structure of pre-learned memory matrix
-    M_gen_final = M_gen[0].detach().cpu().numpy()  # [sum(n_p), sum(n_p)]
-    fig5, axes = plt.subplots(1, 2, figsize=(14, 6))
-
-    # Memory matrix structure
-    im1 = axes[0].imshow(M_gen_final, aspect="auto", cmap="RdBu_r", interpolation="nearest", vmin=-np.abs(M_gen_final).max(), vmax=np.abs(M_gen_final).max())
-    axes[0].set_xlabel("Post-synaptic (j)")
-    axes[0].set_ylabel("Pre-synaptic (i)")
-    axes[0].set_title(f"Pre-learned Memory Matrix M_gen [{sum(model_config.n_p)}×{sum(model_config.n_p)}]")
-    plt.colorbar(im1, ax=axes[0], label="Weight")
-
-    # Memory matrix histogram
-    axes[1].hist(M_gen_final.flatten(), bins=50, alpha=0.7, color="steelblue", edgecolor="black")
-    axes[1].set_xlabel("Weight Value")
-    axes[1].set_ylabel("Frequency")
-    axes[1].set_title("Memory Weight Distribution")
-    axes[1].axvline(x=0, color="red", linestyle="--", linewidth=1, label="Zero")
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-
-    fig5.suptitle(f"Hebbian Memory (trained on {training_walk_length} steps)", fontsize=14, y=0.995)
-    plt.tight_layout()
+    fig5 = figures.memory.plot_memory_matrix(M_gen.squeeze().cpu().numpy())
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_memory_structure.png", dpi=150, bbox_inches="tight")
-        print(f"  ✓ Saved: 05_memory_structure.png")
 
-    print()
-    print("=" * 80)
-    print("GENERATIVE PIPELINE SUMMARY")
-    print("=" * 80)
-    print(f"Environment:        {config.grid_size}×{config.grid_size} grid")
-    print(f"Training Steps:     {training_walk_length} (for memory pre-learning)")
-    print(f"Generation Steps:   {config.walk_length}")
-    print(f"Frequencies:        {model_config.n_f} scales")
-    print(f"Grid Cells:         {sum(model_config.n_g)} total")
-    print(f"Conjunctive Codes:  {sum(model_config.n_p)} total")
-    print(f"Prediction Acc:     {prediction_acc:.1%}")
-    print(f"Memory Size:        {sum(model_config.n_p)}×{sum(model_config.n_p)}")
-    print("=" * 80)
-    print()
-    print("Pipeline Flow (Manuscript Steps):")
-    print("=" * 80)
-    print(f"Pre-training: M_gen learned from {training_walk_length} training steps")
-    print(f"Input:  a_t - Actions from policy")
-    print(f"  ↓ Step 1: transition(g_{{t-1}}, a_t) - Evolve abstract location")
-    print(f"Stage 1: g - Abstract location - {model_config.n_g}")
-    print(f"  ↓ Step 2: W_repeat·f_down(g) - Project to hippocampus")
-    print(f"Stage 2: g_ - Projected grid representation - {model_config.n_p}")
-    print(f"  ↓ Step 3: attractor(g_, M_gen) - Retrieve from memory")
-    print(f"Stage 3: p_g - Retrieved hippocampal patterns - {model_config.n_p}")
-    print(f"  ↓ Step 4: decoder(p_g) - Generate sensory prediction")
-    print(f"Output: x̂ - Predicted observations - {model_config.n_o}")
-    print("=" * 80)
-    print()
-    print(f"All outputs saved to: {config.output_dir}")
+    print(f"  ✓ Saved to: {config.output_dir}")
 
-    # Show or close plots
     if config.show_plots:
         plt.show()
     else:
         plt.close("all")
 
-    print("\n✓ Generative pipeline demonstration complete!")
+    print()
+    print("=" * 80)
+    print("Complete")
+    print("=" * 80)

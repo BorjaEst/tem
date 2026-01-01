@@ -1,109 +1,57 @@
 #!/usr/bin/env python3
 """Complete TEM inference pipeline example combining all inference components.
 
-This example demonstrates the full torch_tem inference pipeline, integrating components
-from inference_sensory.py, inference_grounded.py, inference_abstract.py, memory_storage.py,
-and memory_attractor.py into a single comprehensive demonstration.
+This example demonstrates the full torch_tem inference pipeline using subcomponents.
 
 Pipeline Stages (TEM Manuscript - Inference):
 ----------------------------------------------
-Following the exact inference steps from the TEM manuscript:
-
-1. Compress sensory observation: o_c = f_c(x)
-2. Temporally filter sensorium: x = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
-3. Sensory input to hippocampus: ~x = W_tile·w_p·f_n(x)
-4. Retrieve memory: p_x = attractor(~x, M_{t-1})
-5. Infer entorhinal: g ~ q_φ(g | p_x, g_{t-1}, a_t)
-6. Entorhinal input to hippocampus: ~g = W_repeat·f_down(g)
-7. Infer hippocampus: p ~ N(μ = f_p(~g ⊗ ~x), σ = f(~x, ~g))
-8. Form memory: M_t = hebbian(M_{t-1}, p)
-9. Repeat process for next observation
-
-Data Flow (Manuscript Notation):
---------------------------------
-    x (observation)
-    → o_c (compressed sensory via f_c)
-    → x (temporally filtered per frequency)
-    → ~x (sensory input to hippocampus via W_tile)
-    → p_x (memory retrieval via attractor dynamics)
-    → g (inferred entorhinal from p_x, g_{t-1}, a_t)
-    → ~g (entorhinal input to hippocampus via W_repeat)
-    → p (inferred hippocampus from ~g ⊗ ~x)
-    → M_t (Hebbian memory update)
+1. Compress sensory: o_c = encoder(o)
+2. Temporal filter: x = processor(o_c, x_prev)
+3. Project to HPC: x_ = projection(x)
+4. Memory retrieval: p_x = attractor(x_, M)
+5. Transition: g_gen = transition(g_prev, a)
+6. Abstract inference: g = abstract(g_gen, p_x)
+7. Project to HPC: g_ = projection(g)
+8. Grounded inference: p = grounded(g_, x_)
+9. Memory update: M = storage(p_inf, p_gen, M)
 
 Usage Examples:
 ---------------
-    # Default: 100 timesteps, save plots
     python examples/tem_inference.py
+    python examples/tem_inference.py --lec.encoder.two_hot true
+    python examples/tem_inference.py --show_plots false
 
-    # Longer walk with different architecture
-    python examples/tem_inference.py --walk_length 200 --n_o_c 12
-
-    # Different grid size and observation mode
-    python examples/tem_inference.py --grid_size 7 --observation_mode tiled
-
-    # Show plots interactively
-    python examples/tem_inference.py --show_plots true --save_plots false
-
-    # Full help
-    python examples/tem_inference.py --help
-
-Outputs:
---------
-When save_plots=true, generates 7 visualizations in outputs/inference/:
-    1. 01_environment.png - Grid layout
-    2. 02_walk_trajectory.png - Agent trajectory
-    3. 03_sensory_processing.png - Temporal filtering heatmaps
-    4. 04_place_cell_activity.png - Place field evolution
-    5. 05_outer_product_structure.png - Decomposition at mid-point
-    6. 06_abstract_location.png - Abstract location over time
-    7. 07_memory_matrices.png - Hebbian associations
+Outputs: 7 visualizations in outputs/inference/
 """
 
 from pathlib import Path
-from typing import List, Literal
 
 import matplotlib.pyplot as plt
 import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import data, figures, hpc, lec, mec, utils
-from torch_tem.config import EnvironmentConfig, ModelConfig
-from torch_tem.data.environment import Environment
+from torch_tem import figures, utils
+from torch_tem.core.hpc import HPCConfig, HPCContext, HPCModel, HPCState
+from torch_tem.core.lec import LECConfig, LECContext, LECModel, LECState
+from torch_tem.core.mec import MECConfig, MECContext, MECModel, MECState
+from torch_tem.data.environment import Environment, EnvironmentConfig
+from torch_tem.data.policies import RandomPolicyConfig
+from torch_tem.data.walks import WalkGenerator
 
 
 # ==============================================================================
 # Configuration
 # ==============================================================================
 class ExampleConfig(BaseSettings):
-    """Configuration for complete TEM inference pipeline example.
-
-    This config implements all inference-related protocols:
-    - EncoderParams, ProcessorParams
-    - GroundedLocConfig, ProjectionConfig
-    - AbstractInferenceParams
-    - MemoryStorageParams, AttractorConfig
-    """
+    """Configuration for TEM inference pipeline example."""
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="tem_inference")
 
-    # Environment configuration
-    grid_size: int = Field(default=5, ge=3, le=10, description="Grid size for synthetic environment")
-    observation_mode: Literal["unique", "tiled", "random"] = Field(default="unique", description="Observation generation mode")
-
-    # Walk generation
-    walk_length: int = Field(default=100, ge=20, le=500, description="Steps in the walk sequence")
-
-    # Architecture configuration
-    f_initial: List[float] = Field(default_factory=lambda: [0.9, 0.5, 0.2], description="Initial frequencies for each module")
-    n_g_subsampled: List[int] = Field(default_factory=lambda: [12, 10, 8], description="Grid cell dimensions per frequency")
-    n_o_c: int = Field(default=8, ge=2, le=20, description="Compressed sensory dimension (two-hot)")
-
-    # Memory configuration
-    eta: float = Field(default=0.3, ge=0.0, le=1.0, description="Hebbian learning rate")
-    lambda_: float = Field(default=0.95, ge=0.0, le=1.0, description="Memory decay rate")
-    kappa: float = Field(default=0.8, ge=0.0, le=1.0, description="Attractor stability parameter")
+    # Component configurations
+    lec: LECConfig = Field(default_factory=LECConfig, description="LEC pathway configuration")
+    mec: MECConfig = Field(default_factory=MECConfig, description="MEC pathway configuration")
+    hpc: HPCConfig = Field(default_factory=HPCConfig, description="HPC pathway configuration")
 
     # Output
     output_dir: Path = Field(default=Path("outputs/inference"), description="Directory for saving plots")
@@ -113,271 +61,168 @@ class ExampleConfig(BaseSettings):
     @field_validator("output_dir")
     @classmethod
     def create_output_dir(cls, v: Path) -> Path:
-        """Create output directory if it doesn't exist."""
         v.mkdir(parents=True, exist_ok=True)
         return v
+
+
+# Model architecture; not configurable via CLI
+GRID_SIZE = 5
+OBSERVATION_MODE = "unique"
+WALK_LENGTH = 100
+BATCH_SIZE = 1
+DEVICE = torch.device("cpu")
+
+N_G_SUBSAMPLED = [12, 10, 8]
+N_F = len(N_G_SUBSAMPLED)
+N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]
+N_P = [2 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]
+N_O_C = 8
+F_INITIAL = [0.9, 0.6, 0.3]
+I_ATTRACTOR = 3
+MAX_FREQ_INF = [2, 3, 3]
+
+W_down = utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED)
+W_repeat = utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P)
+W_tile = utils.create_tiling_matrices([N_O_C] * N_F, N_P)
+p_update_mask = utils.create_p_update_mask(N_P, N_F, N_F, 0, F_INITIAL)
+mask_inf = utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_INF)
 
 
 # ==============================================================================
 # Main Experiment
 # ==============================================================================
 if __name__ == "__main__":
-    """Run the complete TEM inference pipeline with visualizations."""
     config = ExampleConfig()
-
-    # Create config objects with proper field mapping
-    environment_config = EnvironmentConfig(width=config.grid_size, height=config.grid_size, observation_mode=config.observation_mode)
-    model_config = ModelConfig(
-        n_o=environment_config.n_locations,
-        n_o_c=config.n_o_c,
-        n_g_subsampled=config.n_g_subsampled,
-        f_initial=config.f_initial,
-        eta=config.eta,
-        kappa=config.kappa,
-        batch_size=1,  # Single walk inference
-    )
-
-    # Compute connectivity matrices from model config
-    two_hot_table = utils.create_two_hot_table(model_config.n_o, model_config.n_o_c)
-    g_downsample = utils.create_downsample_matrix(model_config.n_g, model_config.n_g_subsampled_combined)
-    p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_extended)
-    mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
-    mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
-    W_repeat = utils.create_repeat_matrices(model_config.n_g_subsampled_combined, model_config.n_p)
-    W_tile = utils.create_tiling_matrices([model_config.n_o_c] * len(model_config.n_p), model_config.n_p)
 
     print("=" * 80)
     print("Complete TEM Inference Pipeline")
     print("=" * 80)
     print(f"Configuration:")
-    print(f"  Environment: {config.grid_size}×{config.grid_size} grid ({config.observation_mode} observations)")
-    print(f"  Walk length: {config.walk_length} timesteps")
-    print(f"  Frequencies: {model_config.n_f} ({model_config.f_initial[0]:.2f} to {model_config.f_initial[-1]:.2f})")
-    print(f"  Architecture: n_g={model_config.n_g}, n_p={model_config.n_p}, n_o_c={model_config.n_o_c}")
+    print(f"  Environment: {GRID_SIZE}×{GRID_SIZE} grid ({OBSERVATION_MODE})")
+    print(f"  Walk length: {WALK_LENGTH} timesteps")
+    print(f"  Architecture: n_g={N_G}, n_p={N_P}, n_o_c={N_O_C}")
     print()
 
     # =========================================================================
-    # PHASE 1: Environment and Walk Generation
+    # PHASE 1: Environment and Walk
     # =========================================================================
-    print("Phase 1: Generating walk trajectory...")
-    env = data.Environment(environment_config)
-    env.validate()
+    print("Phase 1: Generating environment and walk...")
 
-    policy_gen = data.PolicyGenerator(env)
-    policy = policy_gen.random_policy()
+    env_config = EnvironmentConfig(width=GRID_SIZE, height=GRID_SIZE, observation_mode=OBSERVATION_MODE)
+    env = Environment(env_config)
+    walk_gen = WalkGenerator(env=env, policy_config=RandomPolicyConfig())
+    walk_data = walk_gen.generate_walk(length=WALK_LENGTH)
 
-    walk_gen = data.WalkGenerator(env)
-    walks = walk_gen.generate_walks(n_walks=1, walk_length=config.walk_length, policy=policy)
-    walk = walks[0]
+    observations = walk_data.observations.unsqueeze(1).to(DEVICE)  # [T, 1, n_o]
+    actions = walk_data.actions.unsqueeze(1).to(DEVICE)  # [T, 1]
+    locations = walk_data.locations.unsqueeze(1).to(DEVICE)  # [T, 1]
 
-    observations = [obs.clone().detach() for obs in walk.observations]  # List[T] of [n_o]
-    locations = torch.as_tensor(walk.locations, dtype=torch.long)  # [T]
-    print(f"  ✓ Generated walk: {len(walk)} timesteps")
+    print(f"  ✓ Environment: {env.n_locations} locations, {env.n_observations} observations")
+    print(f"  ✓ Walk: {WALK_LENGTH} timesteps")
     print()
 
     # =========================================================================
-    # PHASE 2: Initialize All Components
+    # PHASE 2: Initialize Components
     # =========================================================================
-    print("Phase 2: Initializing inference components...")
+    print("Phase 2: Initializing components...")
 
-    # Sensory processing
-    encoder = lec.encoder.Encoder(model_config)
-    processor = lec.processor.Processor(model_config)
-    lec_projection = lec.projection.Projection(model_config)
-    print(f"  ✓ Encoder: {model_config.n_o} → {model_config.n_o_c} (two-hot)")
-    print(f"  ✓ Processor: {model_config.n_f} frequency channels")
-    print(f"  ✓ Projection: x → x_ (W_tile expansion + w_p gating)")
-    print()
+    # LEC model
+    lec_context = LECContext(n_o=env.n_observations, f_initial=F_INITIAL, W_tile=W_tile)
+    lec_model = LECModel(lec_context, config.lec)
+    print(f"  ✓ LEC: Encoder, Processor, Projection, Decoder")
 
-    # Abstract location transition model
-    transition = mec.transition.TransitionModel(model_config)
-    abstract = mec.abstract.AbstractLocInference(model_config)
-    mec_projection = mec.projection.Projection(model_config)
-    print(f"  ✓ TransitionModel: Action-based dynamics with hierarchical g_connections")
-    print(f"  ✓ AbstractLocInference: precision-weighted fusion")
-    print(f"  ✓ Projection: g → g_ (W_down subsampling + W_repeat expansion)")
-    print()
+    # MEC model
+    mec_context = MECContext(W_down=W_down, W_repeat=W_repeat, n_f_grid=N_F, f_initial=F_INITIAL, n_actions=env.n_actions)
+    mec_model = MECModel(mec_context, config.mec)
+    print(f"  ✓ MEC: TransitionModel, Projection, AbstractLocModel")
 
-    # Grounded location inference
-    grounded = hpc.GroundedLocInference(model_config)
-    print(f"  ✓ GroundedLocInference: g_ ⊙ x_ → p (element-wise product)")
-
-    # Memory system
-    storage = hpc.storage.MemoryStorage(model_config, p_update_mask)
-    attractor = hpc.attractor.AttractorDynamics(model_config, mask_inf, mask_gen)
-    print(f"  ✓ MemoryStorage: {sum(model_config.n_p)}×{sum(model_config.n_p)} Hebbian matrix")
-    print(f"  ✓ AttractorDynamics: {model_config.i_attractor} iterations with hierarchical masking")
-
-    # Initialize memory matrices externally (functional interface)
-    n_p_total = sum(model_config.n_p)
-    dual_memory = not model_config.common_memory  # Dual if not common
-    M_gen = utils.create_initial_memory(n_p_total, model_config.batch_size, dual_memory, torch.device("cpu"))[0]
-    M_inf = utils.create_initial_memory(n_p_total, model_config.batch_size, dual_memory, torch.device("cpu"))[1]
-
-    # =========================================================================
-    # PHASE 3: Initialize Component States
-    # =========================================================================
-    print("Phase 3: Initializing component states...")
-    # Generate a single synthetic transition for initial uncertainty estimate
-    grid_generator = data.OscillatoryGridGenerator(model_config, 1, batch_size=1)
-    initial_transition = grid_generator.generate()[0]  # Single Transition (g_init, sigma_init)
-    print(f"  ✓ Initial abstract location and uncertainty sampled")
+    # HPC model
+    hpc_context = HPCContext(mask_inference=mask_inf, mask_generative=mask_inf, update_mask=p_update_mask)
+    hpc_model = HPCModel(hpc_context, config.hpc)
+    print(f"  ✓ HPC: MemoryStorage, AttractorDynamics, GroundedLocInference")
     print()
 
     # =========================================================================
-    # PHASE 4: Run Complete Inference Pipeline
+    # PHASE 3: Initialize States
     # =========================================================================
-    print("Phase 4: Running complete inference pipeline...")
+    print("Phase 3: Initializing states...")
 
-    x_c_history = []  # o_c: compressed sensory observations
-    x_f_history = []  # x: temporally filtered sensory
-    x__history = []  # ~x: sensory input to hippocampus
-    p_x_history = []  # p_x: retrieved hippocampal patterns from sensory
-    g_history = []  # g: inferred entorhinal (abstract location)
-    g_downsampled_history = []  # g_downsampled: downsampled grid cells for visualization
-    g__history = []  # ~g: entorhinal input to hippocampus
-    p_history = []  # p: inferred hippocampus (grounded location)
+    lec_state = lec_model.init_state(BATCH_SIZE, DEVICE)
+    mec_state = mec_model.init_state(BATCH_SIZE, DEVICE)
+    hpc_state = hpc_model.init_state(BATCH_SIZE, DEVICE)
 
-    x_prev = [torch.zeros(1, model_config.n_o_c) for _ in range(model_config.n_f)]
-    g_prev = initial_transition.mean  # Extract mean from Transition
-    for t in range(config.walk_length):
-        # Step 1 (Manuscript): Compress sensory observation o_c = f_c(x)
-        x = observations[t].unsqueeze(0)  # [n_o] → [B, n_o]
-        o_c = encoder(x)  # [B, n_o_c]
-        x_c_history.append(o_c[0])
-
-        # Step 2 (Manuscript): Temporally filter sensorium x = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
-        x = x_prev = processor(o_c, x_prev)  # List[n_f] of [B, n_o_c]
-        x_f_history.append([x[0] for x in x])
-
-        # Step 3 (Manuscript): Sensory input to hippocampus ~x = W_tile·w_p·f_n(x)
-        x_ = lec_projection(x, W_tile)  # List[n_f] of [B, n_p[f]]
-        x__history.append([x[0] for x in x_])
-
-        # Step 4 (Manuscript): Retrieve memory p_x = attractor(~x, M_{t-1})
-        M_current = M_inf if M_inf is not None else M_gen
-        p_x = attractor(x_, M_current, for_inference=True)  # List[n_f] of [B, n_p[f]]
-        p_x_history.append([p[0] for p in p_x])
-
-        # Step 5 (Manuscript): Infer entorhinal g ~ q_φ(g | p_x, g_{t-1}, a_t)
-        action_t = walk.actions[t].unsqueeze(0)  # [B]
-        g_gen = transition(g_prev, action_t)  # Returns Transition(mean, uncertainty)
-        location_dict = [{"shiny": None}]  # No shiny objects in this example
-        g = abstract(g_gen, p_x, location_dict)  # List[n_f] of [B, n_g[f]]
-        g_history.append([g_f[0] for g_f in g])
-
-        # Step 6 (Manuscript): Entorhinal input to hippocampus ~g = W_repeat·f_down(g)
-        g_downsampled = mec_projection.downsample(g)  # List[n_f] of [B, n_g_sub[f]]
-        g_downsampled_history.append([g_f[0] for g_f in g_downsampled])
-        g_ = mec_projection.repeat(g_downsampled)  # List[n_f] of [B, n_p[f]]
-        g__history.append([g_f[0] for g_f in g_])
-
-        # Step 7 (Manuscript): Infer hippocampus p ~ N(μ = f_p(g_ ⊙ x_), σ = f(x_, g_))
-        p = grounded(g_, x_)  # List[n_f] of [B, n_p[f]]
-        p_history.append([p_f[0] for p_f in p])
-
-        # Step 8 (Manuscript): Form memory M_t = hebbian(M_{t-1}, p)
-        p_g = attractor(g_, M_gen, for_inference=False)  # Retrieve memory
-        p_g = torch.cat(p_g, dim=1)  # [B, sum(n_p)]
-        p = torch.cat(p, dim=1)  # [B, sum(n_p)]
-        M_gen = storage.update(p, p_g, M_gen)  # Update M_gen functionally
-        if M_inf is not None:
-            M_inf = storage.update(p, p_g, M_inf)  # Update M_inf if dual memory
-
-        # Step 9 (Manuscript): Repeat process for next observation
-        g_prev = g  # Update previous abstract location
-
-    print(f"  ✓ Processed {config.walk_length} timesteps through complete pipeline")
+    print(f"  ✓ States initialized")
     print()
 
     # =========================================================================
-    # PHASE 5: Generate Visualizations
+    # PHASE 4: Inference Loop
+    # =========================================================================
+    print("Phase 4: Running inference...")
+
+    x_history = []
+    p_history = []
+    g_history = []
+
+    for t in range(WALK_LENGTH):
+
+        # LEC Pathway: Process sensory input to prepare for memory retrieval
+        state_lec: LECState = lec_model(o, lec_state)  # Process sensory input through LEC
+        x_ = state_lec.projection  # Projected sensory code for HPC retrieval
+        p_x = hpc_model.retrieve(x_, for_inference=True, state=hpc_state)
+
+        # MEC Pathway: Infer abstract location from action and previous location
+        state_mec: MECState = mec_model(p_x, locations, a[t], mec_state)  # Infer abstract location via MEC
+        g = state_mec.abstract_location
+        g_ = state_mec.projection
+
+        # HPC Pathway: Infer grounded location from abstract location and sensory input
+        p = hpc_model.grounded(g_, x_)
+
+    print(f"  ✓ Complete")
+    print()
+
+    # =========================================================================
+    # PHASE 5: Visualizations
     # =========================================================================
     print("Phase 5: Generating visualizations...")
 
-    # Plot 1 & 2: Environment and walk trajectory
-    fig1 = figures.plot_environment_layout(env, title=f"Environment: {config.grid_size}×{config.grid_size} Grid")
-    fig2 = figures.plot_walks(env, [walk], title=f"Walk Trajectory ({config.walk_length} steps)")
+    fig1 = figures.data.plot_environment(env)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
-        fig2.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 01_environment.png, 02_walk_trajectory.png")
 
-    # Plot 3: Sensory processing (temporal filtering)
-    fig3 = figures.plot_temporal_filtering(x_c_history, x_f_history, model_config.f_extended)
+    fig2 = figures.data.plot_walk(env, locations.squeeze().cpu().numpy())
+    if config.save_plots:
+        fig2.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
+
+    fig3 = figures.sensory.plot_temporal_filtering(x_history, F_INITIAL)
     if config.save_plots:
         fig3.savefig(config.output_dir / "03_sensory_processing.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 03_sensory_processing.png")
 
-    # Plot 4: Grounded location activity (place cells)
-    fig4 = figures.plot_grounded_location_activity(p_history, observations, locations, model_config.f_extended, model_config.n_p)
+    fig4 = figures.grounded.plot_place_cells(p_history, locations.squeeze().cpu().numpy())
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_place_cell_activity.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 04_place_cell_activity.png")
 
-    # Plot 5: Outer product structure (mid-point)
-    mid_point = config.walk_length // 2
-    g_downsampled_mid = g_downsampled_history[mid_point]  # List[n_f] of [n_g_sub[f]] - downsampled grid cells
-    fig5 = figures.plot_outer_product_structure(g_downsampled_mid, x_f_history[mid_point], p_history[mid_point], model_config.f_extended)
+    mid_t = WALK_LENGTH // 2
+    fig5 = figures.grounded.plot_outer_product(g_history[mid_t], x_history[mid_t], p_history[mid_t])
     if config.save_plots:
-        fig5.savefig(config.output_dir / "05_outer_product_structure.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 05_outer_product_structure.png")
+        fig5.savefig(config.output_dir / "05_outer_product.png", dpi=150, bbox_inches="tight")
 
-    # Plot 6: Abstract location evolution
-    # Convert unbatched g_history back to batched format for plotting: List[T] of List[n_f] of [B=1, n_g[f]]
-    g_history_batched = [[g_f.unsqueeze(0) for g_f in g_t] for g_t in g_history]
-    fig6 = figures.plot_g_inf_evolution(g_history_batched, model_config.n_f, config.walk_length)
+    fig6 = figures.patterns.plot_abstract_location(g_history, F_INITIAL)
     if config.save_plots:
         fig6.savefig(config.output_dir / "06_abstract_location.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 06_abstract_location.png")
 
-    # Plot 7: Memory matrices (extract first batch element for visualization)
-    M_gen_vis = M_gen[0]  # [sum(n_p), sum(n_p)]
-    M_inf_vis = M_inf[0] if M_inf is not None else None
-    fig7 = figures.plot_memory_matrices(M_gen_vis, M_inf_vis, model_config.n_p, config.walk_length)
+    fig7 = figures.memory.plot_memory_matrix(hpc_state.memory[0].squeeze().cpu().numpy())
     if config.save_plots:
-        fig7.savefig(config.output_dir / "07_memory_matrices.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: 07_memory_matrices.png")
+        fig7.savefig(config.output_dir / "07_memory.png", dpi=150, bbox_inches="tight")
 
-    print()
-    print("=" * 80)
-    print("INFERENCE PIPELINE SUMMARY")
-    print("=" * 80)
-    print(f"Environment:        {config.grid_size}×{config.grid_size} grid")
-    print(f"Walk Length:        {config.walk_length} steps")
-    print(f"Frequencies:        {model_config.n_f} scales")
-    print(f"Grid Cells:         {sum(model_config.n_g)} total")
-    print(f"Conjunctive Codes:  {sum(model_config.n_p)} total")
-    print(f"Memory Size:        {sum(model_config.n_p)}×{sum(model_config.n_p)}")
-    print("=" * 80)
-    print()
-    print("Pipeline Flow (Manuscript Steps):")
-    print("=" * 80)
-    print(f"Input:  x - {model_config.n_o}-dim observations ({config.observation_mode} mode)")
-    print(f"  ↓ Step 1: f_c(x) - Compress sensory")
-    print(f"Stage 1: o_c - {model_config.n_o_c}-dim compressed sensory")
-    print(f"  ↓ Step 2: (1-α_f)·x_f_{{t-1}} + α_f·x_c_t - Temporal filter")
-    print(f"Stage 2: x - Multi-frequency filtered sensory ({model_config.n_f} frequencies)")
-    print(f"  ↓ Step 3: W_tile·w_p·f_n(x) - Project to hippocampus")
-    print(f"Stage 3: ~x - Sensory input to hippocampus - {model_config.n_p}")
-    print(f"  ↓ Step 4: attractor(~x, M_{{t-1}}) - Retrieve memory")
-    print(f"Stage 4: p_x - Retrieved hippocampal patterns - {model_config.n_p}")
-    print(f"  ↓ Step 5: q_φ(g | p_x, g_{{t-1}}, a_t) - Infer entorhinal")
-    print(f"Stage 5: g - Inferred entorhinal (abstract location) - {model_config.n_g}")
-    print(f"  ↓ Step 6: W_repeat·f_down(g) - Project to hippocampus")
-    print(f"Stage 6: ~g - Entorhinal input to hippocampus - {model_config.n_g_subsampled_combined}")
-    print(f"  ↓ Step 7: N(μ=f_p(~g⊗~x), σ=f(~x,~g)) - Infer hippocampus")
-    print(f"Stage 7: p - Inferred hippocampus (grounded location) - {model_config.n_p}")
-    print(f"  ↓ Step 8: hebbian(M_{{t-1}}, p) - Form memory")
-    print(f"Output: M_t - Updated memory for next timestep")
-    print("=" * 80)
-    print()
-    print(f"All outputs saved to: {config.output_dir}")
+    print(f"  ✓ Saved to: {config.output_dir}")
 
-    # Show or close plots
     if config.show_plots:
         plt.show()
     else:
         plt.close("all")
 
-    print("\n✓ Inference pipeline demonstration complete!")
+    print()
+    print("=" * 80)
+    print("Complete")
+    print("=" * 80)

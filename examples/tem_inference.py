@@ -32,11 +32,11 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import figures, utils
-from torch_tem.core.hpc import HPCConfig, HPCContext, HPCModel, HPCState
-from torch_tem.core.lec import LECConfig, LECContext, LECModel, LECState
-from torch_tem.core.mec import MECConfig, MECContext, MECModel, MECState
+from torch_tem.core.hpc import HPCConfig, HPCModel, HPCState
+from torch_tem.core.lec import LECConfig, LECModel, LECState
+from torch_tem.core.mec import MECConfig, MECModel, MECState
+from torch_tem.core.model import StandardTEMContext
 from torch_tem.data.environment import Environment, EnvironmentConfig
-from torch_tem.data.policies import RandomPolicyConfig
 from torch_tem.data.walks import WalkGenerator
 
 
@@ -66,7 +66,7 @@ class ExampleConfig(BaseSettings):
 
 
 # Model architecture; not configurable via CLI
-GRID_SIZE = 5
+GRID_SIZE = 4  # 4x4 grid = 16 observations
 OBSERVATION_MODE = "unique"
 WALK_LENGTH = 100
 BATCH_SIZE = 1
@@ -74,18 +74,25 @@ DEVICE = torch.device("cpu")
 
 N_G_SUBSAMPLED = [12, 10, 8]
 N_F = len(N_G_SUBSAMPLED)
-N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]
-N_P = [2 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]
-N_O_C = 8
+N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # [36, 30, 24]
+N_P = [24, 40, 16]  # Divisible by both n_g_subsampled and n_o_c
+N_O_C = 8  # C(8,2)=28 > 16 observations
 F_INITIAL = [0.9, 0.6, 0.3]
 I_ATTRACTOR = 3
 MAX_FREQ_INF = [2, 3, 3]
+MAX_FREQ_GEN = [3, 3, 3]
 
-W_down = utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED)
-W_repeat = utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P)
-W_tile = utils.create_tiling_matrices([N_O_C] * N_F, N_P)
-p_update_mask = utils.create_p_update_mask(N_P, N_F, N_F, 0, F_INITIAL)
-mask_inf = utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_INF)
+env_config = EnvironmentConfig(width=GRID_SIZE, height=GRID_SIZE, observation_mode=OBSERVATION_MODE)
+context = StandardTEMContext(
+    environment=Environment(env_config),
+    f_initial=F_INITIAL,
+    W_tile=utils.create_tiling_matrices([N_O_C] * N_F, N_P),
+    W_down=utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED),
+    W_repeat=utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P),
+    mask_inference=utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_INF),
+    mask_generative=utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_GEN),
+    update_mask=utils.create_p_update_mask(N_P, N_F, F_INITIAL),
+)
 
 
 # ==============================================================================
@@ -108,16 +115,14 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 1: Generating environment and walk...")
 
-    env_config = EnvironmentConfig(width=GRID_SIZE, height=GRID_SIZE, observation_mode=OBSERVATION_MODE)
-    env = Environment(env_config)
-    walk_gen = WalkGenerator(env=env, policy_config=RandomPolicyConfig())
-    walk_data = walk_gen.generate_walk(length=WALK_LENGTH)
+    walk_gen = WalkGenerator(environment=context.environment, repeat_bias=2.0)
+    walk_data = walk_gen.generate_walk(walk_length=WALK_LENGTH)
 
     observations = walk_data.observations.unsqueeze(1).to(DEVICE)  # [T, 1, n_o]
     actions = walk_data.actions.unsqueeze(1).to(DEVICE)  # [T, 1]
     locations = walk_data.locations.unsqueeze(1).to(DEVICE)  # [T, 1]
 
-    print(f"  ✓ Environment: {env.n_locations} locations, {env.n_observations} observations")
+    print(f"  ✓ Environment: {context.environment.n_locations} locations, {context.environment.n_observations} observations")
     print(f"  ✓ Walk: {WALK_LENGTH} timesteps")
     print()
 
@@ -127,18 +132,15 @@ if __name__ == "__main__":
     print("Phase 2: Initializing components...")
 
     # LEC model
-    lec_context = LECContext(n_o=env.n_observations, f_initial=F_INITIAL, W_tile=W_tile)
-    lec_model = LECModel(lec_context, config.lec)
+    lec_model = LECModel(context, config.lec)
     print(f"  ✓ LEC: Encoder, Processor, Projection, Decoder")
 
     # MEC model
-    mec_context = MECContext(W_down=W_down, W_repeat=W_repeat, n_f_grid=N_F, f_initial=F_INITIAL, n_actions=env.n_actions)
-    mec_model = MECModel(mec_context, config.mec)
+    mec_model = MECModel(context, config.mec)
     print(f"  ✓ MEC: TransitionModel, Projection, AbstractLocModel")
 
     # HPC model
-    hpc_context = HPCContext(mask_inference=mask_inf, mask_generative=mask_inf, update_mask=p_update_mask)
-    hpc_model = HPCModel(hpc_context, config.hpc)
+    hpc_model = HPCModel(context, config.hpc)
     print(f"  ✓ HPC: MemoryStorage, AttractorDynamics, GroundedLocInference")
     print()
 
@@ -164,19 +166,30 @@ if __name__ == "__main__":
     g_history = []
 
     for t in range(WALK_LENGTH):
-
         # LEC Pathway: Process sensory input to prepare for memory retrieval
-        state_lec: LECState = lec_model(o, lec_state)  # Process sensory input through LEC
-        x_ = state_lec.projection  # Projected sensory code for HPC retrieval
+        lec_state: LECState = lec_model(observations[t], lec_state)  # Process sensory input through LEC
+        x_ = lec_state.projection  # Projected sensory code for HPC retrieval
         p_x = hpc_model.retrieve(x_, for_inference=True, state=hpc_state)
 
         # MEC Pathway: Infer abstract location from action and previous location
-        state_mec: MECState = mec_model(p_x, locations, a[t], mec_state)  # Infer abstract location via MEC
-        g = state_mec.abstract_location
-        g_ = state_mec.projection
+        a_t = actions[t] if t > 0 else None
+        mec_state: MECState = mec_model(p_x, None, a_t, mec_state)  # Infer abstract location via MEC
+        g_ = mec_state.projection
 
         # HPC Pathway: Infer grounded location from abstract location and sensory input
         p = hpc_model.grounded(g_, x_)
+
+        # HPC: Update memory
+        updated_memory = hpc_model.update(p, p, hpc_state)
+        hpc_state = HPCState(grounded_location=p, memory=updated_memory)
+
+        # Store (remove batch dimension for plotting convenience)
+        x_history.append([x_f[0].detach().cpu() for x_f in lec_state.filtered_observation])
+        p_history.append([p_f[0].detach().cpu() for p_f in p])
+        g_history.append([g_f[0].detach().cpu() for g_f in mec_state.abstract_location])
+
+        if (t + 1) % 20 == 0:
+            print(f"  Processed {t + 1}/{WALK_LENGTH}")
 
     print(f"  ✓ Complete")
     print()
@@ -186,32 +199,44 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 5: Generating visualizations...")
 
-    fig1 = figures.data.plot_environment(env)
+    # Environment layout
+    fig1 = figures.data.plot_environment_layout(context.environment)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
 
-    fig2 = figures.data.plot_walk(env, locations.squeeze().cpu().numpy())
+    # Walk trajectory
+    fig2 = figures.data.plot_walks(context.environment, [walk_data])
     if config.save_plots:
         fig2.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
 
-    fig3 = figures.sensory.plot_temporal_filtering(x_history, F_INITIAL)
+    # Memory matrices
+    fig3 = figures.memory.plot_memory_matrices(M_gen=hpc_state.memory[0].squeeze(0), n_p_per_freq=N_P, title="Learned Memory Structure")
     if config.save_plots:
-        fig3.savefig(config.output_dir / "03_sensory_processing.png", dpi=150, bbox_inches="tight")
+        fig3.savefig(config.output_dir / "03_memory_structure.png", dpi=150, bbox_inches="tight")
 
-    fig4 = figures.grounded.plot_place_cells(p_history, locations.squeeze().cpu().numpy())
+    # Prepare data for place cell visualization (single trajectory, no batch dimension)
+    obs_no_batch = [observations[t][0] for t in range(WALK_LENGTH)]
+    fig4 = figures.grounded.plot_grounded_location_activity(
+        p_history=p_history, observations=obs_no_batch, locations=locations.squeeze().cpu(), frequencies=F_INITIAL, n_cells_per_freq=N_P
+    )
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_place_cell_activity.png", dpi=150, bbox_inches="tight")
 
-    mid_t = WALK_LENGTH // 2
-    fig5 = figures.grounded.plot_outer_product(g_history[mid_t], x_history[mid_t], p_history[mid_t])
+    fig5 = figures.grounded.plot_place_cell_dynamics(p_history=p_history, observations=obs_no_batch, frequencies=F_INITIAL, n_cells_per_freq=N_P)
     if config.save_plots:
-        fig5.savefig(config.output_dir / "05_outer_product.png", dpi=150, bbox_inches="tight")
+        fig5.savefig(config.output_dir / "05_place_cell_dynamics.png", dpi=150, bbox_inches="tight")
 
-    fig6 = figures.patterns.plot_abstract_location(g_history, F_INITIAL)
+    # Prepare data for grid cell temporal evolution (add batch dimension back for plotting helper)
+    g_sequences = []
+    for f in range(N_F):
+        g_f_seq = torch.stack([g_history[t][f] for t in range(WALK_LENGTH)])  # [T, n_g[f]]
+        g_sequences.append(g_f_seq.unsqueeze(1))  # [T, 1, n_g[f]]
+
+    fig6 = figures.patterns.plot_grid_temporal_evolution(g_sequences=g_sequences, frequencies=F_INITIAL)
     if config.save_plots:
         fig6.savefig(config.output_dir / "06_abstract_location.png", dpi=150, bbox_inches="tight")
 
-    fig7 = figures.memory.plot_memory_matrix(hpc_state.memory[0].squeeze().cpu().numpy())
+    fig7 = figures.memory.plot_memory_matrices(M_gen=hpc_state.memory[0].squeeze(0), n_p_per_freq=N_P, title="Learned Memory Structure (Final)")
     if config.save_plots:
         fig7.savefig(config.output_dir / "07_memory.png", dpi=150, bbox_inches="tight")
 

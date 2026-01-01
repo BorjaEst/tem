@@ -13,13 +13,14 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Protocol, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 from torch import nn
 
 from torch_tem.core.hpc import HPCConfig, HPCModel, HPCState
 from torch_tem.core.lec import LECConfig, LECModel, LECState
 from torch_tem.core.mec import MECConfig, MECModel, MECState
 from torch_tem.data.environment import Environment
+from torch_tem.modules.projection import LECPConfig, MECPConfig, Projection
 
 from torch_tem.types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
 from torch_tem.types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
@@ -44,19 +45,22 @@ class TEMConfig(BaseModel):
     mec: MECConfig = Field(default_factory=MECConfig, description="MEC pathway configuration")
     hpc: HPCConfig = Field(default_factory=HPCConfig, description="HPC pathway configuration")
 
+    projection_lec: Projection = Field(default_factory=LECPConfig, description="LEC to HPC projection configuration")
+    projection_mec: Projection = Field(default_factory=MECPConfig, description="LEC to HPC projection configuration")
+
 
 class TEMContext(Protocol):
     """Protocol for TEM model initialization parameters.
 
     Attributes:
-        env: Environment instance (provides n_observations, n_actions, n_locations)
+        environment: Environment instance (provides n_observations, n_actions, n_locations)
         f_initial: Grid frequency values for hierarchical connections [n_f_grid]
         W_tile: Tiling matrices for LEC projection [n_f_total]
         W_down: Downsampling matrices for MEC projection [n_f_total]
         W_repeat: Expansion matrices for MEC projection [n_f_total]
     """
 
-    env: Environment
+    environment: Environment
     f_initial: List[float]
     W_tile: List[Matrix]
     W_down: List[Matrix]
@@ -80,21 +84,24 @@ class StandardTEMContext:
     Structurally conforms to TEMContext protocol without explicit inheritance.
     """
 
-    env: Environment
+    environment: Environment
     f_initial: List[float]
     W_tile: List[Matrix]
     W_down: List[Matrix]
     W_repeat: List[Matrix]
+    mask_inference: List[Matrix]
+    mask_generative: List[Matrix]
+    update_mask: Matrix
 
     @property
     def n_o(self) -> int:
         """Number of sensory observation neurons."""
-        return self.env.n_observations
+        return self.environment.n_observations
 
     @property
     def n_a(self) -> int:
         """Number of possible actions."""
-        return self.env.n_actions
+        return self.environment.n_actions
 
     @property
     def n_f(self) -> int:
@@ -206,28 +213,32 @@ class TEMModel(nn.Module):
         self.lec = LECModel(context, config.lec)  # LEC pathway module
         self.mec = MECModel(context, config.mec)  # MEC pathway module
 
-    def init_state(self, x: Observation) -> TEMState:
+        # Initialize projections
+        self.projection_lec = Projection(n_in=self.lec.n_x, n_out=self.hpc.n_p, config=config.projection_lec)
+        self.projection_mec = Projection(n_in=self.mec.n_g, n_out=self.hpc.n_p, config=config.projection_mec)
+
+    def init_state(self, o: Observation) -> TEMState:
         """Initialize TEM state from first observation.
 
         Args:
-            x: Initial sensory observation [B, n_o] for device placement.
+            o: Initial sensory observation [B, n_o] for device placement.
 
         Returns:
             Initial TEM state with zero-initialized locations.
         """
-        hpc_state: HPCState = self.hpc.init_state(x.device)  # Initialize HPC state
-        lec_state: LECState = self.lec.init_state(x.device)  # Initialize LEC state
-        mec_state: MECState = self.mec.init_state(x.device)  # Initialize MEC state
+        hpc_state: HPCState = self.hpc.init_state(o.device)  # Initialize HPC state
+        lec_state: LECState = self.lec.init_state(o.device)  # Initialize LEC state
+        mec_state: MECState = self.mec.init_state(o.device)  # Initialize MEC state
         return TEMState(hpc=hpc_state, lec=lec_state, mec=mec_state)
 
-    def forward(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
+    def forward(self, o: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> TEMState:
         """Forward pass through TEM model.
 
         Processes sensory input and actions to update abstract and grounded locations,
         generate predictions, and update memory via Hebbian learning.
 
         Args:
-            x: Sensory observation.
+            o: Sensory observation.
             locations: Environment descriptors for landmark cues.
             a: Action taken (None for initial state).
             state: Previous TEM state.
@@ -237,13 +248,16 @@ class TEMModel(nn.Module):
         """
 
         # LEC Pathway: Process sensory input to prepare for memory retrieval
-        state_lec: LECState = self.lec(x, state.lec)
-        x_ = state_lec.projection  # Projected sensory code for HPC retrieval
+        state_lec: LECState = self.lec(o, state.lec)
+        x = state_lec.filtered_observation  # Filtered sensory code
+        x_ = self.projection_lec(x)  # Projected sensory code for HPC retrieval
         p_x = self.hpc.retrieve(x_, for_inference=True, state=state.hpc)
+        x = self.projection_lec.inverse(p_x)  # Reconstructed sensory code
 
         # MEC Pathway: Infer abstract location from action and previous location
-        state_mec: MECState = self.mec(p_x, locations, a, state.mec)
-        g_ = state_mec.projection  # Projected abstract location for HPC retrieval
+        state_mec: MECState = self.mec(x, locations, a, state.mec)
+        g = state_mec.abstract_location  # Abstract location
+        g_ = self.projection_mec(g)  # Projected abstract location for HPC retrieval
         p_g = self.hpc.retrieve(g_, for_inference=False, state=state.hpc)
 
         # HPC Pathway: Infer grounded location and update memory

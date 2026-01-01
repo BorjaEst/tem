@@ -84,17 +84,26 @@ class ObjectInference(nn.Module):
         self._config = config
         self._n_g = n_g
 
-        # Always initialize MLPs (empty if n_g_ovc=[])
-        n_g_ovc = config.n_g_ovc
-        n_f_ovc = len(n_g_ovc)
+        # Extract separate OVC dimensions (last n_f_ovc_separate elements)
+        # In backward allocation: n_g_ovc=[10,10] with frequencies=[0.25] means
+        #   - First [10] is merged into grid module
+        #   - Last [10] is separate OVC module
+        # MLPs should only be created for separate portion
+        n_f_ovc_separate = len(config.frequencies)
+        n_g_ovc_all = config.n_g_ovc
+        n_g_ovc_separate = n_g_ovc_all[-n_f_ovc_separate:] if n_f_ovc_separate > 0 else []
 
-        # Shiny → OVC MLPs (empty modules if n_g_ovc=[])
-        self.mlp_mu_g_shiny = MLP(in_dim=[1] * n_f_ovc, out_dim=n_g_ovc, hidden_dim=[config.hidden_multiplier * g for g in n_g_ovc])
-        self.mlp_sigma_g_shiny = MLP(in_dim=[1] * n_f_ovc, out_dim=n_g_ovc, activation=[torch.tanh, torch.exp], hidden_dim=[config.hidden_multiplier * g for g in n_g_ovc])
+        # Shiny → OVC MLPs (only for separate modules)
+        self.mlp_mu_g_shiny = MLP(in_dim=[1] * n_f_ovc_separate, out_dim=n_g_ovc_separate, hidden_dim=[config.hidden_multiplier * g for g in n_g_ovc_separate])
+        self.mlp_sigma_g_shiny = MLP(
+            in_dim=[1] * n_f_ovc_separate, out_dim=n_g_ovc_separate, activation=[torch.tanh, torch.exp], hidden_dim=[config.hidden_multiplier * g for g in n_g_ovc_separate]
+        )
 
-        # Learnable priors (empty if n_g_ovc=[])
-        self.g_init = nn.ParameterList([nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=g, loc=0, scale=config.g_init_std), dtype=torch.float)) for g in n_g_ovc])
-        self.logsig_g_init = nn.ParameterList([nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=g, loc=0, scale=config.g_init_std), dtype=torch.float)) for g in n_g_ovc])
+        # Learnable priors (only for separate modules)
+        self.g_init = nn.ParameterList([nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=g, loc=0, scale=config.g_init_std), dtype=torch.float)) for g in n_g_ovc_separate])
+        self.logsig_g_init = nn.ParameterList(
+            [nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=g, loc=0, scale=config.g_init_std), dtype=torch.float)) for g in n_g_ovc_separate]
+        )
 
     @property
     def n_f_ovc(self) -> int:

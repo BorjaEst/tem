@@ -547,5 +547,183 @@ def plot_grid_temporal_evolution(
     plt.tight_layout()
     return fig
 
+
+def plot_ovc_activation_patterns(
+    ovc_history: list,
+    landmark_timesteps: list[bool],
+    n_g_ovc: list[int],
+    frequencies: list[float],
+) -> plt.Figure:
+    """
+    Plot OVC cell activation patterns over time with landmark markers.
+
+    Creates heatmaps showing how OVC cells respond during the simulation,
+    with red vertical lines marking timesteps when landmarks were present.
+
+    Args:
+        ovc_history: List of g_ovc tensors (List[torch.Tensor] or List[np.ndarray])
+        landmark_timesteps: Boolean list indicating landmark presence at each timestep
+        n_g_ovc: Number of cells per OVC module [n_g_ovc_0, n_g_ovc_1, ...]
+        frequencies: Frequency parameters for each OVC module
+
+    Returns:
+        Matplotlib figure with OVC activation heatmaps
+    """
+    import numpy as np
+    import torch
+
+    # Handle empty OVC case
+    if not frequencies or not n_g_ovc:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.text(0.5, 0.5, "No OVC modules configured", ha="center", va="center", fontsize=14)
+        ax.axis("off")
+        return fig
+
+    n_f_ovc = len(frequencies)
+    n_steps = len(ovc_history)
+
+    # Convert history to numpy array
+    g_ovc_array = np.zeros((n_steps, sum(n_g_ovc)))
+    for t, g_ovc in enumerate(ovc_history):
+        if isinstance(g_ovc, torch.Tensor):
+            g_ovc_array[t] = g_ovc.detach().cpu().numpy()
+        else:
+            g_ovc_array[t] = g_ovc
+
+    # Create figure
+    fig, axes = plt.subplots(n_f_ovc, 1, figsize=(12, 3 * n_f_ovc))
+    if n_f_ovc == 1:
+        axes = [axes]
+
+    # Plot each OVC module
+    cell_idx = 0
+    for f in range(n_f_ovc):
+        n_g_f = n_g_ovc[f]
+        g_f_seq = g_ovc_array[:, cell_idx : cell_idx + n_g_f]
+
+        ax = axes[f]
+        im = ax.imshow(g_f_seq.T, aspect="auto", cmap="YlOrRd", interpolation="none")
+        ax.set_xlabel("Time Step")
+        ax.set_ylabel("Cell Index")
+        ax.set_title(f"OVC Module {f} (frequency={frequencies[f]:.2f}, {n_g_f} cells)")
+        plt.colorbar(im, ax=ax, label="Activation")
+
+        # Mark landmark timesteps with red vertical lines
+        for t, is_landmark in enumerate(landmark_timesteps):
+            if is_landmark:
+                ax.axvline(x=t, color="red", linewidth=1.5, alpha=0.7)
+
+        cell_idx += n_g_f
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_ovc_landmark_correlation(
+    ovc_history: list,
+    landmark_timesteps: list[bool],
+    n_g_ovc: list[int],
+    frequencies: list[float],
+) -> plt.Figure:
+    """
+    Analyze correlation between OVC activity and landmark presence.
+
+    Creates two panels:
+    1. Timeline showing average OVC activation with landmark markers
+    2. Box plots comparing OVC response with vs without landmarks
+
+    Args:
+        ovc_history: List of g_ovc tensors (List[torch.Tensor] or List[np.ndarray])
+        landmark_timesteps: Boolean list indicating landmark presence at each timestep
+        n_g_ovc: Number of cells per OVC module
+        frequencies: Frequency parameters for each OVC module
+
+    Returns:
+        Matplotlib figure with correlation analysis
+    """
+    import numpy as np
+    import torch
+
+    # Handle empty OVC case
+    if not frequencies or not n_g_ovc:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.text(0.5, 0.5, "No OVC modules configured", ha="center", va="center", fontsize=14)
+        ax.axis("off")
+        return fig
+
+    n_f_ovc = len(frequencies)
+    n_steps = len(ovc_history)
+
+    # Convert history to numpy array
+    g_ovc_array = np.zeros((n_steps, sum(n_g_ovc)))
+    for t, g_ovc in enumerate(ovc_history):
+        if isinstance(g_ovc, torch.Tensor):
+            g_ovc_array[t] = g_ovc.detach().cpu().numpy()
+        else:
+            g_ovc_array[t] = g_ovc
+
+    # Compute average activation per module
+    avg_activations = np.zeros((n_steps, n_f_ovc))
+    cell_idx = 0
+    for f in range(n_f_ovc):
+        n_g_f = n_g_ovc[f]
+        g_f_seq = g_ovc_array[:, cell_idx : cell_idx + n_g_f]
+        avg_activations[:, f] = g_f_seq.mean(axis=1)
+        cell_idx += n_g_f
+
+    # Split data by landmark presence
+    landmark_arr = np.array(landmark_timesteps)
+    with_landmark = {f: avg_activations[landmark_arr, f] for f in range(n_f_ovc)}
+    without_landmark = {f: avg_activations[~landmark_arr, f] for f in range(n_f_ovc)}
+
+    # Create figure with two panels
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+
+    # Panel 1: Timeline with landmark markers
+    for f in range(n_f_ovc):
+        ax1.plot(avg_activations[:, f], label=f"OVC {f} (f={frequencies[f]:.2f})", alpha=0.7)
+
+    # Mark landmark regions
+    for t, is_landmark in enumerate(landmark_timesteps):
+        if is_landmark:
+            ax1.axvspan(t - 0.5, t + 0.5, color="red", alpha=0.2)
+
+    ax1.set_xlabel("Time Step")
+    ax1.set_ylabel("Average OVC Activation")
+    ax1.set_title("OVC Activity Timeline (red = landmark present)")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Panel 2: Box plots comparing with/without landmarks
+    positions = []
+    labels = []
+    data = []
+
+    for f in range(n_f_ovc):
+        if len(with_landmark[f]) > 0:
+            positions.append(f * 3)
+            labels.append(f"OVC {f}\nWith")
+            data.append(with_landmark[f])
+
+        if len(without_landmark[f]) > 0:
+            positions.append(f * 3 + 1)
+            labels.append(f"OVC {f}\nWithout")
+            data.append(without_landmark[f])
+
+    bp = ax2.boxplot(data, positions=positions, widths=0.6, patch_artist=True)
+
+    # Color boxes
+    for i, box in enumerate(bp["boxes"]):
+        if "With" in labels[i]:
+            box.set_facecolor("lightcoral")
+        else:
+            box.set_facecolor("lightblue")
+
+    ax2.set_xticks(positions)
+    ax2.set_xticklabels(labels, rotation=0)
+    ax2.set_ylabel("OVC Activation")
+    ax2.set_title("OVC Response Comparison: With vs Without Landmarks")
+    ax2.grid(True, axis="y", alpha=0.3)
+
     plt.tight_layout()
     return fig

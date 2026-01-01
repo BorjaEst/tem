@@ -45,14 +45,9 @@ class MECConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
-    # Learning projection matrices
-    learn_W_down: bool = Field(default=False, description="If True, downsampling matrices W_down are learnable")
-    learn_W_repeat: bool = Field(default=False, description="If True, expansion matrices W_repeat are learnable")
-
     # Submodule configurations
     abstract: AbstractLocConfig = Field(default_factory=AbstractLocConfig, description="Abstract location inference configuration")
     transition: TransitionConfig = Field(default_factory=TransitionConfig, description="Transition model configuration")
-    projection: ProjectionConfig = Field(default_factory=ProjectionConfig, description="Projection configuration")
 
     # OVC extension
     ovc: ObjectInferenceConfig = Field(default_factory=ObjectInferenceConfig, description="OVC configuration. Empty = disabled")
@@ -63,15 +58,15 @@ class MECContext(Protocol):
 
     Attributes:
         n_a: Number of possible actions from environment.
+        n_g: Abstract location dimensions per frequency module [n_f].
+        n_p: Hippocampal input dimensions per frequency module [n_f].
         f_initial: Base frequency values for hierarchical connections [n_f_grid].
-        W_down: Downsampling matrices defining n_g dimensions [n_f].
-        W_repeat: Expansion matrices defining n_p dimensions [n_f].
     """
 
     n_a: int
+    n_g: List[int]
+    n_p: List[int]
     f_initial: List[float]
-    W_down: List[Tensor]
-    W_repeat: List[Tensor]
 
 
 @dataclass
@@ -126,25 +121,11 @@ class MECModel(nn.Module):
         self._config = config
         self._dims = dims = resolve_dimensions(context, config)
 
-        # Register projection matrices as parameters or buffers based on config
-        self._W_down = nn.ParameterList([nn.Parameter(matrix, requires_grad=config.learn_W_down) for matrix in context.W_down])
-        self._W_repeat = nn.ParameterList([nn.Parameter(matrix, requires_grad=config.learn_W_repeat) for matrix in context.W_repeat])
-
         # Initialize submodules
-        self.projection = Projection(self._W_down, self._W_repeat, config.projection)
-        self.abstract = AbstractLocModel(dims.n_g_grid, context.W_repeat[: dims.n_f_grid], config.abstract)
-        self.transition = TransitionModel(n_g=dims.n_g, n_f_grid=dims.n_f_grid, n_actions=context.n_actions, f_initial=context.f_initial, config=config.transition)
+        self.abstract = AbstractLocModel(self.n_p, self.n_g, config.abstract)
+
+        self.transition = TransitionModel(n_g=dims.n_g, n_f_grid=len(dims.n_g_grid), n_actions=context.n_a, f_initial=context.f_initial, config=config.transition)
         self.ovc = ObjectInference(dims.n_g, config.ovc)
-
-    @property
-    def W_down(self) -> nn.ParameterList:
-        """Downsampling matrices (read-only for debugging)."""
-        return self._W_down
-
-    @property
-    def W_repeat(self) -> nn.ParameterList:
-        """Expansion matrices (read-only for debugging)."""
-        return self._W_repeat
 
     @property
     def n_p(self) -> List[int]:
@@ -155,6 +136,16 @@ class MECModel(nn.Module):
     def n_g(self) -> List[int]:
         """Abstract location dimensions per frequency."""
         return self._dims.n_g
+
+    @property
+    def n_g_grid(self) -> List[int]:
+        """Grid cell dimensions per frequency."""
+        return self._dims.n_g_grid
+
+    @property
+    def n_g_ovc(self) -> List[int]:
+        """Object vector cell dimensions per frequency."""
+        return self._dims.n_g_ovc
 
     @property
     def n_f(self) -> int:
@@ -194,7 +185,7 @@ class MECModel(nn.Module):
             projection=self.projection(g),
         )
 
-    def forward(self, p_x: Optional[GroundedLocation], locations: List[Dict], a: Optional[Tensor], state: MECState) -> MECState:
+    def forward(self, x: Optional[MultiScaleCode], locations: List[Dict], a: Optional[Tensor], state: MECState) -> MECState:
         """Forward pass through MEC pathway.
 
         DECLARATIVE PIPELINE:
@@ -203,7 +194,7 @@ class MECModel(nn.Module):
         3. Projection: Map to hippocampal input space
 
         Args:
-            p_x: Hippocampal pattern from sensory (None in generative mode)
+            x: Retrieved features cell patterns from LEC (None = generative mode)
             locations: Environment descriptors for landmark cues
             a: Action taken
             state: Previous MEC state
@@ -216,19 +207,13 @@ class MECModel(nn.Module):
 
         # Step 2a: Grid cell inference (always uses n_g_grid portion)
         g_gen_grid = Transition(mean=g_gen.mean[: self.n_f_grid], uncertainty=g_gen.uncertainty[: self.n_f_grid])
-        p_x_grid = p_x[: self.n_f_grid] if p_x is not None else None
-        g_grid = self.abstract(g_gen_grid, p_x_grid)
+        g_grid = self.abstract(g_gen_grid, x)
 
-        # Step 2b: OVC inference (only if separate modules exist)
+        # Step 2: OVC inference (only if separate modules exist)
         g_ovc = self.ovc(g_gen, locations)  # Returns [] if no separate OVC
-
-        # Step 2c: Combine grid + ovc
         g = g_grid + g_ovc
 
-        # Step 3: Projection
-        g_ = self.projection(g)
-
-        return MECState(transition_stats=g_gen, abstract_location=g, projection=g_)
+        return MECState(transition_stats=g_gen, abstract_location=g)
 
 
 # ============================================================================
@@ -302,8 +287,9 @@ def resolve_dimensions(context: MECContext, config: MECConfig) -> DimensionConfi
     """
     _validate_dimensions(context, config)
 
-    # Extract dimensions
-    n_g = [W.shape[0] for W in context.W_down]
+    # Extract dimensions from context
+    # Try context.n_g first (if available), else extract from W_down
+    n_g = getattr(context, "n_g", [W.shape[0] for W in context.W_down])
     n_p = [W.shape[1] for W in context.W_repeat]
     n_g_ovc_config = config.ovc.n_g_ovc
     n_f_ovc_separate = len(config.ovc.frequencies) if config.ovc.frequencies else 0

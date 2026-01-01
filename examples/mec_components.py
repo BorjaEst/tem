@@ -126,21 +126,24 @@ class ExampleConfig(BaseSettings):
         return v
 
 
-# Model architecture - Total module capacity (not configurable via CLI)
-# Config determines how modules are split between grid and OVC
+# ==============================================================================
+# Model Architecture - Fixed Total Constants
+# ==============================================================================
+# These define TOTAL module capacity; OVC config determines grid vs OVC split
+
 N_G_SUBSAMPLED = [12, 10, 8, 10]  # Downsampled cells per frequency (4 total: max 3 grid + 1 OVC)
-N_F = len(N_G_SUBSAMPLED)  # Total number of frequency modules
-N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # Total cells per frequency [36, 30, 24, 30]
-N_P = [2 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # Place cells per frequency [24, 20, 16, 20]
+N_G_MAX = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # Maximum grid cells [36, 30, 24, 30]
+N_P_MAX = [2 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # Maximum place cells [24, 20, 16, 20]
 N_ACTIONS = 5  # Number of possible actions
 F_INITIAL = [0.9, 0.6, 0.3, 0.25]  # Frequency values for all modules
 WALK_LENGTH = 100  # Timesteps in sequence
 BATCH_SIZE = 4  # Batch size
 DEVICE = torch.device("cpu")  # Change to "cuda" if GPU is available
 
-# Build MEC down and repeat from constants
-W_down = utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED)
-W_repeat = utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P)
+# Build projection matrices ONCE from maximum capacity - never rebuild
+# Models use resolve_dimensions() internally to compute actual n_g based on OVC config
+W_down = utils.create_downsample_matrix(N_G_MAX, N_G_SUBSAMPLED)
+W_repeat = utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P_MAX)
 
 
 # ==============================================================================
@@ -157,9 +160,50 @@ if __name__ == "__main__":
     """
     config = ExampleConfig()
 
-    # Compute n_f_grid based on OVC config (how many modules are grid vs OVC)
-    n_f_ovc_separate = len(config.ovc.frequencies) if config.ovc else 0
-    n_f_grid = N_F - n_f_ovc_separate
+    # Compute actual dimensions using resolve_dimensions()
+    # Create temporary context with fixed matrices
+    from dataclasses import dataclass
+
+    from torch_tem.core.mec import MECConfig, resolve_dimensions
+    from torch_tem.core.mec.object import ObjectInferenceConfig
+
+    @dataclass
+    class TempContext:
+        """Temporary context for dimension resolution."""
+
+        n_g: List[int]
+        n_a: int
+        f_initial: List[float]
+        W_down: List[torch.Tensor]
+        W_repeat: List[torch.Tensor]
+
+    context = TempContext(
+        n_g=N_G_MAX,
+        n_a=N_ACTIONS,
+        f_initial=F_INITIAL,
+        W_down=W_down,
+        W_repeat=W_repeat,
+    )
+
+    mec_config = MECConfig(
+        transition=config.transition,
+        abstract=config.abstract,
+        projection=config.projection,
+        ovc=config.ovc if config.ovc is not None else ObjectInferenceConfig(),
+    )
+
+    dims = resolve_dimensions(context, mec_config)
+
+    # Extract computed dimensions
+    n_g = dims.n_g
+    n_p = dims.n_p
+    n_f_grid = len(dims.n_g_grid)
+    n_f_ovc_separate = len(config.ovc.frequencies) if config.ovc and config.ovc.frequencies else 0
+
+    # Rebuild projection matrices with actual dimensions
+    # (necessary when OVC changes the dimensions)
+    W_down = utils.create_downsample_matrix(n_g, N_G_SUBSAMPLED)
+    W_repeat = utils.create_repeat_matrices(N_G_SUBSAMPLED, n_p)
 
     print("=" * 80)
     print("MEC Spatial Processing Pipeline")
@@ -167,9 +211,10 @@ if __name__ == "__main__":
     print(f"Configuration:")
     print(f"  Sequence length: {WALK_LENGTH} timesteps")
     print(f"  Batch size: {BATCH_SIZE}")
-    print(f"  Total modules: {N_F} ({n_f_grid} grid + {n_f_ovc_separate} separate OVC)")
+    print(f"  Total modules: {len(n_g)} ({n_f_grid} grid + {n_f_ovc_separate} separate OVC)")
     print(f"  Frequencies: {F_INITIAL}")
-    print(f"  Architecture: n_g={N_G}, n_g_sub={N_G_SUBSAMPLED}")
+    print(f"  Max capacity: n_g_max={N_G_MAX}, n_p_max={N_P_MAX}")
+    print(f"  Actual dimensions: n_g={n_g}, n_p={n_p}")
     print(f"  OVC config: n_g_ovc={config.ovc.n_g_ovc if config.ovc else []}, frequencies={config.ovc.frequencies if config.ovc else []}")
     print()
 
@@ -181,7 +226,7 @@ if __name__ == "__main__":
     # MEC TransitionModel: Path integration via action-conditioned dynamics
     # Predicts next abstract location from current state + action
     # Outputs prediction with uncertainty: (g_gen, σ_g_gen)
-    transition_model = TransitionModel(n_g=N_G, n_f_grid=n_f_grid, n_actions=N_ACTIONS, f_initial=F_INITIAL, config=config.transition)
+    transition_model = TransitionModel(n_g=n_g, n_f_grid=n_f_grid, n_actions=N_ACTIONS, f_initial=F_INITIAL, config=config.transition)
 
     # Initialize transition weights with small random values for demonstration
     # (In real TEM, these would be learned through training)
@@ -196,7 +241,7 @@ if __name__ == "__main__":
     # MEC AbstractLocModel: Fuses path integration with memory corrections
     # Combines g_gen (always available) with p_x (memory retrieval, optional)
     # Uses precision-weighted Bayesian fusion (grid modules only)
-    abstract_model = AbstractLocModel(n_g=N_G[:n_f_grid], W_repeat=W_repeat[:n_f_grid], config=config.abstract)
+    abstract_model = AbstractLocModel(n_g=n_g[:n_f_grid], W_repeat=W_repeat[:n_f_grid], config=config.abstract)
     print(f"  ✓ AbstractLocModel: Precision-weighted fusion ({n_f_grid} grid frequencies)")
 
     # MEC Projection: Downsamples and expands grid cells for hippocampal input
@@ -204,21 +249,20 @@ if __name__ == "__main__":
     # Expands g_downsampled for hippocampal conjunction: g_downsampled → g_repeated
     # Note: learn_W_down/learn_W_repeat in config are for demonstration; current implementation uses fixed matrices
     projection_model = Projection(W_down=W_down, W_repeat=W_repeat, config=config.projection)
-    print(f"  ✓ Projection: {N_G} → {N_G_SUBSAMPLED} → {N_P}")
+    print(f"  ✓ Projection: {n_g} → {N_G_SUBSAMPLED} → {n_p}")
 
     # OVC ObjectInference (optional)
     ovc_model = None
-    n_g_ovc = None
     if config.ovc is not None and config.ovc.n_g_ovc:
-        n_g_ovc = config.ovc.n_g_ovc if config.ovc.n_g_ovc else [6, 5, 4]
-        ovc_model = ObjectInference(n_g=N_G, config=config.ovc)
+        ovc_model = ObjectInference(n_g=n_g, config=config.ovc)
 
         # Check if OVC is in merged mode (won't produce separate output)
         if not config.ovc.frequencies:
             print(f"  ✓ ObjectInference: OVC module enabled in MERGED mode (integrated with grid cells)")
-            print(f"    OVC dims: {n_g_ovc}, allocated backwards from grid modules")
+            print(f"    OVC dims: {config.ovc.n_g_ovc}, allocated backwards from grid modules")
         else:
-            print(f"  ✓ ObjectInference: OVC module enabled in SEPARATE mode ({len(n_g_ovc)} frequencies, dims={n_g_ovc})")
+            n_g_ovc_separate = config.ovc.n_g_ovc[-len(config.ovc.frequencies) :]
+            print(f"  ✓ ObjectInference: OVC module enabled in SEPARATE mode ({len(config.ovc.frequencies)} frequencies, dims={n_g_ovc_separate})")
     else:
         print(f"  ✓ ObjectInference: OVC module disabled")
 
@@ -259,9 +303,13 @@ if __name__ == "__main__":
     g_gen_transitions = []  # Transition objects (mean + uncertainty)
     g_inf_history = []  # Fused abstract locations
     g_downsampled_history = []  # Downsampled for memory
+    g_grid_history = []  # Grid cells only (for visualization)
+    g_ovc_history = []  # OVC cells only (for visualization)
+    landmark_timesteps = []  # Track when landmarks were present
 
     # Initialize abstract location (first timestep)
-    g_prev = [torch.randn(BATCH_SIZE, N_G[f], device=DEVICE) * 0.1 for f in range(N_F)]
+    # Use actual dimensions from transition model (computed via resolve_dimensions)
+    g_prev = [torch.randn(BATCH_SIZE, transition_model.n_g[f], device=DEVICE) * 0.1 for f in range(len(transition_model.n_g))]
     valid_mask = torch.ones(BATCH_SIZE, dtype=torch.bool, device=DEVICE)
 
     for t in range(WALK_LENGTH):
@@ -279,8 +327,15 @@ if __name__ == "__main__":
         g_inf = abstract_model(g_gen_transition, p_x)  # List[n_f] of [B, n_g[f]]
 
         # === Step 3 (Optional): Object Vector Cells ===
-        # Note: OVC in merged mode is integrated into AbstractLocModel
-        # No separate tracking needed for component demo
+        # Extract OVC activity (if configured)
+        if config.ovc and config.ovc.frequencies:
+            # Create dummy locations (placeholder logic: every 10 steps has landmark)
+            is_landmark = t % 10 == 0
+            locations = [{"shiny": torch.tensor([1.0], device=DEVICE)} if is_landmark else {} for _ in range(BATCH_SIZE)]
+            g_ovc = ovc_model(g_gen_transition, locations)  # List[n_f_ovc] of [B, n_g_ovc[f]]
+        else:
+            g_ovc = []
+            is_landmark = False
 
         # === Step 4: Projection ===
         # Downsample for memory, expand for hippocampus
@@ -294,11 +349,23 @@ if __name__ == "__main__":
         g_inf_history.append([g.clone().detach() for g in g_inf])
         g_downsampled_history.append([g.clone().detach() for g in g_downsampled])
 
+        # Store grid and OVC separately (for batch 0 only)
+        g_grid_history.append([g[0].clone().detach() for g in g_inf[:n_f_grid]])
+        if g_ovc:
+            g_ovc_history.append(torch.cat([g[0] for g in g_ovc]).clone().detach())
+        else:
+            g_ovc_history.append(torch.zeros(0))
+        landmark_timesteps.append(is_landmark)
+
         # Progress reporting
         if (t + 1) % 20 == 0 or t == 0:
             avg_sigma = sum(s.mean().item() for s in g_gen_transition.uncertainty) / len(g_gen_transition.uncertainty)
-            avg_g = sum(g.abs().mean().item() for g in g_inf) / len(g_inf)
-            print(f"  Step {t+1}/{WALK_LENGTH}: avg_g={avg_g:.4f}, avg_sigma={avg_sigma:.4f}")
+            avg_g_grid = sum(g.abs().mean().item() for g in g_inf[:n_f_grid]) / n_f_grid if n_f_grid > 0 else 0
+            avg_g_ovc = sum(g.abs().mean().item() for g in g_ovc) / len(g_ovc) if g_ovc else 0
+            if g_ovc:
+                print(f"  Step {t+1}/{WALK_LENGTH}: avg_g_grid={avg_g_grid:.4f}, avg_g_ovc={avg_g_ovc:.4f}, avg_sigma={avg_sigma:.4f}")
+            else:
+                print(f"  Step {t+1}/{WALK_LENGTH}: avg_g_grid={avg_g_grid:.4f}, avg_sigma={avg_sigma:.4f}")
 
     print(f"  ✓ Processed {WALK_LENGTH} timesteps through MEC pipeline")
     print()
@@ -351,36 +418,65 @@ if __name__ == "__main__":
         fig5.savefig(config.output_dir / "05_grid_patterns.png", dpi=150, bbox_inches="tight")
         print(f"  Saved: 05_grid_patterns.png")
 
+    # Plot 6 & 7: OVC visualizations (only if configured)
+    if config.ovc and config.ovc.frequencies:
+        # Extract separate OVC dimensions (last n_f_ovc_separate elements)
+        n_g_ovc_separate = config.ovc.n_g_ovc[-len(config.ovc.frequencies) :]
+
+        fig6 = figures.plot_ovc_activation_patterns(
+            ovc_history=g_ovc_history,
+            landmark_timesteps=landmark_timesteps,
+            n_g_ovc=n_g_ovc_separate,
+            frequencies=config.ovc.frequencies,
+        )
+        if config.save_plots:
+            fig6.savefig(config.output_dir / "06_ovc_activation.png", dpi=150, bbox_inches="tight")
+            print(f"  Saved: 06_ovc_activation.png")
+
+        fig7 = figures.plot_ovc_landmark_correlation(
+            ovc_history=g_ovc_history,
+            landmark_timesteps=landmark_timesteps,
+            n_g_ovc=n_g_ovc_separate,
+            frequencies=config.ovc.frequencies,
+        )
+        if config.save_plots:
+            fig7.savefig(config.output_dir / "07_ovc_landmark_correlation.png", dpi=150, bbox_inches="tight")
+            print(f"  Saved: 07_ovc_landmark_correlation.png")
+
+    n_shiny_timesteps = sum(landmark_timesteps)
     print()
     print("=" * 80)
     print("MEC Pipeline Summary")
     print("=" * 80)
     print(f"Architecture:")
-    print(f"  Total modules: {N_F} ({n_f_grid} grid + {n_f_ovc_separate} separate OVC)")
-    print(f"  Grid cells: {N_G[:n_f_grid]} (first {n_f_grid} modules)")
-    print(f"  Downsampled: {N_G_SUBSAMPLED[:n_f_grid]}")
-    print(f"  Place cells: {N_P[:n_f_grid]}")
-    if n_f_ovc_separate > 0:
-        print(f"  OVC cells: {N_G[n_f_grid:]} (last {n_f_ovc_separate} modules)")
-        print(f"  OVC config: {config.ovc.n_g_ovc}")
+    print(f"  Total modules: {len(n_g)} ({n_f_grid} grid + {n_f_ovc_separate} separate OVC)")
+    print(f"  Total dimensions: n_g={n_g}, n_p={n_p}")
+    print(f"  Grid cells (grid-only portion): {dims.n_g_grid}")
+    print(f"  OVC cells (per module): {dims.n_g_ovc}")
+    print(f"  Downsampled: {N_G_SUBSAMPLED}")
+    if config.ovc and config.ovc.n_g_ovc:
+        print(f"  OVC config: {config.ovc.n_g_ovc}, frequencies={config.ovc.frequencies if config.ovc.frequencies else '[] (merged)'}")
     print()
     print(f"Pipeline Flow:")
     print(f"  1. TransitionModel: (g_t, a) → (g_gen, σ_gen)")
+    print(f"     - Total dimensions: {n_g}")
     print(f"     - Hierarchical connections: {n_f_grid} grid + {n_f_ovc_separate} OVC modules")
     print(f"     - Action-conditioned dynamics via MLP (random weights for demo)")
     print()
     print(f"  2. AbstractLocModel: (g_gen, p_x?) → g_inf")
+    print(f"     - Grid portion only: {dims.n_g_grid}")
     print(f"     - Precision-weighted fusion")
     print(f"     - Memory path: DISABLED (p_x=None in this example)")
     print()
-    if ovc_model:
+    if config.ovc and config.ovc.frequencies:
         print(f"  3. ObjectInference: (g_gen, locations) → g_ovc")
+        print(f"     - Separate OVC modules: {n_f_ovc_separate}")
         print(f"     - Landmark-based OVC activation")
         print(f"     - Landmarks detected: {n_shiny_timesteps} timesteps")
         print()
-    print(f"  {4 if ovc_model else 3}. Projection: g_inf → (g_down, g_repeat)")
-    print(f"     - Downsample: {N_G} → {N_G_SUBSAMPLED} (memory indexing)")
-    print(f"     - Expand: {N_G_SUBSAMPLED} → {N_P} (hippocampal conjunction)")
+    print(f"  {4 if config.ovc and config.ovc.frequencies else 3}. Projection: g_inf → (g_down, g_repeat)")
+    print(f"     - Downsample: {n_g} → {N_G_SUBSAMPLED} (memory indexing)")
+    print(f"     - Expand: {N_G_SUBSAMPLED} → {n_p} (hippocampal conjunction)")
     print()
     print("=" * 80)
     print()

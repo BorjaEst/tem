@@ -39,6 +39,8 @@ from torch_tem.figures.patterns import (
     plot_grid_cell_patterns,
     plot_grid_temporal_evolution,
     plot_oscillatory_patterns,
+    plot_ovc_activation_patterns,
+    plot_ovc_landmark_correlation,
     plot_pattern_comparison,
     plot_pattern_correlations,
     plot_place_cell_patterns,
@@ -77,6 +79,8 @@ __all__ = [
     "plot_pattern_comparison",
     "plot_transition_uncertainty",
     "plot_grid_temporal_evolution",
+    "plot_ovc_activation_patterns",
+    "plot_ovc_landmark_correlation",
     # Grounded location inference
     "plot_grounded_location_activity",
     "plot_outer_product_structure",

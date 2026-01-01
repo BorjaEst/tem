@@ -27,7 +27,7 @@ from torch import Tensor
 
 from torch_tem import utils
 from torch_tem.core.mlp import MLP
-from torch_tem.types import AbstractLocation, GroundedLocation, Matrix, Transition
+from torch_tem.types import AbstractLocation, GroundedLocation, MultiScaleCode, Transition
 
 __all__ = ["AbstractLocConfig", "AbstractLocModel"]
 
@@ -66,36 +66,19 @@ class AbstractLocModel(nn.Module):
         In INFERENCE mode: p_x retrieved from sensory, enables drift correction
     """
 
-    def __init__(self, n_g: List[int], W_repeat: List[Matrix], config: AbstractLocConfig):
+    def __init__(self, n_p: List[int], n_g: List[int], config: AbstractLocConfig):
         """Initialize spatial inference.
 
         Args:
+            n_p: Place cell dimensions per frequency
             n_g: Grid cell dimensions per frequency (full resolution)
-            W_repeat: Expansion matrices [n_p[f], n_g_subsampled[f]]
             config: Spatial inference configuration
         """
         super().__init__()
         self._config = config
-        self._n_g = n_g
-        self._n_f = len(n_g)
-        self._W_repeat = W_repeat
-
-        # Infer n_p from W_repeat (W_repeat[f].shape = [n_p[f], n_g_subsampled[f]])
-        self._n_p = [W.shape[1] for W in W_repeat]
-
-        # Memory → Grid MLP dimensions
-        if config.use_inverse_projection:
-            # Legacy mode: g_downsampled[f] = p_x[f] @ W_repeat[f]^T
-            # Input dimension: n_g_subsampled[f] = W_repeat[f].shape[0]
-            mlp_in_dim = [W.shape[0] for W in W_repeat]
-        else:
-            # Modern mode: concatenate all place cells
-            # Extract n_p from W_repeat: [n_g_subsampled[f], n_p[f]]
-            n_p = [W.shape[1] for W in W_repeat]
-            mlp_in_dim = [sum(n_p)] * self.n_f
 
         # Memory → Grid MLP (p_x → mu_g_mem or g_downsampled → mu_g_mem)
-        self.mlp_mu_g_mem = MLP(in_dim=mlp_in_dim, out_dim=n_g, hidden_dim=[config.hidden_multiplier * g for g in n_g])
+        self.mlp_mu_g_mem = MLP(in_dim=n_p, out_dim=n_g, hidden_dim=[config.hidden_multiplier * g for g in n_g])
 
         # Initialize with small random weights (legacy parity)
         weights = self.mlp_mu_g_mem.get_weights(-1)
@@ -103,24 +86,14 @@ class AbstractLocModel(nn.Module):
 
         # Memory uncertainty MLP (retrieval quality → sigma_g_mem)
         # Input: [norm, reconstruction_error] per frequency
-        self.mlp_sigma_g_mem = MLP(in_dim=[2] * self._n_f, out_dim=n_g, activation=[torch.tanh, torch.exp], hidden_dim=[config.hidden_multiplier * g for g in n_g])
+        self.mlp_sigma_g_mem = MLP(in_dim=[2] * len(n_g), out_dim=n_g, activation=[torch.tanh, torch.exp], hidden_dim=[config.hidden_multiplier * g for g in n_g])
 
-    @property
-    def n_f(self) -> int:
-        """Number of frequency modules."""
-        return self._n_f
-
-    @property
-    def n_g(self) -> List[int]:
-        """Grid cell dimensions per frequency."""
-        return self._n_g
-
-    def forward(self, g_gen: Transition, p_x: Optional[GroundedLocation]) -> AbstractLocation:
+    def forward(self, g_gen: Transition, x: Optional[GroundedLocation], feedback: float = 0.0) -> AbstractLocation:
         """Infer spatial location from path integration + memory.
 
         Args:
             g_gen: Path integration prediction (always available)
-            p_x: Memory retrieval from sensory (inference mode only)
+            x: Retrieved place cell pattern (None = generative mode)
 
         Returns:
             Fused grid cell location [n_f] of [B, n_g[f]]
@@ -128,38 +101,29 @@ class AbstractLocModel(nn.Module):
         estimates = [g_gen]
 
         # Add memory correction if available
-        if p_x is not None:
-            g_mem = self.memory_estimate(p_x)
+        if x is not None:
+            g_mem = self.memory_estimate(x, error=feedback)
             estimates.append(g_mem)
 
         # Fuse with precision weighting
         fused = utils.fuse_transitions(estimates)
         return utils.sample_transition(fused) if self._config.do_sample else fused.mean
 
-    def memory_estimate(self, p_x: GroundedLocation) -> Transition:
+    def memory_estimate(self, x: MultiScaleCode, error: float) -> Transition:
         """Compute grid location from memory retrieval.
 
         Args:
-            p_x: Hippocampal pattern from sensory retrieval
+            x: Retrieved place cell pattern
+            error: Reconstruction error feedback
 
         Returns:
             Memory-derived grid cell estimate with uncertainty
         """
-        # Prepare MLP input based on mode
-        if self._config.use_inverse_projection:
-            # LEGACY MODE: Apply inverse projection first
-            # g_downsampled[f] = p_x[f] @ W_repeat[f]^T
-            mlp_input = [torch.matmul(p_x[f], self._W_repeat[f].t()) for f in range(self._n_f)]
-        else:
-            # MODERN MODE: Direct concatenation
-            p_x_concat = torch.cat(p_x, dim=-1)
-            mlp_input = [p_x_concat] * self._n_f
-
-        # Predict mean: g_downsampled → g (legacy) or p_x → g (modern)
-        mu_g_mem = self.mlp_mu_g_mem(mlp_input)
+        # Predict mean: p_x → x^ → mu_g_mem
+        mu_g_mem = self.mlp_mu_g_mem(x)
 
         # Predict uncertainty from retrieval quality
-        quality_indicators = self.retrieval_quality(p_x)
+        quality_indicators = self.retrieval_quality(mu_g_mem, error)
         sigma_g_mem_base = self.mlp_sigma_g_mem(quality_indicators)
 
         # Apply scheduling offset (curriculum learning)
@@ -168,17 +132,17 @@ class AbstractLocModel(nn.Module):
 
         return Transition(mean=mu_g_mem, uncertainty=sigma_g_mem)
 
-    def retrieval_quality(self, p_x: GroundedLocation) -> List[Tensor]:
+    def retrieval_quality(self, x: GroundedLocation) -> List[Tensor]:
         """Compute quality indicators for memory retrieval.
 
         Args:
-            p_x: Retrieved place cell pattern
+            x: Retrieved place cell pattern
 
         Returns:
             Quality indicators [n_f] of [B, 2] (norm, reconstruction_error)
         """
-        quality_fn = lambda f: [p_x[f].norm(dim=-1), torch.zeros_like(p_x[f][:, 0])]
-        return [torch.stack(quality_fn(f), dim=-1) for f in range(self.n_f)]
+        quality_fn = lambda f: [x[f].norm(dim=-1), torch.zeros_like(x[f][:, 0])]
+        return [torch.stack(quality_fn(f), dim=-1) for f, _ in enumerate(x)]
 
 
 # ======================================================================================

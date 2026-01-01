@@ -27,11 +27,11 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import figures, utils
-from torch_tem.core.hpc import HPCConfig, HPCContext, HPCModel
-from torch_tem.core.lec import LECConfig, LECContext, LECModel
-from torch_tem.core.mec import MECConfig, MECContext, MECModel, MECState
+from torch_tem.core.hpc import HPCConfig, HPCModel, HPCState
+from torch_tem.core.lec import LECConfig, LECModel
+from torch_tem.core.mec import MECConfig, MECModel
+from torch_tem.core.model import StandardTEMContext
 from torch_tem.data.environment import Environment, EnvironmentConfig
-from torch_tem.data.policies import RandomPolicyConfig
 from torch_tem.data.walks import WalkGenerator
 
 
@@ -61,7 +61,7 @@ class ExampleConfig(BaseSettings):
 
 
 # Model architecture; not configurable via CLI
-GRID_SIZE = 5
+GRID_SIZE = 4  # 4x4 grid = 16 observations
 OBSERVATION_MODE = "unique"
 WALK_LENGTH_TRAIN = 50  # Training walk for memory
 WALK_LENGTH_GEN = 100  # Generation walk
@@ -70,18 +70,26 @@ DEVICE = torch.device("cpu")
 
 N_G_SUBSAMPLED = [12, 10, 8]
 N_F = len(N_G_SUBSAMPLED)
-N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]
-N_P = [2 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]
-N_O_C = 8
+N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # [36, 30, 24]
+N_P = [24, 40, 16]  # Divisible by both n_g_subsampled and n_o_c
+N_O_C = 8  # C(8,2)=28 > 16 observations
 F_INITIAL = [0.9, 0.6, 0.3]
 I_ATTRACTOR = 3
+MAX_FREQ_INF = [2, 3, 3]
 MAX_FREQ_GEN = [3, 3, 3]
 
-W_down = utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED)
-W_repeat = utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P)
-W_tile = utils.create_tiling_matrices([N_O_C] * N_F, N_P)
-p_update_mask = utils.create_p_update_mask(N_P, N_F, N_F, 0, F_INITIAL)
-mask_gen = utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_GEN)
+
+env_config = EnvironmentConfig(width=GRID_SIZE, height=GRID_SIZE, observation_mode=OBSERVATION_MODE)
+context = StandardTEMContext(
+    environment=Environment(env_config),
+    f_initial=F_INITIAL,
+    W_tile=utils.create_tiling_matrices([N_O_C] * N_F, N_P),
+    W_down=utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED),
+    W_repeat=utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P),
+    mask_inference=utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_INF),
+    mask_generative=utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_GEN),
+    update_mask=utils.create_p_update_mask(N_P, N_F, F_INITIAL),
+)
 
 
 # ==============================================================================
@@ -105,22 +113,20 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 1: Generating training walk for memory...")
 
-    env_config = EnvironmentConfig(width=GRID_SIZE, height=GRID_SIZE, observation_mode=OBSERVATION_MODE)
-    env = Environment(env_config)
-    walk_gen = WalkGenerator(env=env, policy_config=RandomPolicyConfig())
+    walk_gen = WalkGenerator(environment=context.environment, repeat_bias=2.0)
 
     # Training walk
-    train_data = walk_gen.generate_walk(length=WALK_LENGTH_TRAIN)
+    train_data = walk_gen.generate_walk(walk_length=WALK_LENGTH_TRAIN)
     train_obs = train_data.observations.unsqueeze(1).to(DEVICE)
     train_actions = train_data.actions.unsqueeze(1).to(DEVICE)
     train_locs = train_data.locations.unsqueeze(1).to(DEVICE)
 
     # Generation walk (actions only)
-    gen_data = walk_gen.generate_walk(length=WALK_LENGTH_GEN)
+    gen_data = walk_gen.generate_walk(walk_length=WALK_LENGTH_GEN)
     gen_actions = gen_data.actions.unsqueeze(1).to(DEVICE)
     gen_locs = gen_data.locations.unsqueeze(1).to(DEVICE)
 
-    print(f"  ✓ Environment: {env.n_locations} locations, {env.n_observations} observations")
+    print(f"  ✓ Environment: {context.environment.n_locations} locations, {context.environment.n_observations} observations")
     print(f"  ✓ Training walk: {WALK_LENGTH_TRAIN} timesteps")
     print(f"  ✓ Generation walk: {WALK_LENGTH_GEN} actions")
     print()
@@ -131,18 +137,15 @@ if __name__ == "__main__":
     print("Phase 2: Initializing components...")
 
     # LEC model
-    lec_context = LECContext(n_o=env.n_observations, f_initial=F_INITIAL, W_tile=W_tile)
-    lec_model = LECModel(lec_context, config.lec)
+    lec_model = LECModel(context, config.lec)
     print(f"  ✓ LEC: Encoder, Processor, Projection, Decoder")
 
     # MEC model
-    mec_context = MECContext(W_down=W_down, W_repeat=W_repeat, n_f_grid=N_F, f_initial=F_INITIAL, n_actions=env.n_actions)
-    mec_model = MECModel(mec_context, config.mec)
+    mec_model = MECModel(context, config.mec)
     print(f"  ✓ MEC: TransitionModel, Projection, AbstractLocModel")
 
     # HPC model
-    hpc_context = HPCContext(mask_inference=mask_gen, mask_generative=mask_gen, update_mask=p_update_mask)
-    hpc_model = HPCModel(hpc_context, config.hpc)
+    hpc_model = HPCModel(context, config.hpc)
     print(f"  ✓ HPC: MemoryStorage, AttractorDynamics, GroundedLocInference")
     print()
 
@@ -157,23 +160,24 @@ if __name__ == "__main__":
 
     # Run inference on training walk to build memory
     for t in range(WALK_LENGTH_TRAIN):
-        o_c = lec_model.encoder(train_obs[t])
-        lec_state = lec_model.processor(o_c, lec_state)
-        x = lec_state.x_prev
-        x_proj = lec_model.projection(x)
+        # LEC: Process sensory input
+        lec_state = lec_model(train_obs[t], lec_state)
+        x_ = lec_state.projection
 
-        p_x = hpc_model.attractor(x_proj, hpc_state.memory[0])
+        # HPC: Retrieve from sensory
+        p_x = hpc_model.retrieve(x_, for_inference=True, state=hpc_state)
 
+        # MEC: Infer abstract location
         a_t = train_actions[t] if t > 0 else None
-        transition_out = mec_model.transition(mec_state.g, a_t, mec_state.sigma_g)
-        g = mec_model.abstract(transition_out, p_x)
-        g_proj = mec_model.projection(g)
+        mec_state = mec_model(p_x, None, a_t, mec_state)
+        g_ = mec_state.projection
 
-        p_out = hpc_model.grounded(g_proj, x_proj)
-        p = p_out.location
+        # HPC: Grounded inference
+        p = hpc_model.grounded(g_, x_)
 
-        hpc_state = hpc_model.storage(p, p, hpc_state)
-        mec_state = MECState(g=g, sigma_g=transition_out.sigma_g)
+        # HPC: Update memory
+        updated_memory = hpc_model.update(p, p, hpc_state)
+        hpc_state = HPCState(grounded_location=p, memory=updated_memory)
 
     M_gen = hpc_state.memory[0].clone()  # Save learned memory
     print(f"  ✓ Memory learned from {WALK_LENGTH_TRAIN} timesteps")
@@ -194,24 +198,20 @@ if __name__ == "__main__":
     for t in range(WALK_LENGTH_GEN):
         # MEC: g_{t-1}, a_t → g_t (path integration)
         a_t = gen_actions[t] if t > 0 else None
-        state_mec: MECState = mec_model(None, locations, a_t, mec_state)
+        mec_state = mec_model(None, None, a_t, mec_state)
+        g = mec_state.abstract_location
+        g_ = mec_state.projection
 
-        # MEC: g → g_ (projection)
-        g_ = mec_model.projection
-
-        # HPC: g_ → p_g (memory retrieval)
-        p_g = hpc_model.retrieve(g_, for_inference=False, state=hpc_state)
+        # HPC: g_ → p_g (memory retrieval using saved memory)
+        p_g = hpc_model.attractor(g_, M_gen)
 
         # LEC: p_g → x_hat (decode sensory prediction)
         x_pred = lec_model.decoder(p_g)
 
-        # Update state
-        mec_state = MECState(g=
-
         # Store
         g_history.append([g_f.detach().cpu() for g_f in g])
         p_history.append([p_f.detach().cpu() for p_f in p_g])
-        x_pred_history.append([x_f.detach().cpu() for x_f in x_pred])
+        x_pred_history.append([x_f.detach().cpu() for x_f in x_pred.values])
 
         if (t + 1) % 20 == 0:
             print(f"  Processed {t + 1}/{WALK_LENGTH_GEN}")
@@ -224,23 +224,28 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 5: Generating visualizations...")
 
-    fig1 = figures.data.plot_environment(env)
+    # Environment layout
+    fig1 = figures.data.plot_environment_layout(context.environment)
     if config.save_plots:
         fig1.savefig(config.output_dir / "01_environment.png", dpi=150, bbox_inches="tight")
 
-    fig2 = figures.data.plot_walk(env, gen_locs.squeeze().cpu().numpy())
+    # Training walk trajectory
+    fig2 = figures.data.plot_walks(context.environment, [train_data])
     if config.save_plots:
-        fig2.savefig(config.output_dir / "02_walk_trajectory.png", dpi=150, bbox_inches="tight")
+        fig2.savefig(config.output_dir / "02_training_walk.png", dpi=150, bbox_inches="tight")
 
-    fig3 = figures.patterns.plot_abstract_location(g_history, F_INITIAL)
+    # Memory structure after training
+    fig3 = figures.memory.plot_memory_matrices(M_gen=M_gen.squeeze(0), n_p_per_freq=N_P, n_training_steps=WALK_LENGTH_TRAIN, title="Learned Memory Structure (Generative)")
     if config.save_plots:
-        fig3.savefig(config.output_dir / "03_grid_evolution.png", dpi=150, bbox_inches="tight")
+        fig3.savefig(config.output_dir / "03_memory_structure.png", dpi=150, bbox_inches="tight")
 
-    fig4 = figures.sensory.plot_sensory_predictions(x_pred_history, F_INITIAL)
+    # Sensory predictions over time (probabilities across observations)
+    x_pred_tensor = torch.stack([x_pred_history[t][0] for t in range(WALK_LENGTH_GEN)])  # [T, B, n_o]
+    fig4 = figures.patterns.plot_temporal_patterns(x_pred_tensor, title="Sensory Predictions Over Time", n_cells_display=min(50, x_pred_tensor.shape[-1]))
     if config.save_plots:
         fig4.savefig(config.output_dir / "04_sensory_predictions.png", dpi=150, bbox_inches="tight")
 
-    fig5 = figures.memory.plot_memory_matrix(M_gen.squeeze().cpu().numpy())
+    fig5 = figures.memory.plot_memory_matrices(M_gen=M_gen.squeeze(0), n_p_per_freq=N_P, n_training_steps=WALK_LENGTH_TRAIN, title="Learned Memory Structure (Final)")
     if config.save_plots:
         fig5.savefig(config.output_dir / "05_memory_structure.png", dpi=150, bbox_inches="tight")
 

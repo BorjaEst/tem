@@ -54,15 +54,14 @@ When save_plots=true, generates 5 visualizations in outputs/simulation/:
 """
 
 from pathlib import Path
-from typing import List, Literal
 
 import matplotlib.pyplot as plt
 import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import figures
-from torch_tem.core.model import Simulation, TEMConfig, TEMModel
+from torch_tem import figures, utils
+from torch_tem.core.model import Simulation, TEMConfig, TEMModel, StandardTEMContext
 from torch_tem.data.environment import Environment, EnvironmentConfig
 from torch_tem.data.policies import PolicyConfig, PolicyGenerator, RandomPolicyConfig
 from torch_tem.data.walks import WalkGenerator
@@ -83,6 +82,7 @@ class ExampleConfig(BaseSettings):
     # Environment configuration
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig, description="Environment configuration parameters")
     policy: PolicyConfig = Field(default_factory=RandomPolicyConfig, description="Policy configuration for walk generation")
+    walk_length: int = Field(default=50, ge=1, description="Number of timesteps in the generated walk")
 
     # TEM model architecture
     tem: TEMConfig = Field(default_factory=TEMConfig, description="TEM model configuration parameters")
@@ -98,6 +98,21 @@ class ExampleConfig(BaseSettings):
         """Create output directory if it doesn't exist."""
         v.mkdir(parents=True, exist_ok=True)
         return v
+
+
+# Model architecture; not configurable via CLI
+BATCH_SIZE = 1
+DEVICE = torch.device("cpu")
+
+N_G_SUBSAMPLED = [12, 10, 8]
+N_F = len(N_G_SUBSAMPLED)
+N_G = [3 * n_g_sub for n_g_sub in N_G_SUBSAMPLED]  # [36, 30, 24]
+N_P = [24, 40, 16]  # Divisible by both n_g_subsampled and n_o_c
+N_O_C = 8  # C(8,2)=28 > 16 observations
+F_INITIAL = [0.9, 0.6, 0.3]
+I_ATTRACTOR = 3
+MAX_FREQ_INF = [2, 3, 3]
+MAX_FREQ_GEN = [3, 3, 3]
 
 
 # ==============================================================================
@@ -122,14 +137,22 @@ def main():
     # =========================================================================
     print("Phase 1: Initializing environment and model...")
 
-    # Create environment configuration
+    # Create environment configuration and context
     env_config = EnvironmentConfig(config.environment)
-
-    # Create model configuration
     model_config = TEMConfig(config.tem)
 
     # Initialize TEM model
-    model = TEMModel(model_config)
+    context = StandardTEMContext(
+        environment=Environment(env_config),
+        f_initial=F_INITIAL,
+        W_tile=utils.create_tiling_matrices([N_O_C] * N_F, N_P),
+        W_down=utils.create_downsample_matrix(N_G, N_G_SUBSAMPLED),
+        W_repeat=utils.create_repeat_matrices(N_G_SUBSAMPLED, N_P),
+        mask_inference=utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_INF),
+        mask_generative=utils.create_p_retrieve_mask(N_P, I_ATTRACTOR, MAX_FREQ_GEN),
+        update_mask=utils.create_p_update_mask(N_P, N_F, F_INITIAL),
+    )   
+    model = TEMModel(context, model_config).to(DEVICE)
     print(f"  ✓ Model initialized:")
     print(f"    - Frequencies: {model_config.f_initial}")
     print(f"    - Grid cells: {model_config.n_g} (before downsampling)")
@@ -142,6 +165,7 @@ def main():
 
     # Create environment and walk generator
     env = Environment(env_config)
+    policy ...
     walk_gen = WalkGenerator(env)
     walk = walk_gen.generate_walks(n_walks=1, walk_length=config.walk_length)[0]
 

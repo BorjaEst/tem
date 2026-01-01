@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
 from torch_tem import utils
-from torch_tem.core.mlp import MLP
+from torch_tem.modules.mlp import MLP
 from torch_tem.types import Matrix, MultiScaleCode, SensoryPrediction
 
 __all__ = ["DecoderConfig", "Decoder"]

@@ -30,7 +30,7 @@ from scipy.stats import truncnorm
 from torch import Tensor
 
 from torch_tem import utils
-from torch_tem.core.mlp import MLP
+from torch_tem.modules.mlp import MLP
 from torch_tem.types import AbstractLocation, Transition
 
 __all__ = ["TransitionConfig", "TransitionModel"]

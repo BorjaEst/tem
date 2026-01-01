@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
 from torch_tem import utils
-from torch_tem.core.mlp import MLP
+from torch_tem.modules.mlp import MLP
 from torch_tem.types import AbstractLocation, GroundedLocation, MultiScaleCode, Transition
 
 __all__ = ["AbstractLocConfig", "AbstractLocModel"]

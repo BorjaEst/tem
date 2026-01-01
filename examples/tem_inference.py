@@ -69,7 +69,8 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures, hpc, lec, mec, utils
-from torch_tem.data.environment import Environment, EnvironmentConfig
+from torch_tem.config import EnvironmentConfig, ModelConfig
+from torch_tem.data.environment import Environment
 
 
 # ==============================================================================
@@ -142,8 +143,8 @@ if __name__ == "__main__":
     p_update_mask = utils.create_p_update_mask(model_config.n_p, model_config.n_f, model_config.n_f, 0, model_config.f_extended)
     mask_inf = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_inf)
     mask_gen = utils.create_p_retrieve_mask(model_config.n_p, model_config.i_attractor, model_config.max_freq_gen)
-    W_repeat = utils.create_repeat_matrices(model_config.n_g_subsampled_combined, model_config.n_x)
-    W_tile = utils.create_tiling_matrices(model_config.n_g_subsampled_combined, model_config.n_o_c)
+    W_repeat = utils.create_repeat_matrices(model_config.n_g_subsampled_combined, model_config.n_p)
+    W_tile = utils.create_tiling_matrices([model_config.n_o_c] * len(model_config.n_p), model_config.n_p)
 
     print("=" * 80)
     print("Complete TEM Inference Pipeline")

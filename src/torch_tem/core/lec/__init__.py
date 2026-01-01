@@ -144,25 +144,25 @@ class LECModel(nn.Module):
         Returns:
             Initial LECState with zero-initialized compressed, filtered, and projected observations
         """
-        x_c = [torch.zeros((batch_size, self.encoder.n_o_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
+        o_c = [torch.zeros((batch_size, self.encoder.n_o_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
         x = [torch.zeros((batch_size, self.encoder.n_o_c), dtype=torch.float, device=device) for _ in range(self.processor.n_f)]
         x_ = [torch.zeros((batch_size, self.projection.n_p[f]), dtype=torch.float, device=device) for f in range(self.processor.n_f)]
-        return LECState(compressed_observation=x_c, filtered_observation=x, projection=x_)
+        return LECState(compressed_observation=o_c, filtered_observation=x, projection=x_)
 
-    def forward(self, x: Observation, state: LECState) -> LECState:
+    def forward(self, o: Observation, state: LECState) -> LECState:
         """Forward pass through LEC pathway.
 
         Args:
-            x: Sensory observation (one-hot encoded).
+            o: Sensory observation (one-hot encoded).
             state: Previous LEC state.
 
         Returns:
             Updated LEC state with new sensory representations.
         """
-        x_c = self.encoder(x)  # Compress sensory observation: x → x_c (one-hot to two-hot)
-        x = self.processor(x_c, state.filtered_observation)  # Temporally filter sensorium: x_c → x
+        o_c = self.encoder(o)  # Compress sensory observation: x → o_c (one-hot to two-hot)
+        x = self.processor(o_c, state.filtered_observation)  # Temporally filter sensorium: o_c → x
         x_ = self.projection(x)  # Project to hippocampal input: x → x_
-        return LECState(compressed_observation=x_c, filtered_observation=x, projection=x_)
+        return LECState(compressed_observation=o_c, filtered_observation=x, projection=x_)
 
     def decode(self, p: MultiScaleCode) -> SensoryPrediction:
         """Decode hippocampal place cells to sensory predictions.

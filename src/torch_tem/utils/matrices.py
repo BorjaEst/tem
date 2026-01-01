@@ -103,7 +103,7 @@ def create_tiling_matrices(n_in: List[int], n_out: List[int]) -> List[Matrix]:
         List of tile matrices, one per frequency module.
     """
     # Matrix shape: [n_in, n_out] where each input is tiled
-    # For input x_c: [B, n_in], result is x_c @ W_tile = [B, n_out]
+    # For input o_c: [B, n_in], result is o_c @ W_tile = [B, n_out]
     # Uses Kronecker product: ones(1, n_tiles) ⊗ eye(n_in)
     # where n_tiles = n_out / n_in
 

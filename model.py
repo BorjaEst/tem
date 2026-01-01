@@ -70,9 +70,9 @@ class Model(torch.nn.Module):
 
     def inference(self, x, locations, M_prev, x_prev, g_gen):
         # Compress sensory observation from one-hot to two-hot (or alternatively, whatever an MLP makes of it)
-        x_c = self.f_c(x)
+        o_c = self.f_c(x)
         # Temporally filter sensory observation by mixing it with previous experience
-        x = self.x_prev2x(x_prev, x_c)
+        x = self.x_prev2x(x_prev, o_c)
         # Prepare sensory experience for input to memory by normalisation and weighting
         x_ = self.x2x_(x)
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
@@ -352,11 +352,11 @@ class Model(torch.nn.Module):
         # Return new memory constructed from sensory experience and inferred abstract location
         return p
 
-    def x_prev2x(self, x_prev, x_c):
+    def x_prev2x(self, x_prev, o_c):
         # Calculate factor for filtering from sigmoid of learned parameter
         alpha = [torch.nn.Sigmoid()(self.alpha[f]) for f in range(self.hyper["n_f"])]
         # Do exponential temporal filtering for each frequency modulemod
-        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * x_c for f in range(self.hyper["n_f"])]
+        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * o_c for f in range(self.hyper["n_f"])]
         return x
 
     def x2x_(self, x):

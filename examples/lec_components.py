@@ -8,7 +8,7 @@ This example demonstrates the Lateral Entorhinal Cortex (LEC) components:
 - Decoder: Generating sensory predictions from grounded locations (place cells)
 
 The LEC pipeline:
-  Inference: x → Encoder → x_c → Processor → x → Projection → x̃
+  Inference: x → Encoder → o_c → Processor → x → Projection → x̃
   Generative: p → Decoder → x̂
 
 Note: This example uses a real environment with a random walk. For MEC spatial
@@ -124,7 +124,7 @@ F_INITIAL = [0.95, 0.7, 0.4, 0.2, 0.1]  # Initial frequency values
 DEVICE = torch.device("cpu")  # Change to "cuda" if GPU is available
 
 # Create context for LEC components
-W_tile = utils.create_tiling_matrices(N_P, N_X_C)
+W_tile = utils.create_tiling_matrices([N_X_C] * len(N_P), N_P)
 
 # ==============================================================================
 # Main Experiment
@@ -177,11 +177,11 @@ if __name__ == "__main__":
     print("Phase 2: Initializing LEC components...")
 
     # LEC Encoder: Compresses observations using two-hot encoding
-    # x [B, n_o] → x_c [B, n_o_c]
+    # x [B, n_o] → o_c [B, n_o_c]
     encoder = lec.Encoder(N_X, N_X_C, config.encoder)
 
     # LEC Processor: Multi-frequency temporal filtering
-    # x_c → x (List[n_f] of [B, n_o_c])
+    # o_c → x (List[n_f] of [B, n_o_c])
     processor = lec.Processor(F_INITIAL, config.processor)
 
     # LEC Projection: Tiles sensory to hippocampal space
@@ -217,10 +217,10 @@ if __name__ == "__main__":
         # === INFERENCE PATHWAY ===
         # Step 1: Encode observation → compressed sensory
         x_t = observations[t].unsqueeze(0)  # Add batch dimension: [n_o] → [1, n_o]
-        x_c = encoder(x_t)  # [1, n_o_c]
+        o_c = encoder(x_t)  # [1, n_o_c]
 
         # Step 2: Apply temporal filtering across frequencies
-        x = processor(x_c, x_f_prev)  # List[n_f] of [1, n_o_c]
+        x = processor(o_c, x_f_prev)  # List[n_f] of [1, n_o_c]
 
         # Step 3: Project to hippocampal p-space
         x_ = projection(x)  # List[n_f] of [1, n_p[f]]
@@ -229,7 +229,7 @@ if __name__ == "__main__":
         x_f_prev = x
 
         # Store for visualization
-        x_c_history.append(x_c[0])  # [1, n_o_c] → [n_o_c]
+        x_c_history.append(o_c[0])  # [1, n_o_c] → [n_o_c]
         x_f_history.append([x[0] for x in x])  # All frequencies, remove batch dim
         x__history.append([x[0] for x in x_])  # All frequencies, remove batch dim
 
@@ -351,7 +351,7 @@ if __name__ == "__main__":
     print("\nINFERENCE PATHWAY (Sensory → Hippocampus):")
     print(f"  Input:  {N_X}-dim observations")
     print(f"    ↓ LEC Encoder (two-hot compression)")
-    print(f"  Stage 1: {N_X_C}-dim compressed sensory (x_c)")
+    print(f"  Stage 1: {N_X_C}-dim compressed sensory (o_c)")
     print(f"    ↓ LEC Processor ({len(F_INITIAL)} frequencies: {F_INITIAL})")
     print(f"  Stage 2: Multi-frequency filtered sensory (x) - List[{len(F_INITIAL)}] of [batch, {N_X_C}]")
     print(f"    ↓ LEC Projection (tiling + weighting)")

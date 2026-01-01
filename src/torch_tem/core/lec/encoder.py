@@ -80,7 +80,7 @@ class Encoder(nn.Module):
 
     @property
     def n_o_c(self) -> int:
-        """Number of compressed sensory neurons x_c."""
+        """Number of compressed sensory neurons o_c."""
         return self.encoding_table.size(1)
 
     def forward(self, x: Observation) -> Tensor:

@@ -12,7 +12,7 @@ graph TB
     
     %% Core Components
     subgraph Core["Core Components (torch_tem.core)"]
-        Encoder["Encoder<br/>x → x_c<br/>(one-hot → two-hot)"]
+        Encoder["Encoder<br/>x → o_c<br/>(one-hot → two-hot)"]
         Decoder["Decoder<br/>p → x<br/>(place → observation)"]
         Projection["Projection<br/>g transformations<br/>(downsample, normalize, clamp)"]
         Tiling["SensoryProjection<br/>x → x_<br/>(tile + weight)"]
@@ -42,7 +42,7 @@ graph TB
     TEMModel -->|uses| Memory
     
     %% Component Dependencies
-    Encoder -.->|x_c| Sensory
+    Encoder -.->|o_c| Sensory
     Sensory -.->|x| Tiling
     Tiling -.->|x_| Grounded
     Tiling -.->|x_| Attractor

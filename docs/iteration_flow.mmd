@@ -19,8 +19,8 @@ sequenceDiagram
         
         Note over TEMModel,Mem: Inference Phase
         TEMModel->>Inf: inference x locations M_prev x_prev g_gen
-        Inf->>Inf: encode x to x_c
-        Inf->>Inf: filter x_c x_prev to x
+        Inf->>Inf: encode x to o_c
+        Inf->>Inf: filter o_c x_prev to x
         Inf->>Inf: tile x to x_
         Inf->>Mem: retrieve p_x from M_inf using x_
         Mem-->>Inf: p_x

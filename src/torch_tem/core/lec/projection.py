@@ -207,5 +207,5 @@ if __name__ == "__main__":
         print(f"    Dimension: {n_o_c} → {n_p[f]} (expansion={n_p[f]/n_o_c:.1f}x)")
 
     print("\n" + "=" * 80)
-    print("TEM Pipeline: x → x_c (Encoder) → x (Processor) → x̃ (Projection) → p (HPC)")
+    print("TEM Pipeline: x → o_c (Encoder) → x (Processor) → x̃ (Projection) → p (HPC)")
     print("=" * 80)

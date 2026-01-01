@@ -16,14 +16,17 @@ from typing import Dict, List, Optional, Protocol, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 from torch import nn
 
-from torch_tem.core.hpc import HPCConfig, HPCContext, HPCModel, HPCState
-from torch_tem.core.lec import LECConfig, LECContext, LECModel, LECState
-from torch_tem.core.mec import MECConfig, MECContext, MECModel, MECState
+from torch_tem.core.hpc import HPCConfig, HPCModel, HPCState
+from torch_tem.core.lec import LECConfig, LECModel, LECState
+from torch_tem.core.mec import MECConfig, MECModel, MECState
 from torch_tem.data.environment import Environment
 
 from torch_tem.types import AbstractLocation, GroundedLocation, LocationInference  # isort: skip
 from torch_tem.types import Observation, SensoryPrediction, MultiScaleCode  # isort: skip
 from torch_tem.types import Matrix, BatchedMemory  # isort: skip
+
+
+__all__ = ["TEMConfig", "TEMContext", "StandardTEMContext", "TEMState", "TEMModel", "Simulation"]
 
 
 class TEMConfig(BaseModel):
@@ -249,14 +252,14 @@ class TEMModel(nn.Module):
         # Store pathways for teacher forcing in loss computation
         return TEMState(hpc=state_hpc, lec=state_lec, mec=state_mec, pathways=(p_x, p_g))
 
-    def inference(self, x: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> LocationInference:
+    def inference(self, o: Observation, locations: List[Dict], a: Optional[int], state: TEMState) -> LocationInference:
         """Infer current location from sensory observation.
 
         Performs inference by combining sensory input with path integration to
         determine the current abstract and grounded locations.
 
         Args:
-            x: Sensory observation.
+            o: Sensory observation.
             locations: Environment descriptors for landmark cues.
             a: Action taken (None for initial state).
             state: Previous TEM state.
@@ -265,7 +268,7 @@ class TEMModel(nn.Module):
             LocationInference with abstract location (g) and grounded location (p).
         """
         # LEC Pathway: Process sensory input to prepare for memory retrieval
-        state_lec: LECState = self.lec(x, state.lec)  # Process sensory input through LEC
+        state_lec: LECState = self.lec(o, state.lec)  # Process sensory input through LEC
         x_ = state_lec.projection  # Projected sensory code for HPC retrieval
         p_x = self.hpc.retrieve(x_, for_inference=True, state=state.hpc)
 

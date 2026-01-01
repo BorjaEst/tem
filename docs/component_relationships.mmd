@@ -28,13 +28,13 @@ classDiagram
     
     class Encoder {
         +Tensor two_hot_table
-        +forward(x) x_c
+        +forward(x) o_c
     }
     
     class Processor {
         +Parameter w_n
         +Parameter b_n
-        +filter(x_c, x_prev) x
+        +filter(o_c, x_prev) x
         +normalize(x) x_normalized
     }
     
@@ -99,7 +99,7 @@ classDiagram
     TEMModel --> Projection : uses
     TEMModel --> Decoder : uses
     
-    Encoder ..> Processor : x_c
+    Encoder ..> Processor : o_c
     Processor ..> GroundedLocInference : x
     TransitionModel ..> AbstractLocInference : g_gen σ_gen
     AttractorDynamics ..> AbstractLocInference : p_x

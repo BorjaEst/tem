@@ -8,8 +8,8 @@ graph LR
     X_prev["x_prev<br/>(previous<br/>filtered sensory)"]
     
     %% Processing Steps
-    X -->|"f_c"| X_c["x_c<br/>(compressed<br/>sensory)"]
-    X_c -->|"x_prev2x<br/>(temporal filter)"| X_f["x<br/>(filtered<br/>sensory)"]
+    X -->|"f_c"| O_c["o_c<br/>(compressed<br/>sensory)"]
+    O_c -->|"x_prev2x<br/>(temporal filter)"| X_f["x<br/>(filtered<br/>sensory)"]
     X_prev -.->|"mix with"| X_f
     
     X_f -->|"x2x_<br/>(tile + normalize)"| X_["x_<br/>(tiled sensory<br/>per frequency)"]

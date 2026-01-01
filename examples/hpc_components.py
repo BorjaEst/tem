@@ -59,7 +59,6 @@ When save_plots=true, generates 7 visualizations in outputs/hpc_components/:
 """
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 import numpy as np

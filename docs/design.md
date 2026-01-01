@@ -127,7 +127,7 @@ p_list = torch.split(p_flat, n_p, dim=1)
 ```
 Observation (x: [B, n_o])
   ↓ encoder
-Compressed (x_c: [B, n_o_c])
+Compressed (o_c: [B, n_o_c])
   ↓ processor.filter
 Filtered (x: List[[B, n_x[f]]])  ← PER-FREQUENCY
   ↓ sensory_projection.tile
@@ -417,7 +417,7 @@ class MemoryStorage(nn.Module):
 |                | `a`          | `List[int]` length B      | List     | Discrete actions per walk          |
 |                | `locations`  | `List[Dict]` length B     | List     | Environment metadata               |
 | **Encoding**   |              |                           |          |                                    |
-|                | `x_c`        | `[B, n_o_c]`              | Single   | Two-hot compressed                 |
+|                | `o_c`        | `[B, n_o_c]`              | Single   | Two-hot compressed                 |
 | **Filtering**  |              |                           |          |                                    |
 |                | `x`          | `List[[B, n_x[f]]]`       | Per-freq | Temporally filtered sensory        |
 | **Tiling**     |              |                           |          |                                    |

@@ -6,9 +6,9 @@ the model to predict what sensory input should be experienced given an internal
 spatial representation.
 
 The decoder performs p→x decoding through:
-    1. Untiling: Project place cells to compressed sensory (p → x_c)
+    1. Untiling: Project place cells to compressed sensory (p → o_c)
     2. Scaling: Apply learned weights and biases (w_x, b_x)
-    3. Decoding: MLP expansion to full observation space (x_c → x̂)
+    3. Decoding: MLP expansion to full observation space (o_c → x̂)
 
 Typical usage example:
     >>> config = DecoderConfig(hidden_multiplier=20)
@@ -53,9 +53,9 @@ class Decoder(nn.Module):
     Implements the generative pathway: p → x̂
 
     The decoder performs:
-    1. Untiling: Project place cells to compressed sensory (p → x_c)
+    1. Untiling: Project place cells to compressed sensory (p → o_c)
     2. Scaling: Apply learned weights and biases (w_x, b_x)
-    3. Decoding: MLP expansion to full observation space (x_c → x̂)
+    3. Decoding: MLP expansion to full observation space (o_c → x̂)
 
     Args:
         n_o: Number of sensory observation neurons
@@ -93,14 +93,14 @@ class Decoder(nn.Module):
 
     @property
     def n_o_c(self) -> int:
-        """Number of compressed sensory neurons x_c."""
+        """Number of compressed sensory neurons o_c."""
         return self._W_tile[0].size(0)
 
     def untiling(self, p: MultiScaleCode) -> Tensor:
         """Untile grounded locations to compressed sensory space.
 
         Projects place cell activations back to compressed sensory representation
-        by inverting the tiling operation: x_c = p @ W_tile^T
+        by inverting the tiling operation: o_c = p @ W_tile^T
 
         Args:
             p: Grounded locations (place cells) List[n_f] of (batch, n_p[f]).
@@ -130,7 +130,7 @@ class Decoder(nn.Module):
     def forward(self, p: MultiScaleCode) -> SensoryPrediction:
         """Decode grounded locations to sensory predictions.
 
-        Complete generative pathway: p → x_c → x̂
+        Complete generative pathway: p → o_c → x̂
 
         Args:
             p: Grounded locations (place cells) List[n_f] of (batch, n_p[f]).

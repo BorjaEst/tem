@@ -23,7 +23,6 @@ Typical usage example:
     >>> state = mec.forward(p_x, locations, action, state)
 """
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from itertools import zip_longest
 from typing import Dict, List, Optional, Protocol, Tuple

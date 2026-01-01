@@ -9,7 +9,7 @@ Pipeline Stages (TEM Manuscript - Inference):
 ----------------------------------------------
 Following the exact inference steps from the TEM manuscript:
 
-1. Compress sensory observation: x_c = f_c(x)
+1. Compress sensory observation: o_c = f_c(x)
 2. Temporally filter sensorium: x = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
 3. Sensory input to hippocampus: ~x = W_tile·w_p·f_n(x)
 4. Retrieve memory: p_x = attractor(~x, M_{t-1})
@@ -22,7 +22,7 @@ Following the exact inference steps from the TEM manuscript:
 Data Flow (Manuscript Notation):
 --------------------------------
     x (observation)
-    → x_c (compressed sensory via f_c)
+    → o_c (compressed sensory via f_c)
     → x (temporally filtered per frequency)
     → ~x (sensory input to hippocampus via W_tile)
     → p_x (memory retrieval via attractor dynamics)
@@ -68,8 +68,8 @@ import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import core, data, figures, hpc, lec, mec, utils
-from torch_tem.config import EnvironmentConfig, ModelConfig
+from torch_tem import data, figures, hpc, lec, mec, utils
+from torch_tem.data.environment import Environment, EnvironmentConfig
 
 
 # ==============================================================================
@@ -228,7 +228,7 @@ if __name__ == "__main__":
     # =========================================================================
     print("Phase 4: Running complete inference pipeline...")
 
-    x_c_history = []  # x_c: compressed sensory observations
+    x_c_history = []  # o_c: compressed sensory observations
     x_f_history = []  # x: temporally filtered sensory
     x__history = []  # ~x: sensory input to hippocampus
     p_x_history = []  # p_x: retrieved hippocampal patterns from sensory
@@ -240,13 +240,13 @@ if __name__ == "__main__":
     x_prev = [torch.zeros(1, model_config.n_o_c) for _ in range(model_config.n_f)]
     g_prev = initial_transition.mean  # Extract mean from Transition
     for t in range(config.walk_length):
-        # Step 1 (Manuscript): Compress sensory observation x_c = f_c(x)
+        # Step 1 (Manuscript): Compress sensory observation o_c = f_c(x)
         x = observations[t].unsqueeze(0)  # [n_o] → [B, n_o]
-        x_c = encoder(x)  # [B, n_o_c]
-        x_c_history.append(x_c[0])
+        o_c = encoder(x)  # [B, n_o_c]
+        x_c_history.append(o_c[0])
 
         # Step 2 (Manuscript): Temporally filter sensorium x = (1 - α_f)·x_f_{t-1} + α_f·x_c_t
-        x = x_prev = processor(x_c, x_prev)  # List[n_f] of [B, n_o_c]
+        x = x_prev = processor(o_c, x_prev)  # List[n_f] of [B, n_o_c]
         x_f_history.append([x[0] for x in x])
 
         # Step 3 (Manuscript): Sensory input to hippocampus ~x = W_tile·w_p·f_n(x)
@@ -354,7 +354,7 @@ if __name__ == "__main__":
     print("=" * 80)
     print(f"Input:  x - {model_config.n_o}-dim observations ({config.observation_mode} mode)")
     print(f"  ↓ Step 1: f_c(x) - Compress sensory")
-    print(f"Stage 1: x_c - {model_config.n_o_c}-dim compressed sensory")
+    print(f"Stage 1: o_c - {model_config.n_o_c}-dim compressed sensory")
     print(f"  ↓ Step 2: (1-α_f)·x_f_{{t-1}} + α_f·x_c_t - Temporal filter")
     print(f"Stage 2: x - Multi-frequency filtered sensory ({model_config.n_f} frequencies)")
     print(f"  ↓ Step 3: W_tile·w_p·f_n(x) - Project to hippocampus")

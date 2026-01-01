@@ -132,7 +132,7 @@ def parameters():
     params["n_g"] = [3 * g for g in params["n_g_subsampled"]]
     # Neurons for sensory observation x
     params["n_o"] = 45
-    # Neurons for compressed sensory experience x_c
+    # Neurons for compressed sensory experience o_c
     params["n_o_c"] = 10
     # Neurons for temporally filtered sensory experience x for each frequency
     params["n_x"] = [params["n_o_c"] for _ in range(params["n_f"])]

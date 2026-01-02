@@ -66,7 +66,7 @@ def main():
 
     settings = RunSettings()
     seed_everything(settings.seed, workers=True)
-    params = settings.model_params.model_dump()
+    params = settings.model_params.model_dump(by_alias=True)
 
     # Use train_it from params if max_steps not explicitly set
     if settings.trainer.get("max_steps") == -1:

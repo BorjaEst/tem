@@ -52,7 +52,12 @@ class Parameters(BaseModel):
         return {"gamma": self.shiny_gamma, "beta": self.shiny_beta, "n": self.shiny_n, "returns": self.shiny_returns}
 
     # -- Training parameters
-    train_it: int = Field(default=20000, description="Number of walks to generate")
+    max_steps: int = Field(
+        default=20000, 
+        validation_alias=AliasChoices("train_it", "max_steps"), 
+        serialization_alias="train_it",
+        description="Number of walks to generate"
+    )
     n_rollout: int = Field(default=20, description="Number of steps to roll out before backpropagation through time")
     batch_size: int = Field(default=16, description="Batch size: number of walks for training simultaneously")
     walk_it_min: int = Field(default=25, description="Minimum length of a walk on one environment")
@@ -392,6 +397,24 @@ class Model(torch.nn.Module):
         # Create trainable parameters
         self.init_trainable()
 
+    def _apply(self, fn):
+        """Override _apply to move tensors in self.hyper when model is moved to GPU/CPU."""
+        super()._apply(fn)
+        self.hyper = self._apply_to_nested_tensors(self.hyper, fn)
+        return self
+
+    def _apply_to_nested_tensors(self, obj, fn):
+        """Recursively apply function to all tensors in nested dict/list/tuple structure."""
+        if torch.is_tensor(obj):
+            return fn(obj)
+        if isinstance(obj, dict):
+            return {k: self._apply_to_nested_tensors(v, fn) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._apply_to_nested_tensors(v, fn) for v in obj]
+        if isinstance(obj, tuple):
+            return tuple(self._apply_to_nested_tensors(v, fn) for v in obj)
+        return obj
+
     def forward(self, walk, prev_iter=None, prev_M=None):
         # The previous iteration may contain walks without action. These are new walks, for which some parameters need to be reset.
         steps = self.init_walks(prev_iter)
@@ -569,15 +592,15 @@ class Model(torch.nn.Module):
         # Initalise hebbian memory connectivity matrix [M_gen, M_inf] if it wasn't initialised yet
         if M is None:
             # Create new empty memory dict for generative network: zero connectivity matrix M_0, then empty list of the memory vectors a and b for each iteration for efficient hebbian memory computation
-            M = [torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float)]
+            M = [torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=x.device)]
             # Append inference memory only if memory is used in grounded location inference
             if self.hyper["use_p_inf"]:
                 # If inference and generative network share common memory: reuse same connectivity, and same memory vectors. Else, create a new empty memory list for inference network
-                M.append(M[0] if self.hyper["common_memory"] else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float))
+                M.append(M[0] if self.hyper["common_memory"] else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=x.device))
         # Initialise previous abstract location by stacking abstract location prior
         g_inf = [torch.stack([self.g_init[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
         # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
-        x_inf = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x_f"][f])) for f in range(self.hyper["n_f"])]
+        x_inf = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x_f"][f]), device=x.device) for f in range(self.hyper["n_f"])]
         # And construct new iteration for that g, x, a, and M
         return Iteration(g=g, x=x, a=a, M=M, x_inf=x_inf, g_inf=g_inf)
 
@@ -742,15 +765,17 @@ class Model(torch.nn.Module):
         a_prev_step = [a if a is not None else 0 for a in a_prev]
         # And also keep track of which walks these valid step actions are for
         a_do_step = [a != None for a in a_prev]
+        # Get device from g_prev
+        device = g_prev[0].device
         # Transform list of actions into batch of one-hot row vectors.
         if self.hyper["has_static_action"]:
             # If this world has static actions: whenever action 0 (standing still) appears, the action vector should be all zeros. All other actions should have a 1 in the label-1 entry
-            a = torch.zeros((len(a_prev_step), self.hyper["n_actions"])).scatter_(
-                1, torch.clamp(torch.tensor(a_prev_step).unsqueeze(1) - 1, min=0), 1.0 * (torch.tensor(a_prev_step).unsqueeze(1) > 0)
+            a = torch.zeros((len(a_prev_step), self.hyper["n_actions"]), device=device).scatter_(
+                1, torch.clamp(torch.tensor(a_prev_step, device=device).unsqueeze(1) - 1, min=0), 1.0 * (torch.tensor(a_prev_step, device=device).unsqueeze(1) > 0)
             )
         else:
             # Without static actions: each action label should become a one-hot vector for that label
-            a = torch.zeros((len(a_prev_step), self.hyper["n_actions"])).scatter_(1, torch.tensor(a_prev_step).unsqueeze(1), 1.0)
+            a = torch.zeros((len(a_prev_step), self.hyper["n_actions"]), device=device).scatter_(1, torch.tensor(a_prev_step, device=device).unsqueeze(1), 1.0)
         # Get vector of transition weights by feeding actions into MLP
         D_a = self.MLP_D_a([a for _ in range(self.hyper["n_f"])])
         # Replace transition weights by non-directional transition weights in environments where transition direction needs to be omitted (can set only if any no_direc)
@@ -905,9 +930,9 @@ class Iteration:
         self.p_inf = p_inf
 
     def correct(self):
-        # Detach observation and all predictions
-        observation = self.x.detach().numpy()
-        predictions = [tensor.detach().numpy() for tensor in self.x_gen]
+        # Detach observation and all predictions, moving to CPU first
+        observation = self.x.detach().cpu().numpy()
+        predictions = [tensor.detach().cpu().numpy() for tensor in self.x_gen]
         # Did the model predict the right observation in this iteration?
         accuracy = [np.argmax(prediction, axis=-1) == np.argmax(observation, axis=-1) for prediction in predictions]
         return accuracy

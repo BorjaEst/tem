@@ -155,11 +155,14 @@ class TEMLightningModule(pl.LightningModule):
         self.tem.hyper["hebbian_decay"] = hebbian_decay_new
         self.tem.hyper["p2g_scale_offset"] = p2g_scale_offset
 
+        # Move loss_weights to device
+        loss_weights = loss_weights.to(self.device)
+
         # Forward pass
         forward = self(chunk)
 
         # Compute loss
-        loss = torch.tensor(0.0)
+        loss = torch.tensor(0.0, device=self.device)
         plot_loss = 0
         for step in forward:
             step_loss = []
@@ -168,8 +171,8 @@ class TEMLightningModule(pl.LightningModule):
                     step_loss.append(loss_weights * torch.stack([l[env_i] for l in step.L]))
                 else:
                     env_visited[step.g[env_i]["id"]] = True
-            step_loss = torch.tensor(0) if not step_loss else torch.mean(torch.stack(step_loss, dim=0), dim=0)
-            plot_loss = plot_loss + step_loss.detach().numpy()
+            step_loss = torch.tensor(0, device=self.device) if not step_loss else torch.mean(torch.stack(step_loss, dim=0), dim=0)
+            plot_loss = plot_loss + step_loss.detach().cpu().numpy()
             loss = loss + torch.sum(step_loss)
 
         # Update prev_iter for next step
@@ -181,7 +184,7 @@ class TEMLightningModule(pl.LightningModule):
 
         # Log metrics
         self.log("loss", loss, prog_bar=True)
-        self.log("Losses/Total", loss.detach().numpy())
+        self.log("Losses/Total", loss.detach())
         for idx, name in enumerate(["p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p"]):
             self.log(f"Losses/{name}", plot_loss[idx])
         self.log("Accuracies/p", acc_p)

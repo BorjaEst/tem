@@ -123,8 +123,6 @@ class Parameters(BaseModel):
 
     # ---- Memory parameters
     common_memory: bool = Field(default=False, description="Use common memory for generative and inference network")
-    hebbian_decay: float = Field(default=0.9999, description="Hebbian decay factor for memory (rate of forgetting).")
-    eta: float = Field(default=0.5, description="Hebbian rate of remembering")
     kappa: float = Field(default=0.8, description="Hebbian retrieval decay term")
 
     @computed_field
@@ -265,29 +263,6 @@ class Parameters(BaseModel):
         ]
 
     model_config = {"populate_by_name": True, "arbitrary_types_allowed": True}
-
-
-# Backward compatibility: function that returns parameters as a dictionary
-def parameters():
-    """
-    Generate default parameters as a dictionary.
-
-    This function maintains backward compatibility with code that expects
-    a dictionary of parameters. It creates a Parameters instance and converts
-    it to a dictionary using model_dump().
-
-    Returns:
-        dict: Dictionary containing all model parameters.
-    """
-    params_model = Parameters()
-    params_dict = params_model.model_dump()
-
-    # Remove internal-only fields that shouldn't be in the output
-    params_dict.pop("n_g_subsampled_base", None)
-    params_dict.pop("n_ovc_base", None)
-    params_dict.pop("f_initial_base", None)
-
-    return params_dict
 
 
 # This specifies how parameters are updated at every backpropagation iteration/gradient update

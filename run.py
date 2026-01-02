@@ -22,8 +22,8 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import training
-from torch_tem.core.model import Parameters
-from torch_tem.settings import DataSettings, ScheduleSettings
+from torch_tem.core.model import Model, Parameters
+from torch_tem.settings import CheckpointSettings, DataSettings, LoggerSettings, ScheduleSettings, TrainerSettings
 
 
 class RunSettings(BaseSettings):
@@ -31,75 +31,51 @@ class RunSettings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="run")
 
-    # Model params
+    # Model, data and environment settings
     model_params: Parameters = Field(default_factory=Parameters, description="Model parameters (Pydantic TEM Parameters).")
-
-    # Data/environment settings
     data: DataSettings = Field(default_factory=DataSettings, description="Data generation and environment settings.")
-
-    # Training schedule settings
-    schedule: ScheduleSettings = Field(default_factory=ScheduleSettings, description="Training schedules (loss weights, LR, etc).")
-
-    # Runtime
     seed: int = Field(default=0, description="Random seed.")
 
-    # Lightning paths/logging
-    root_dir: Optional[Path] = Field(default=None, description="Root directory for Lightning outputs (default: ./lightning_logs).")
-    experiment: str = Field(default="tem", description="Experiment name for logger.")
-    version: Optional[str] = Field(default=None, description="Version/run identifier (auto-increments if None).")
+    # Trainer config
+    trainer: TrainerSettings = Field(default_factory=TrainerSettings, description="PyTorch Lightning Trainer kwargs.")
+    schedule: ScheduleSettings = Field(default_factory=ScheduleSettings, description="Training schedules (loss weights, LR, etc).")
+    logger: LoggerSettings = Field(default_factory=LoggerSettings, description="Logger settings for TensorBoard logger.")
 
-    # Lightning Trainer config (passed to Trainer())
-    trainer: dict[str, Any] = Field(
-        default_factory=lambda: {"max_steps": 20000, "log_every_n_steps": 10, "enable_progress_bar": True},
-        description="PyTorch Lightning Trainer kwargs.",
-    )
-
-    # Checkpoint config (passed to ModelCheckpoint callback)
-    checkpoint: dict[str, Any] = Field(
-        default_factory=lambda: {"every_n_train_steps": 1000, "save_last": True},
-        description="PyTorch Lightning ModelCheckpoint kwargs.",
-    )
-
-    # Resume
+    # Checkpoint and path settings
+    checkpoint: CheckpointSettings = Field(default_factory=CheckpointSettings, description="PyTorch Lightning ModelCheckpoint kwargs.")
+    root_dir: Path = Field(default=Path("./logs"), description="Root directory for Lightning outputs (default: ./lightning_logs).")
     ckpt_path: Optional[Path] = Field(default=None, description="Path to checkpoint file to resume from.")
 
 
-def main():
+if __name__ == "__main__":
     """Main training routine."""
 
     settings = RunSettings()
     seed_everything(settings.seed, workers=True)
 
-    # Merge all settings into single params dict for model/datamodule/training
-    params = {
-        **settings.model_params.model_dump(),
-        **settings.data.model_dump(),
-        **settings.schedule.model_dump(),
-        "max_steps": int(settings.trainer["max_steps"]),
-    }
+    # Create the TEM model
+    tem_model = Model(settings.model_params.model_dump())
 
-    # Setup Lightning components
-    logger = TensorBoardLogger(
-        save_dir=str(settings.root_dir) if settings.root_dir else "lightning_logs",
-        name=settings.experiment,
-        version=settings.version,
+    # Create DataModule (receives data + schedule for walk curriculum bounds)
+    datamodule = training.TEMDataModule(settings.data, settings.schedule)
+
+    # Create LightningModule (Option A: explicit dependencies, no data_settings)
+    lightning_module = training.TEMLightningModule(
+        tem_model=tem_model,
+        schedule_settings=settings.schedule,
+        trainer_settings=settings.trainer,
     )
 
     # Create Trainer
     trainer = Trainer(
-        logger=logger,
-        callbacks=[ModelCheckpoint(**settings.checkpoint)],
-        default_root_dir=str(settings.root_dir) if settings.root_dir else None,
-        **settings.trainer,
+        logger=TensorBoardLogger(**settings.logger.model_dump()),
+        callbacks=[ModelCheckpoint(**settings.checkpoint.model_dump())],
+        **settings.trainer.model_dump(),
     )
 
     # Train
     trainer.fit(
-        model=training.TEMLightningModule(params),
-        datamodule=training.TEMDataModule(settings.data.envs, params),
+        lightning_module,
+        datamodule=datamodule,
         ckpt_path=str(settings.ckpt_path) if settings.ckpt_path else None,
     )
-
-
-if __name__ == "__main__":
-    main()

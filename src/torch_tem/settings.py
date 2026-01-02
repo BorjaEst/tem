@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import torch
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 class DataSettings(BaseModel):
     """Data/environment generation settings (Lightning datamodule + dataset)."""
 
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     envs: list[Path] = Field(default_factory=lambda: [Path("./envs/10x10.json")], description="Environment JSON files for training.")
     randomise_observations: bool = Field(default=True, description="Randomise observations in environments.")
@@ -19,8 +20,6 @@ class DataSettings(BaseModel):
     # Walk generation
     batch_size: int = Field(default=16, description="Number of parallel walks.")
     n_rollout: int = Field(default=20, description="Steps per truncated BPTT chunk.")
-    walk_it_min: int = Field(default=25, description="Minimum walk length multiplier.")
-    walk_it_max: int = Field(default=300, description="Maximum walk length multiplier.")
 
     # World exploration
     explore_bias: int = Field(default=2, description="Bias for explorative behaviour to pick the same action again, to encourage straight walks")
@@ -38,17 +37,42 @@ class DataSettings(BaseModel):
         """Dict consumed by torch_tem.data.World(shiny=...)."""
         return {"gamma": self.shiny_gamma, "beta": self.shiny_beta, "n": self.shiny_n, "returns": self.shiny_returns}
 
-    @computed_field
-    @property
-    def walk_it_window(self) -> float:
-        """Width of window from which walk lengths are sampled."""
-        return 0.2 * (self.walk_it_max - self.walk_it_min)
+
+class LoggerSettings(BaseModel):
+    """Logging settings for TensorBoard logger."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    save_dir: Path = Field(default=Path("./logs"), description="Directory to save logs (default: ./lightning_logs).")
+    name: Optional[str] = Field(default=None, description="Experiment name for logger.")
+    version: Optional[str] = Field(default=None, description="Version/run identifier (auto-increments if None).")
+    log_graph: bool = Field(default=False, description="Log model graph to TensorBoard.")
+    prefix: str = Field(default="", description="Prefix for all logged metrics.")
+
+
+class CheckpointSettings(BaseModel):
+    """Settings for model checkpointing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    every_n_train_steps: int = Field(default=1000, description="Save a checkpoint every N training steps.")
+    save_last: bool = Field(default=True, description="Whether to always save the last checkpoint.")
+
+
+class TrainerSettings(BaseModel):
+    """Subset of Lightning Trainer kwargs with support for extra keys."""
+
+    model_config = ConfigDict(extra="allow")
+
+    max_steps: int = Field(default=20000)
+    log_every_n_steps: int = Field(default=10)
+    enable_progress_bar: bool = Field(default=True)
 
 
 class ScheduleSettings(BaseModel):
     """Training schedules (loss weights, lr, inference variance offset, etc)."""
 
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     # Loss weights
     loss_weights_x: float = Field(default=1.0)
@@ -62,7 +86,9 @@ class ScheduleSettings(BaseModel):
     loss_weights_reg_g_it: int = Field(default=40000000)
 
     # Memory schedules
+    eta: float = Field(default=0.5, description="Base Hebbian rate of remembering")
     eta_it: int = Field(default=16000)
+    hebbian_decay: float = Field(default=0.9999, description="Base Hebbian decay factor (rate of forgetting)")
     lambda_it: int = Field(default=200)
 
     # p->g variance offset schedule
@@ -74,6 +100,16 @@ class ScheduleSettings(BaseModel):
     lr_min: float = Field(default=8e-5)
     lr_decay_rate: float = Field(default=0.5)
     lr_decay_steps: int = Field(default=4000)
+
+    # Walk length curriculum (annealing schedule)
+    walk_it_min: int = Field(default=25, description="Minimum walk length multiplier (curriculum endpoint)")
+    walk_it_max: int = Field(default=300, description="Maximum walk length multiplier (curriculum start)")
+
+    @computed_field
+    @property
+    def walk_it_window(self) -> float:
+        """Width of window from which walk lengths are sampled."""
+        return 0.2 * (self.walk_it_max - self.walk_it_min)
 
     @computed_field
     @property

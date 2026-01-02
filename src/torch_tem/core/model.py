@@ -11,12 +11,15 @@ Release v1.0.0: Fully functional pytorch model, without any extensions
 
 @author: jacobb
 """
+from __future__ import annotations
+
 import copy
+from typing import Any, Mapping
 
 # Standard modules
 import numpy as np
 import torch
-from pydantic import BaseModel, Field, computed_field
+from pydantic import AliasChoices, BaseModel, Field, computed_field
 from scipy.special import comb
 from scipy.stats import truncnorm
 
@@ -27,105 +30,46 @@ from torch_tem.modules import MLP
 class Parameters(BaseModel):
     """
     Pydantic model for Tolman-Eichenbaum Machine parameters.
-    
+
     This model defines all hyperparameters for the TEM model, including
     world parameters, training parameters, model architecture, and connectivity matrices.
     """
-    
+
     # -- World parameters
-    has_static_action: bool = Field(
-        default=True,
-        description="Does this world include the standing still action?"
-    )
-    n_actions: int = Field(
-        default=4,
-        description="Number of available actions, excluding the stand still action"
-    )
-    explore_bias: int = Field(
-        default=2,
-        description="Bias for explorative behaviour to pick the same action again, to encourage straight walks"
-    )
-    shiny_rate: int = Field(
-        default=0,
-        description="Rate at which environments with shiny objects occur between training environments. Set to 0 for no shiny environments at all"
-    )
-    shiny_gamma: float = Field(
-        default=0.7,
-        description="Discount factor in calculating Q-values to generate shiny object oriented behaviour"
-    )
-    shiny_beta: float = Field(
-        default=1.5,
-        description="Inverse temperature for shiny object behaviour to pick actions based on Q-values"
-    )
-    shiny_n: int = Field(
-        default=2,
-        description="Number of shiny objects in the arena"
-    )
-    shiny_returns: int = Field(
-        default=15,
-        description="Number of times to return to a shiny object after finding it"
-    )
-    
+    has_static_action: bool = Field(default=True, description="Does this world include the standing still action?")
+    n_actions: int = Field(default=4, description="Number of available actions, excluding the stand still action")
+    explore_bias: int = Field(default=2, description="Bias for explorative behaviour to pick the same action again, to encourage straight walks")
+    shiny_rate: int = Field(default=0, description="Rate at which environments with shiny objects occur between training environments. Set to 0 for no shiny environments at all")
+    shiny_gamma: float = Field(default=0.7, description="Discount factor in calculating Q-values to generate shiny object oriented behaviour")
+    shiny_beta: float = Field(default=1.5, description="Inverse temperature for shiny object behaviour to pick actions based on Q-values")
+    shiny_n: int = Field(default=2, description="Number of shiny objects in the arena")
+    shiny_returns: int = Field(default=15, description="Number of times to return to a shiny object after finding it")
+
     @computed_field
     @property
     def shiny(self) -> dict:
         """Group all shiny parameters together to pass them to the world object."""
-        return {
-            "gamma": self.shiny_gamma,
-            "beta": self.shiny_beta,
-            "n": self.shiny_n,
-            "returns": self.shiny_returns
-        }
-    
+        return {"gamma": self.shiny_gamma, "beta": self.shiny_beta, "n": self.shiny_n, "returns": self.shiny_returns}
+
     # -- Training parameters
-    train_it: int = Field(
-        default=20000,
-        description="Number of walks to generate"
-    )
-    n_rollout: int = Field(
-        default=20,
-        description="Number of steps to roll out before backpropagation through time"
-    )
-    batch_size: int = Field(
-        default=16,
-        description="Batch size: number of walks for training simultaneously"
-    )
-    walk_it_min: int = Field(
-        default=25,
-        description="Minimum length of a walk on one environment"
-    )
-    walk_it_max: int = Field(
-        default=300,
-        description="Maximum length of a walk on one environment"
-    )
-    
+    train_it: int = Field(default=20000, description="Number of walks to generate")
+    n_rollout: int = Field(default=20, description="Number of steps to roll out before backpropagation through time")
+    batch_size: int = Field(default=16, description="Batch size: number of walks for training simultaneously")
+    walk_it_min: int = Field(default=25, description="Minimum length of a walk on one environment")
+    walk_it_max: int = Field(default=300, description="Maximum length of a walk on one environment")
+
     @computed_field
     @property
     def walk_it_window(self) -> float:
         """Width of window from which walk lengths are sampled."""
         return 0.2 * (self.walk_it_max - self.walk_it_min)
-    
-    loss_weights_x: float = Field(
-        default=1.0,
-        description="Weights of prediction losses"
-    )
-    loss_weights_p: float = Field(
-        default=1.0,
-        description="Weights of grounded location losses"
-    )
-    loss_weights_g: float = Field(
-        default=1.0,
-        description="Weights of abstract location losses"
-    )
-    loss_weights_reg_g: float = Field(
-        default=0.01,
-        description="Weights of regularisation losses for g"
-    )
-    loss_weights_reg_p: float = Field(
-        default=0.02,
-        description="Weights of regularisation losses for p"
-    )
-    
+
+    loss_weights_x: float = Field(default=1.0, description="Weights of prediction losses")
+    loss_weights_p: float = Field(default=1.0, description="Weights of grounded location losses")
+    loss_weights_g: float = Field(default=1.0, description="Weights of abstract location losses")
+    loss_weights_reg_g: float = Field(default=0.01, description="Weights of regularisation losses for g")
+    loss_weights_reg_p: float = Field(default=0.02, description="Weights of regularisation losses for p")
+
     @computed_field
     @property
     def loss_weights(self) -> torch.Tensor:
@@ -145,96 +89,33 @@ class Parameters(BaseModel):
             ],
             dtype=torch.float,
         )
-    
-    loss_weights_p_g_it: int = Field(
-        default=2000,
-        description="Number of backprop iters until latent parameter losses (L_p_g, L_p_x, L_g) are all fully weighted"
-    )
-    loss_weights_reg_p_it: int = Field(
-        default=4000,
-        description="Number of backprop iters until regularisation losses are fully weighted for p"
-    )
-    loss_weights_reg_g_it: int = Field(
-        default=40000000,
-        description="Number of backprop iters until regularisation losses are fully weighted for g"
-    )
-    eta_it: int = Field(
-        default=16000,
-        description="Number of backprop iters until eta (rate of remembering) is completely 'on'"
-    )
-    lambda_it: int = Field(
-        default=200,
-        description="Number of backprop iters until lambda (rate of forgetting) is completely 'on'"
-    )
-    p2g_scale_offset: float = Field(
-        default=0.0,
-        description="How much to use an offset for the standard deviation of the inferred grounded location"
-    )
-    p2g_sig_val: float = Field(
-        default=10000.0,
-        description="Additional value to offset standard deviation of inferred grounded location"
-    )
-    p2g_sig_half_it: int = Field(
-        default=400,
-        description="Number of iterations where offset scaling should be 0.5"
-    )
-    p2g_sig_scale_it: int = Field(
-        default=200,
-        description="How fast offset scaling should decrease"
-    )
-    lr_max: float = Field(
-        default=9.4e-4,
-        description="Maximum learning rate"
-    )
-    lr_min: float = Field(
-        default=8e-5,
-        description="Minimum learning rate"
-    )
-    lr_decay_rate: float = Field(
-        default=0.5,
-        description="Rate of learning rate decay"
-    )
-    lr_decay_steps: int = Field(
-        default=4000,
-        description="Steps of learning rate decay"
-    )
-    
+
+    loss_weights_p_g_it: int = Field(default=2000, description="Number of backprop iters until latent parameter losses (L_p_g, L_p_x, L_g) are all fully weighted")
+    loss_weights_reg_p_it: int = Field(default=4000, description="Number of backprop iters until regularisation losses are fully weighted for p")
+    loss_weights_reg_g_it: int = Field(default=40000000, description="Number of backprop iters until regularisation losses are fully weighted for g")
+    eta_it: int = Field(default=16000, description="Number of backprop iters until eta (rate of remembering) is completely 'on'")
+    lambda_it: int = Field(default=200, description="Number of backprop iters until lambda (rate of forgetting) is completely 'on'")
+    p2g_scale_offset: float = Field(default=0.0, description="How much to use an offset for the standard deviation of the inferred grounded location")
+    p2g_sig_val: float = Field(default=10000.0, description="Additional value to offset standard deviation of inferred grounded location")
+    p2g_sig_half_it: int = Field(default=400, description="Number of iterations where offset scaling should be 0.5")
+    p2g_sig_scale_it: int = Field(default=200, description="How fast offset scaling should decrease")
+    lr_max: float = Field(default=9.4e-4, description="Maximum learning rate")
+    lr_min: float = Field(default=8e-5, description="Minimum learning rate")
+    lr_decay_rate: float = Field(default=0.5, description="Rate of learning rate decay")
+    lr_decay_steps: int = Field(default=4000, description="Steps of learning rate decay")
+
     # -- Model parameters
-    do_sample: bool = Field(
-        default=False,
-        description="Whether to sample, or assume no noise and simply take mean of all distributions"
-    )
-    use_p_inf: bool = Field(
-        default=True,
-        description="Whether to use inferred ground location while inferring new abstract location"
-    )
-    separate_ovc: bool = Field(
-        default=False,
-        description="Whether to use separate grid modules that receive shiny information for object vector cells"
-    )
-    g_init_std: float = Field(
-        default=0.5,
-        description="Standard deviation for initial g (which will then be learned)"
-    )
-    g_mem_std: float = Field(
-        default=0.1,
-        description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location"
-    )
-    d_hidden_dim: int = Field(
-        default=20,
-        description="Hidden layer size of MLP for abstract location transitions"
-    )
-    
+    do_sample: bool = Field(default=False, description="Whether to sample, or assume no noise and simply take mean of all distributions")
+    use_p_inf: bool = Field(default=True, description="Whether to use inferred ground location while inferring new abstract location")
+    separate_ovc: bool = Field(default=False, description="Whether to use separate grid modules that receive shiny information for object vector cells")
+    g_init_std: float = Field(default=0.5, description="Standard deviation for initial g (which will then be learned)")
+    g_mem_std: float = Field(default=0.1, description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location")
+    d_hidden_dim: int = Field(default=20, description="Hidden layer size of MLP for abstract location transitions")
+
     # ---- Neuron and module parameters
-    n_g_subsampled_base: list[int] = Field(
-        default=[10, 10, 8, 6, 6],
-        description="Base neurons for subsampled entorhinal abstract location f_g(g) for each frequency module"
-    )
-    n_ovc_base: list[int] | None = Field(
-        default=None,
-        description="Neurons for object vector cells"
-    )
-    
+    n_g_subsampled_base: list[int] = Field(default=[10, 10, 8, 6, 6], description="Base neurons for subsampled entorhinal abstract location f_g(g) for each frequency module")
+    n_ovc_base: list[int] | None = Field(default=None, description="Neurons for object vector cells")
+
     @computed_field
     @property
     def n_ovc(self) -> list[int]:
@@ -242,7 +123,7 @@ class Parameters(BaseModel):
         if self.n_ovc_base is not None:
             return self.n_ovc_base
         return [0 for _ in range(len(self.n_g_subsampled_base))]
-    
+
     @computed_field
     @property
     def n_g_subsampled(self) -> list[int]:
@@ -254,100 +135,78 @@ class Parameters(BaseModel):
             return self.n_g_subsampled_base + self.n_ovc
         else:
             return [grid + ovc for grid, ovc in zip(self.n_g_subsampled_base, self.n_ovc)]
-    
+
     @computed_field
     @property
     def n_f_ovc(self) -> int:
         """Number of hierarchical frequency modules for object vector cells."""
         return len(self.n_ovc) if self.separate_ovc else 0
-    
+
     @computed_field
     @property
     def n_f_g(self) -> int:
         """Number of hierarchical frequency modules for grid cells."""
         return len(self.n_g_subsampled) - self.n_f_ovc
-    
+
     @computed_field
     @property
     def n_f(self) -> int:
         """Total number of modules."""
         return len(self.n_g_subsampled)
-    
+
     @computed_field
     @property
     def n_g(self) -> list[int]:
         """Number of neurons of entorhinal abstract location g for each frequency."""
         return [3 * g for g in self.n_g_subsampled]
-    
-    n_x: int = Field(
-        default=45,
-        description="Neurons for sensory observation x"
-    )
-    n_x_c: int = Field(
-        default=10,
-        description="Neurons for compressed sensory experience x_c"
-    )
-    
+
+    n_x: int = Field(default=45, description="Neurons for sensory observation x")
+    n_x_c: int = Field(default=10, description="Neurons for compressed sensory experience x_c")
+
     @computed_field
     @property
     def n_x_f(self) -> list[int]:
         """Neurons for temporally filtered sensory experience x for each frequency."""
         return [self.n_x_c for _ in range(self.n_f)]
-    
+
     @computed_field
     @property
     def n_p(self) -> list[int]:
         """Neurons for hippocampal grounded location p for each frequency."""
         return [g * x for g, x in zip(self.n_g_subsampled, self.n_x_f)]
-    
-    f_initial_base: list[float] = Field(
-        default=[0.99, 0.3, 0.09, 0.03, 0.01],
-        description="Initial frequencies of each module"
-    )
-    
+
+    f_initial_base: list[float] = Field(default=[0.99, 0.3, 0.09, 0.03, 0.01], description="Initial frequencies of each module")
+
     @computed_field
     @property
     def f_initial(self) -> list[float]:
         """Initial frequencies of each module, including object vector cell modules."""
-        return self.f_initial_base + self.f_initial_base[0:self.n_f_ovc]
-    
+        return self.f_initial_base + self.f_initial_base[0 : self.n_f_ovc]
+
     # ---- Memory parameters
-    common_memory: bool = Field(
-        default=False,
-        description="Use common memory for generative and inference network"
-    )
-    lambda_param: float = Field(
-        default=0.9999,
-        description="Hebbian rate of forgetting"
-    )
-    eta: float = Field(
-        default=0.5,
-        description="Hebbian rate of remembering"
-    )
-    kappa: float = Field(
-        default=0.8,
-        description="Hebbian retrieval decay term"
-    )
-    
+    common_memory: bool = Field(default=False, description="Use common memory for generative and inference network")
+    hebbian_decay: float = Field(default=0.9999, description="Hebbian decay factor for memory (rate of forgetting).")
+    eta: float = Field(default=0.5, description="Hebbian rate of remembering")
+    kappa: float = Field(default=0.8, description="Hebbian retrieval decay term")
+
     @computed_field
     @property
     def i_attractor(self) -> int:
         """Number of iterations of attractor dynamics for memory retrieval."""
         return self.n_f_g
-    
+
     @computed_field
     @property
     def i_attractor_max_freq_inf(self) -> list[int]:
         """Maximum iterations of attractor dynamics per frequency in inference model."""
         return [self.i_attractor for _ in range(self.n_f)]
-    
+
     @computed_field
     @property
     def i_attractor_max_freq_gen(self) -> list[int]:
         """Maximum iterations of attractor dynamics per frequency in generative model."""
-        return [self.i_attractor - freq_nr for freq_nr in range(self.n_f_g)] + \
-               [self.i_attractor for _ in range(self.n_f_ovc)]
-    
+        return [self.i_attractor - freq_nr for freq_nr in range(self.n_f_g)] + [self.i_attractor for _ in range(self.n_f_ovc)]
+
     # --- Connectivity matrices
     @computed_field
     @property
@@ -358,7 +217,7 @@ class Parameters(BaseModel):
         """
         mask = torch.zeros((np.sum(self.n_p), np.sum(self.n_p)), dtype=torch.float)
         n_p = np.cumsum(np.concatenate(([0], self.n_p)))
-        
+
         # Entry M_ij (row i, col j) is the connection FROM cell i TO cell j
         for f_from in range(self.n_f):
             for f_to in range(self.n_f):
@@ -367,45 +226,45 @@ class Parameters(BaseModel):
                     # Connection between object vector modules: only allow from low to high frequency
                     if f_from > self.n_f_g and f_to > self.n_f_g:
                         if self.f_initial[f_from] <= self.f_initial[f_to]:
-                            mask[n_p[f_from]:n_p[f_from + 1], n_p[f_to]:n_p[f_to + 1]] = 1.0
+                            mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
                     # Connection between object vector and normal modules: allow any connections
                     else:
-                        mask[n_p[f_from]:n_p[f_from + 1], n_p[f_to]:n_p[f_to + 1]] = 1.0
+                        mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
                 # Connection between abstract location frequency modules: only from low to high frequency
                 else:
                     if self.f_initial[f_from] <= self.f_initial[f_to]:
-                        mask[n_p[f_from]:n_p[f_from + 1], n_p[f_to]:n_p[f_to + 1]] = 1.0
-        
+                        mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
+
         return mask
-    
+
     @computed_field
     @property
     def p_retrieve_mask_inf(self) -> list[torch.Tensor]:
         """Hierarchical memory retrieval masks for inference model."""
         masks = [torch.zeros(sum(self.n_p)) for _ in range(self.i_attractor)]
         n_p = np.cumsum(np.concatenate(([0], self.n_p)))
-        
+
         # For each frequency, insert ones in the mask for those iterations
         for f, max_i in enumerate(self.i_attractor_max_freq_inf):
             for i in range(max_i):
-                masks[i][n_p[f]:n_p[f + 1]] = 1.0
-        
+                masks[i][n_p[f] : n_p[f + 1]] = 1.0
+
         return masks
-    
+
     @computed_field
     @property
     def p_retrieve_mask_gen(self) -> list[torch.Tensor]:
         """Hierarchical memory retrieval masks for generative model."""
         masks = [torch.zeros(sum(self.n_p)) for _ in range(self.i_attractor)]
         n_p = np.cumsum(np.concatenate(([0], self.n_p)))
-        
+
         # For each frequency, insert ones in the mask for those iterations
         for f, max_i in enumerate(self.i_attractor_max_freq_gen):
             for i in range(max_i):
-                masks[i][n_p[f]:n_p[f + 1]] = 1.0
-        
+                masks[i][n_p[f] : n_p[f + 1]] = 1.0
+
         return masks
-    
+
     @computed_field
     @property
     def g_connections(self) -> list[list[bool]]:
@@ -414,74 +273,59 @@ class Parameters(BaseModel):
         hierarchically (low to high).
         """
         # Connections for grid cell modules
-        connections = [
-            [self.f_initial[f_from] <= self.f_initial[f_to] for f_from in range(self.n_f_g)] +
-            [False for _ in range(self.n_f_ovc)]
-            for f_to in range(self.n_f_g)
-        ]
-        
+        connections = [[self.f_initial[f_from] <= self.f_initial[f_to] for f_from in range(self.n_f_g)] + [False for _ in range(self.n_f_ovc)] for f_to in range(self.n_f_g)]
+
         # Add connections for separate object vector cell modules
         connections += [
-            [False for _ in range(self.n_f_g)] +
-            [self.f_initial[f_from] <= self.f_initial[f_to] for f_from in range(self.n_f_g, self.n_f)]
-            for f_to in range(self.n_f_g, self.n_f)
+            [False for _ in range(self.n_f_g)] + [self.f_initial[f_from] <= self.f_initial[f_to] for f_from in range(self.n_f_g, self.n_f)] for f_to in range(self.n_f_g, self.n_f)
         ]
-        
+
         return connections
-    
+
     # ---- Static matrices
     @computed_field
     @property
     def W_repeat(self) -> list[torch.Tensor]:
         """Matrix for repeating abstract location g to do outer product with sensory information x."""
-        return [
-            torch.tensor(np.kron(np.eye(self.n_g_subsampled[f]), np.ones((1, self.n_x_f[f]))), dtype=torch.float)
-            for f in range(self.n_f)
-        ]
-    
+        return [torch.tensor(np.kron(np.eye(self.n_g_subsampled[f]), np.ones((1, self.n_x_f[f]))), dtype=torch.float) for f in range(self.n_f)]
+
     @computed_field
     @property
     def W_tile(self) -> list[torch.Tensor]:
         """Matrix for tiling sensory observation x to do outer product with abstract location g."""
-        return [
-            torch.tensor(np.kron(np.ones((1, self.n_g_subsampled[f])), np.eye(self.n_x_f[f])), dtype=torch.float)
-            for f in range(self.n_f)
-        ]
-    
+        return [torch.tensor(np.kron(np.ones((1, self.n_g_subsampled[f])), np.eye(self.n_x_f[f])), dtype=torch.float) for f in range(self.n_f)]
+
     @computed_field
     @property
     def two_hot_table(self) -> list[torch.Tensor]:
         """Table for converting one-hot to two-hot compressed representation."""
         table = [[0] * (self.n_x_c - 2) + [1] * 2]
-        
+
         # Generate compressed codes for each possible observation
         for i in range(1, min(int(comb(self.n_x_c, 2)), self.n_x)):
             code = table[-1].copy()
             # Find latest occurrence of [0 1] in that code
-            swap = [index for index in range(len(code) - 1, -1, -1) if code[index:index + 2] == [0, 1]][0]
+            swap = [index for index in range(len(code) - 1, -1, -1) if code[index : index + 2] == [0, 1]][0]
             # Swap those to get new code
-            code[swap:swap + 2] = [1, 0]
+            code[swap : swap + 2] = [1, 0]
             # If the first one was swapped: value after swapped pair is 1
             if swap + 2 < len(code) and code[swap + 2] == 1:
                 # Move the second 1 all the way back - reverse everything after the swapped pair
-                code[swap + 2:] = code[:swap + 1:-1]
+                code[swap + 2 :] = code[: swap + 1 : -1]
             table.append(code)
-        
+
         # Convert each code to column vector pytorch tensor
         return [torch.tensor(code) for code in table]
-    
+
     @computed_field
     @property
     def g_downsample(self) -> list[torch.Tensor]:
         """Downsampling matrix to go from grid cells to compressed grid cells."""
         return [
-            torch.cat([
-                torch.eye(dim_out, dtype=torch.float),
-                torch.zeros((dim_in - dim_out, dim_out), dtype=torch.float)
-            ])
+            torch.cat([torch.eye(dim_out, dtype=torch.float), torch.zeros((dim_in - dim_out, dim_out), dtype=torch.float)])
             for dim_in, dim_out in zip(self.n_g, self.n_g_subsampled)
         ]
-    
+
     model_config = {"populate_by_name": True, "arbitrary_types_allowed": True}
 
 
@@ -489,32 +333,31 @@ class Parameters(BaseModel):
 def parameters():
     """
     Generate default parameters as a dictionary.
-    
+
     This function maintains backward compatibility with code that expects
     a dictionary of parameters. It creates a Parameters instance and converts
     it to a dictionary using model_dump().
-    
+
     Returns:
         dict: Dictionary containing all model parameters.
     """
     params_model = Parameters()
     params_dict = params_model.model_dump()
-    
-    # Rename internal field names to expected external names for backward compatibility
-    params_dict['lambda'] = params_dict.pop('lambda_param')
+
     # Remove internal-only fields that shouldn't be in the output
-    params_dict.pop('n_g_subsampled_base', None)
-    params_dict.pop('n_ovc_base', None)
-    params_dict.pop('f_initial_base', None)
-    
+    params_dict.pop("n_g_subsampled_base", None)
+    params_dict.pop("n_ovc_base", None)
+    params_dict.pop("f_initial_base", None)
+
     return params_dict
 
 
 # This specifies how parameters are updated at every backpropagation iteration/gradient update
 def parameter_iteration(iteration, params):
-    # Calculate eta (rate of remembering) and lambda (rate of forgetting) for Hebbian memory updates
+    # Calculate eta (rate of remembering) and hebian decay (rate of forgetting) for Hebbian memory updates
+    hebbian_decay = params.get("hebbian_decay")
     eta = min((iteration + 1) / params["eta_it"], 1) * params["eta"]
-    lamb = min((iteration + 1) / params["lambda_it"], 1) * params["lambda"]
+    lamb = min((iteration + 1) / params["lambda_it"], 1) * hebbian_decay
     # Calculate current scaling of variance offset for ground location inference
     p2g_scale_offset = 1 / (1 + np.exp((iteration - params["p2g_sig_half_it"]) / params["p2g_sig_scale_it"]))
     # Calculate current learning rate
@@ -1040,7 +883,8 @@ class Model(torch.nn.Module):
         if do_hierarchical_connections:
             M_new = M_new * self.hyper["p_update_mask"]
         # Store grounded location in attractor network memory with weights M by Hebbian learning of pattern
-        M = torch.clamp(self.hyper["lambda"] * M_prev + self.hyper["eta"] * M_new, min=-1, max=1)
+        hebbian_decay = self.hyper.get("hebbian_decay")
+        M = torch.clamp(hebbian_decay * M_prev + self.hyper["eta"] * M_new, min=-1, max=1)
         return M
 
 

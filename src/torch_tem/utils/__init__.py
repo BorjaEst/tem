@@ -209,3 +209,9 @@ def apply_overrides(params: dict[str, Any], override: dict[str, Any]) -> dict[st
     for k, v in override.items():
         params[k] = v
     return params
+
+
+def require_exists(path: Path, what: str) -> None:
+    """Raise friendly error if path doesn't exist."""
+    if not path.exists():
+        raise FileNotFoundError(f"{what} not found: {path}")

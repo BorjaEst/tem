@@ -1,232 +1,373 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Created on Thu Feb 20 14:57:45 2020
+TEM training entrypoint.
 
-@author: jacobb
+This module is intentionally "thin": it wires together
+- Run settings (Pydantic settings/CLI),
+- Run directory layout,
+- Model creation/loading,
+- And the original training loop.
+
+The goal is to keep behavior stable while making configuration and paths
+consistent and easy to maintain.
 """
 
-import glob
-import importlib.util
+from __future__ import annotations
+
 import os
 import shutil
 import time
+from pathlib import Path
+from typing import Any, NamedTuple, Optional
 
-# Standard library imports
 import numpy as np
 import torch
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch.utils.tensorboard import SummaryWriter
 
-# Own module imports
 from torch_tem import data, utils
 from torch_tem.core import model
+from torch_tem.core.model import Parameters
 
-# Set random seeds for reproducibility
-np.random.seed(0)
-torch.manual_seed(0)
 
-# Either load a trained model and continue training, or start afresh
-load_existing_model = False
-if load_existing_model:
-    # Choose which trained model to load
-    date = "2020-10-06"  # 2020-07-05 run 0 for successful node agent
-    run = "2"
-    i_start = 40
+def _require_exists(path: Path, what: str) -> None:
+    """Raise friendly error if path doesn't exist."""
+    if not path.exists():
+        raise FileNotFoundError(f"{what} not found: {path}")
 
-    # Set all paths from existing run
-    run_path, train_path, model_path, save_path, script_path, envs_path = utils.set_directories(date, run)
 
-    # Load the model: use import library to import module from specified path
-    model_spec = importlib.util.spec_from_file_location("model", script_path + "/model.py")
-    model = importlib.util.module_from_spec(model_spec)
-    model_spec.loader.exec_module(model)
+class RunPaths(NamedTuple):
+    """Resolved output paths for a single run."""
 
-    # Load the parameters of the model
-    params = torch.load(model_path + "/params_" + str(i_start) + ".pt")
-    # But certain parameters (like total nr of training iterations) may need to be copied from the current set of parameters
-    new_params = {"train_it": 40000}
-    # Update those in params
-    for key in new_params:
-        params[key] = new_params[key]
+    run: Path
+    train: Path
+    model: Path
+    save: Path
+    script: Path
+    envs: Path
 
-    # Create a new tem model with the loaded parameters
+
+class RunSettings(BaseSettings):
+    """Settings for a training run (CLI/env driven)."""
+
+    model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="run")
+
+    # Load/continue
+    load_model: Optional[Path] = Field(default=None, description="Path to existing run directory OR a checkpoint file (tem_*.pt / params_*.pt).")
+    i_start: int = Field(default=0, description="Iteration to load when --load-model is a run directory (or to override parsing).")
+    override: dict[str, Any] = Field(default_factory=dict, description='Patch loaded params (e.g. {"train_it": 40000}).')
+
+    # Model params (for new runs)
+    model_params: Parameters = Field(default_factory=Parameters, description="Model parameters (Pydantic TEM Parameters).")
+
+    # Environments
+    envs: list[Path] = Field(default_factory=lambda: [Path("./envs/5x5.json")], description="Environment JSON files for training (only used for new runs).")
+    randomise_observations: bool = Field(default=True, description="Randomise observations in environments.")
+
+    # Runtime
+    seed: int = Field(default=0, description="Random seed.")
+    output_dir: Optional[Path] = Field(default=None, description="Run directory to write into; if omitted uses utils.make_directories() layout.")
+    log_every: int = Field(default=10, description="Log every N iterations.")
+    save_every: int = Field(default=1000, description="Save checkpoints every N iterations.")
+
+
+def _resolve_run_paths_for_new_run(settings: RunSettings) -> RunPaths:
+    """
+    Create (or reuse) run folders for a new training run.
+
+    Returns:
+        RunPaths: resolved paths for run/train/model/save/script/envs.
+    """
+    if settings.output_dir is None:
+        # Legacy helper returns strings; convert to Paths.
+        run_s, train_s, model_s, save_s, script_s, envs_s = utils.make_directories()
+        return RunPaths(
+            run=Path(run_s),
+            train=Path(train_s),
+            model=Path(model_s),
+            save=Path(save_s),
+            script=Path(script_s),
+            envs=Path(envs_s),
+        )
+
+    run_path = settings.output_dir
+    train_path = run_path / "train"
+    model_path = run_path / "model"
+    save_path = run_path / "save"
+    script_path = run_path / "script"
+    envs_path = script_path / "envs"
+
+    for p in (train_path, model_path, save_path, script_path, envs_path):
+        p.mkdir(parents=True, exist_ok=True)
+
+    return RunPaths(
+        run=run_path,
+        train=train_path,
+        model=model_path,
+        save=save_path,
+        script=script_path,
+        envs=envs_path,
+    )
+
+
+def params_from_settings(settings: RunSettings) -> dict[str, Any]:
+    """
+    Create a TEM params dict from the Pydantic Parameters model.
+
+    Returns:
+        dict[str, Any]: params dict expected by TEM code.
+    """
+    params = settings.model_params.model_dump()
+
+    # Backward-compat: some code expects params["lambda"].
+    if "lambda" not in params and "lambda_param" in params:
+        params["lambda"] = params.pop("lambda_param")
+
+    # Defensive: remove any internal-only fields if present.
+    for key in ("n_g_subsampled_base", "n_ovc_base", "f_initial_base"):
+        params.pop(key, None)
+
+    return params
+
+
+def load_existing(settings: RunSettings):
+    """
+    Load an existing model and its run layout.
+
+    Supports:
+      - run directory (contains model/ and script/envs/),
+      - checkpoint file tem_*.pt or params_*.pt inside model/.
+
+    Returns:
+        (tem, envs, i_start, paths, params)
+    """
+    if settings.load_model is None:
+        raise ValueError("settings.load_model is None")
+
+    load_path = settings.load_model.expanduser().resolve()
+
+    # Determine run/model directories and which iteration to load.
+    if load_path.is_file():
+        model_dir = load_path.parent
+        run_dir = model_dir.parent
+        parsed = utils.parse_iter_from_stem(load_path.stem)
+        i_load = settings.i_start if settings.i_start else (parsed or 0)
+
+        tem_ckpt = model_dir / f"tem_{i_load}.pt"
+        params_ckpt = model_dir / f"params_{i_load}.pt"
+
+        # If user pointed directly at one of the two, respect it.
+        if load_path.name.startswith("tem_"):
+            tem_ckpt = load_path
+        elif load_path.name.startswith("params_"):
+            params_ckpt = load_path
+    else:
+        run_dir = load_path
+        model_dir = run_dir / "model"
+        i_load = settings.i_start
+        tem_ckpt = model_dir / f"tem_{i_load}.pt"
+        params_ckpt = model_dir / f"params_{i_load}.pt"
+
+    paths = RunPaths(
+        run=run_dir,
+        train=run_dir / "train",
+        model=model_dir,
+        save=run_dir / "save",
+        script=run_dir / "script",
+        envs=utils.resolve_envs_path(run_dir),
+    )
+
+    # Validate checkpoint files exist
+    _require_exists(tem_ckpt, f"Model checkpoint (iteration {i_load})")
+    _require_exists(params_ckpt, f"Params checkpoint (iteration {i_load})")
+
+    # Load params + apply overrides
+    params = torch.load(params_ckpt, weights_only=False)
+    params = utils.apply_overrides(params, settings.override)
+
+    # Build model and load weights
     tem = model.Model(params)
-    # Load the model weights after training
-    model_weights = torch.load(model_path + "/tem_" + str(i_start) + ".pt")
-    # Set the model weights to the loaded trained model weights
-    tem.load_state_dict(model_weights)
+    weights = torch.load(tem_ckpt, weights_only=False)
+    tem.load_state_dict(weights)
 
-    # Make list of all the environments that this model was trained on
-    envs = list(glob.iglob(envs_path + "/*"))
+    envs = [str(p) for p in paths.envs.glob("*")]
+    i_start = i_load + 1
+    return tem, envs, i_start, paths, params
 
-    # And increase starting iteration by 1, since the loaded model already carried out the current starting iteration
-    i_start = i_start + 1
-else:
-    # Start training from step 0
+
+def create_new(settings: RunSettings):
+    """
+    Create a new run: directories, params, model, and env list.
+
+    Returns:
+        (tem, envs, i_start, paths, params)
+    """
     i_start = 0
+    paths = _resolve_run_paths_for_new_run(settings)
 
-    # Create directories for storing all information about the current run
-    run_path, train_path, model_path, save_path, script_path, envs_path = utils.make_directories()
-    # Save all python files in current directory to script directory
-    files = glob.iglob(os.path.join(".", "*.py"))
-    for file in files:
-        if os.path.isfile(file):
-            shutil.copy2(file, os.path.join(script_path, file))
+    params = params_from_settings(settings)
+    np.save(paths.save / "params", params)
 
-    # Initalise hyperparameters for model
-    params = model.parameters()
-    # Save parameters
-    np.save(os.path.join(save_path, "params"), params)
-
-    # And create instance of TEM with those parameters
     tem = model.Model(params)
 
-    # Create list of environments that we will sample from during training to provide TEM with trajectory input
-    envs = ["./envs/5x5.json"]
-    # Save all environment files that are being used in training in the script directory
-    for file in set(envs):
-        shutil.copy2(file, os.path.join(envs_path, os.path.basename(file)))
+    # Validate environment files exist
+    for env_path in settings.envs:
+        _require_exists(env_path, f"Environment file")
 
-# Create a tensor board to stay updated on training progress. Start tensorboard with tensorboard --logdir=runs
-writer = SummaryWriter(train_path)
-# Create a logger to write log output to file
-logger = utils.make_logger(run_path)
+    envs = [str(p) for p in settings.envs]
+    for env_file in set(envs):
+        shutil.copy2(env_file, paths.envs / Path(env_file).name)
 
-# Make an ADAM optimizer for TEM
-adam = torch.optim.Adam(tem.parameters(), lr=params["lr_max"])
+    return tem, envs, i_start, paths, params
 
-# Make set of environments: one for each batch, randomly choosing to use shiny objects or not
-environments = [
-    data.World(graph, randomise_observations=True, shiny=(params["shiny"] if np.random.rand() < params["shiny_rate"] else None))
-    for graph in np.random.choice(envs, params["batch_size"])
-]
-# Initialise whether a state has been visited for each world
-visited = [[False for _ in range(env.n_locations)] for env in environments]
-# And make a single walk for each environment, where walk lengths can be any between the min and max length to de-sychronise world switches
-walks = [env.generate_walks(params["n_rollout"] * np.random.randint(params["walk_it_min"], params["walk_it_max"]), 1)[0] for env in environments]
-# Initialise the previous iteration as None: we start from the beginning of the walk, so there is no previous iteration yet
-prev_iter = None
 
-# Train TEM on walks in different environment
-for i in range(i_start, params["train_it"]):
+def main() -> None:
+    """Run TEM training."""
+    settings = RunSettings()
 
-    # Get start time for function timing
-    start_time = time.time()
-    # Get updated parameters for this backprop iteration
-    eta_new, lambda_new, p2g_scale_offset, lr, walk_length_center, loss_weights = model.parameter_iteration(i, params)
-    # Update eta and lambda
-    tem.hyper["eta"] = eta_new
-    tem.hyper["lambda"] = lambda_new
-    # Update scaling of offset for variance of inferred grounded position
-    tem.hyper["p2g_scale_offset"] = p2g_scale_offset
-    # Update learning rate (the neater torch-way of doing this would be a scheduler, but this is quick and easy)
-    for param_group in adam.param_groups:
-        param_group["lr"] = lr
+    np.random.seed(settings.seed)
+    torch.manual_seed(settings.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(settings.seed)
 
-    # Make an empty chunk that will be fed to TEM in this backprop iteration
-    chunk = []
-    # For each environment: fill chunk by popping the first batch_size steps of the walk
-    for env_i, walk in enumerate(walks):
-        # Make sure this walk has enough steps in it for a whole backprop iteration
-        if len(walk) < params["n_rollout"]:
-            # If it doesn't: create a new environment
-            environments[env_i] = data.World(
-                envs[np.random.randint(len(envs))], randomise_observations=True, shiny=(params["shiny"] if np.random.rand() < params["shiny_rate"] else None)
-            )
-            # Initialise whether a state has been visited for each world
-            visited[env_i] = [False for _ in range(environments[env_i].n_locations)]
-            # Generate a new walk on that environment
-            walk = environments[env_i].generate_walks(
-                params["n_rollout"] * np.random.randint(walk_length_center - params["walk_it_window"] * 0.5, walk_length_center + params["walk_it_window"] * 0.5), 1
-            )[0]
-            # And store it in walks array
-            walks[env_i] = walk
-            # Finally, set the action of the previous iteration for this environment to zero, to indicate that this is a new walk
-            prev_iter[0].a[env_i] = None
-            # Log progress
-            logger.info("Iteration {:d}: new walk of length {:d} for batch entry {:d}".format(i, len(walk), env_i))
-        # Now pop the first n_rollout steps from this walk and append them to the chunk
-        for step in range(params["n_rollout"]):
-            # For the first environment: simply copy the components (g, x, a) of each step
-            if len(chunk) < params["n_rollout"]:
-                chunk.append([[comp] for comp in walk.pop(0)])
-            # For all next environments: add the components to the existing list of components for each step
-            else:
-                for comp_i, comp in enumerate(walk.pop(0)):
-                    chunk[step][comp_i].append(comp)
-    # Stack all observations (x, component 1) into tensors along the first dimension for batch processing
-    for i_step, step in enumerate(chunk):
-        chunk[i_step][1] = torch.stack(step[1], dim=0)
+    if settings.load_model:
+        tem, envs, i_start, paths, params = load_existing(settings)
+    else:
+        tem, envs, i_start, paths, params = create_new(settings)
 
-    # Forward-pass this walk through the network
-    forward = tem(chunk, prev_iter)
+    def save_checkpoint(step: int) -> None:
+        """Save model and params checkpoint."""
+        torch.save(tem.state_dict(), paths.model / f"tem_{step}.pt")
+        torch.save(tem.hyper, paths.model / f"params_{step}.pt")
 
-    # Accumulate loss from forward pass
-    loss = torch.tensor(0.0)
-    # Make vector for plotting losses
-    plot_loss = 0
-    # Collect all losses
-    for step in forward:
-        # Make list of losses included in this step
-        step_loss = []
-        # Only include loss for locations that have been visited before
-        for env_i, env_visited in enumerate(visited):
-            if env_visited[step.g[env_i]["id"]]:
-                step_loss.append(loss_weights * torch.stack([l[env_i] for l in step.L]))
-            else:
-                env_visited[step.g[env_i]["id"]] = True
-        # Stack losses in this step along first dimension, then average across that dimension to get mean loss for this step
-        step_loss = torch.tensor(0) if not step_loss else torch.mean(torch.stack(step_loss, dim=0), dim=0)
-        # Save all separate components of loss for monitoring
-        plot_loss = plot_loss + step_loss.detach().numpy()
-        # And sum all components, then add them to total loss of this step
-        loss = loss + torch.sum(step_loss)
+    writer = SummaryWriter(utils.as_dir_str(paths.train))
+    logger = utils.make_logger(utils.as_dir_str(paths.run))
 
-    # Reset gradients
-    adam.zero_grad()
-    # Do backward pass to calculate gradients with respect to total loss of this chunk
-    loss.backward(retain_graph=True)
-    # Then do optimiser step to update parameters of model
-    adam.step()
-    # Update the previous iteration for the next chunk with the final step of this chunk, removing all operation history
-    prev_iter = [forward[-1].detach()]
+    adam = torch.optim.Adam(tem.parameters(), lr=params["lr_max"])
 
-    # Compute model accuracies
-    acc_p, acc_g, acc_gt = np.mean([[np.mean(a) for a in step.correct()] for step in forward], axis=0)
-    acc_p, acc_g, acc_gt = [a * 100 for a in (acc_p, acc_g, acc_gt)]
-    # Log progress
-    if i % 10 == 0:
-        # Write series of messages to logger from this backprop iteration
-        logger.info("Finished backprop iter {:d} in {:.2f} seconds.".format(i, time.time() - start_time))
-        logger.info(
-            "Loss: {:.2f}. <p_g> {:.2f} <p_x> {:.2f} <x_gen> {:.2f} <x_g> {:.2f} <x_p> {:.2f} <g> {:.2f} <reg_g> {:.2f} <reg_p> {:.2f}".format(loss.detach().numpy(), *plot_loss)
+    environments = [
+        data.World(
+            graph,
+            randomise_observations=settings.randomise_observations,
+            shiny=(params["shiny"] if np.random.rand() < params["shiny_rate"] else None),
         )
-        logger.info("Accuracy: <p> {:.2f}% <g> {:.2f}% <gt> {:.2f}%".format(acc_p, acc_g, acc_gt))
-        logger.info(
-            "Parameters: <max_hebb> {:.2f} <eta> {:.2f} <lambda> {:.2f} <p2g_scale_offset> {:.2f}".format(
-                np.max(np.abs(prev_iter[0].M[0].numpy())), tem.hyper["eta"], tem.hyper["lambda"], tem.hyper["p2g_scale_offset"]
-            )
-        )
-        logger.info("Weights:" + str([w for w in loss_weights.numpy()]))
-        logger.info(" ")
-        # Also write progress to tensorboard, and all loss components. Order: [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]
-        writer.add_scalar("Losses/Total", loss.detach().numpy(), i)
-        writer.add_scalar("Losses/p_g", plot_loss[0], i)
-        writer.add_scalar("Losses/p_x", plot_loss[1], i)
-        writer.add_scalar("Losses/x_gen", plot_loss[2], i)
-        writer.add_scalar("Losses/x_g", plot_loss[3], i)
-        writer.add_scalar("Losses/x_p", plot_loss[4], i)
-        writer.add_scalar("Losses/g", plot_loss[5], i)
-        writer.add_scalar("Losses/reg_g", plot_loss[6], i)
-        writer.add_scalar("Losses/reg_p", plot_loss[7], i)
-        writer.add_scalar("Accuracies/p", acc_p, i)
-        writer.add_scalar("Accuracies/g", acc_g, i)
-        writer.add_scalar("Accuracies/gt", acc_gt, i)
-    # Also store the internal state (all learnable parameters) and the hyperparameters periodically
-    if i % 1000 == 0:
-        torch.save(tem.state_dict(), model_path + "/tem_" + str(i) + ".pt")
-        torch.save(tem.hyper, model_path + "/params_" + str(i) + ".pt")
+        for graph in np.random.choice(envs, params["batch_size"])
+    ]
+    visited = [[False for _ in range(env.n_locations)] for env in environments]
+    walks = [
+        env.generate_walks(
+            params["n_rollout"] * np.random.randint(params["walk_it_min"], params["walk_it_max"]),
+            1,
+        )[0]
+        for env in environments
+    ]
+    prev_iter = None
 
-# Save the final state of the model after training has finished
-torch.save(tem.state_dict(), model_path + "/tem_" + str(i) + ".pt")
-torch.save(tem.hyper, model_path + "/params_" + str(i) + ".pt")
+    for i in range(i_start, params["train_it"]):
+        start_time = time.time()
+
+        eta_new, lambda_new, p2g_scale_offset, lr, walk_length_center, loss_weights = model.parameter_iteration(i, params)
+        tem.hyper["eta"] = eta_new
+        tem.hyper["lambda"] = lambda_new
+        tem.hyper["p2g_scale_offset"] = p2g_scale_offset
+        for param_group in adam.param_groups:
+            param_group["lr"] = lr
+
+        chunk: list[list[list[Any]]] = []
+        for env_i, walk in enumerate(walks):
+            if len(walk) < params["n_rollout"]:
+                environments[env_i] = data.World(
+                    envs[np.random.randint(len(envs))],
+                    randomise_observations=settings.randomise_observations,
+                    shiny=(params["shiny"] if np.random.rand() < params["shiny_rate"] else None),
+                )
+                visited[env_i] = [False for _ in range(environments[env_i].n_locations)]
+                walk = environments[env_i].generate_walks(
+                    params["n_rollout"]
+                    * np.random.randint(
+                        walk_length_center - params["walk_it_window"] * 0.5,
+                        walk_length_center + params["walk_it_window"] * 0.5,
+                    ),
+                    1,
+                )[0]
+                walks[env_i] = walk
+                prev_iter[0].a[env_i] = None
+                logger.info("Iteration %d: new walk length %d for batch %d", i, len(walk), env_i)
+
+            for step in range(params["n_rollout"]):
+                if len(chunk) < params["n_rollout"]:
+                    chunk.append([[comp] for comp in walk.pop(0)])
+                else:
+                    for comp_i, comp in enumerate(walk.pop(0)):
+                        chunk[step][comp_i].append(comp)
+
+        for i_step, step in enumerate(chunk):
+            chunk[i_step][1] = torch.stack(step[1], dim=0)
+
+        forward = tem(chunk, prev_iter)
+
+        loss = torch.tensor(0.0)
+        plot_loss = 0
+        for step in forward:
+            step_loss = []
+            for env_i, env_visited in enumerate(visited):
+                if env_visited[step.g[env_i]["id"]]:
+                    step_loss.append(loss_weights * torch.stack([l[env_i] for l in step.L]))
+                else:
+                    env_visited[step.g[env_i]["id"]] = True
+            step_loss = torch.tensor(0) if not step_loss else torch.mean(torch.stack(step_loss, dim=0), dim=0)
+            plot_loss = plot_loss + step_loss.detach().numpy()
+            loss = loss + torch.sum(step_loss)
+
+        adam.zero_grad()
+        loss.backward(retain_graph=True)
+        adam.step()
+        prev_iter = [forward[-1].detach()]
+
+        acc_p, acc_g, acc_gt = np.mean([[np.mean(a) for a in step.correct()] for step in forward], axis=0)
+        acc_p, acc_g, acc_gt = [a * 100 for a in (acc_p, acc_g, acc_gt)]
+
+        if settings.log_every > 0 and i % settings.log_every == 0:
+            logger.info("Finished backprop iter %d in %.2f seconds.", i, time.time() - start_time)
+            logger.info(
+                "Loss: %.2f. <p_g> %.2f <p_x> %.2f <x_gen> %.2f <x_g> %.2f <x_p> %.2f <g> %.2f <reg_g> %.2f <reg_p> %.2f",
+                loss.detach().numpy(),
+                *plot_loss,
+            )
+            logger.info("Accuracy: <p> %.2f%% <g> %.2f%% <gt> %.2f%%", acc_p, acc_g, acc_gt)
+            logger.info(
+                "Parameters: <max_hebb> %.2f <eta> %.2f <lambda> %.2f <p2g_scale_offset> %.2f",
+                np.max(np.abs(prev_iter[0].M[0].numpy())),
+                tem.hyper["eta"],
+                tem.hyper["lambda"],
+                tem.hyper["p2g_scale_offset"],
+            )
+            logger.info("Weights: %s", [w for w in loss_weights.numpy()])
+            logger.info(" ")
+
+            # Log to TensorBoard
+            scalars = [
+                ("Losses/Total", loss.detach().numpy()),
+                ("Losses/p_g", plot_loss[0]),
+                ("Losses/p_x", plot_loss[1]),
+                ("Losses/x_gen", plot_loss[2]),
+                ("Losses/x_g", plot_loss[3]),
+                ("Losses/x_p", plot_loss[4]),
+                ("Losses/g", plot_loss[5]),
+                ("Losses/reg_g", plot_loss[6]),
+                ("Losses/reg_p", plot_loss[7]),
+                ("Accuracies/p", acc_p),
+                ("Accuracies/g", acc_g),
+                ("Accuracies/gt", acc_gt),
+            ]
+            for tag, val in scalars:
+                writer.add_scalar(tag, val, i)
+
+        if settings.save_every > 0 and i % settings.save_every == 0:
+            save_checkpoint(i)
+
+    save_checkpoint(i)
+
+
+if __name__ == "__main__":
+    main()

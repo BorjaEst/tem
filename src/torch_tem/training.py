@@ -21,11 +21,10 @@ from torch_tem.core import model
 class TEMDataModule(pl.LightningDataModule):
     """Lightning DataModule for TEM training."""
 
-    def __init__(self, env_paths: list, params: dict[str, Any], settings):
+    def __init__(self, env_paths: list, params: dict[str, Any]):
         super().__init__()
         self.env_paths = [str(p) for p in env_paths]
         self.params = params
-        self.settings = settings
 
     def setup(self, stage: str = None):
         """Setup is called on every process."""
@@ -33,17 +32,16 @@ class TEMDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         """Return training dataloader (iterable dataset)."""
-        return TEMDataset(self.env_paths, self.params, self.settings)
+        return TEMDataset(self.env_paths, self.params)
 
 
 class TEMDataset(IterableDataset):
     """Iterable dataset that generates TEM batches on-the-fly."""
 
-    def __init__(self, env_paths: list[str], params: dict[str, Any], settings):
+    def __init__(self, env_paths: list[str], params: dict[str, Any]):
         super().__init__()
         self.env_paths = env_paths
         self.params = params
-        self.settings = settings
 
         # Initialize environments and walks
         self.environments, self.walks, self.visited = self._setup_environments()
@@ -53,7 +51,7 @@ class TEMDataset(IterableDataset):
         environments = [
             data.World(
                 graph,
-                randomise_observations=self.settings.randomise_observations,
+                randomise_observations=self.params["randomise_observations"],
                 shiny=(self.params["shiny"] if np.random.rand() < self.params["shiny_rate"] else None),
             )
             for graph in np.random.choice(self.env_paths, self.params["batch_size"])
@@ -78,7 +76,9 @@ class TEMDataset(IterableDataset):
 
     def _generate_batch(self):
         """Generate a single batch (chunk) of data."""
-        walk_length_center = self.params.get("walk_it_max", 100)
+        walk_length_center = int(self.params.get("walk_length_center", self.params["walk_it_max"]))
+        low = max(1, int(walk_length_center - self.params["walk_it_window"] * 0.5))
+        high = max(low + 1, int(walk_length_center + self.params["walk_it_window"] * 0.5))
 
         # Build batch chunk
         chunk: list[list[list[Any]]] = []
@@ -87,16 +87,12 @@ class TEMDataset(IterableDataset):
                 # Generate new environment and walk
                 self.environments[env_i] = data.World(
                     self.env_paths[np.random.randint(len(self.env_paths))],
-                    randomise_observations=self.settings.randomise_observations,
+                    randomise_observations=self.params["randomise_observations"],
                     shiny=(self.params["shiny"] if np.random.rand() < self.params["shiny_rate"] else None),
                 )
                 self.visited[env_i] = [False for _ in range(self.environments[env_i].n_locations)]
                 walk = self.environments[env_i].generate_walks(
-                    self.params["n_rollout"]
-                    * np.random.randint(
-                        walk_length_center - self.params["walk_it_window"] * 0.5,
-                        walk_length_center + self.params["walk_it_window"] * 0.5,
-                    ),
+                    self.params["n_rollout"] * np.random.randint(low, high),
                     1,
                 )[0]
                 self.walks[env_i] = walk
@@ -118,27 +114,14 @@ class TEMDataset(IterableDataset):
 class TEMLightningModule(pl.LightningModule):
     """Lightning wrapper for TEM model."""
 
-    def __init__(self, params: dict[str, Any], settings):
+    def __init__(self, params: dict[str, Any]):
         super().__init__()
         self.save_hyperparameters(params)
-        self.settings = settings
+        self.params = params
 
         # Create TEM model
         self.tem = model.Model(params)
         self.prev_iter = None
-
-    def on_fit_start(self) -> None:
-        """
-        Sync schedule horizon with Lightning.
-
-        `parameter_iteration()` uses `train_it` for scheduling; in Lightning, the true
-        horizon is `Trainer.max_steps`. This keeps schedules consistent when users
-        override `trainer.max_steps`.
-        """
-        max_steps = getattr(self.trainer, "max_steps", None)
-        if max_steps is not None and max_steps > 0:
-            self.hparams["train_it"] = int(max_steps)
-            self.tem.hyper["train_it"] = int(max_steps)
 
     def forward(self, chunk):
         """Forward pass through TEM."""
@@ -154,6 +137,9 @@ class TEMLightningModule(pl.LightningModule):
         self.tem.hyper["eta"] = eta_new
         self.tem.hyper["hebbian_decay"] = hebbian_decay_new
         self.tem.hyper["p2g_scale_offset"] = p2g_scale_offset
+
+        # Propagate walk_length_center to params for dataset
+        self.params["walk_length_center"] = float(walk_length_center)
 
         # Move loss_weights to device
         loss_weights = loss_weights.to(self.device)

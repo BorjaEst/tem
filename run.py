@@ -23,6 +23,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import training
 from torch_tem.core.model import Parameters
+from torch_tem.settings import DataSettings, ScheduleSettings
 
 
 class RunSettings(BaseSettings):
@@ -33,9 +34,11 @@ class RunSettings(BaseSettings):
     # Model params
     model_params: Parameters = Field(default_factory=Parameters, description="Model parameters (Pydantic TEM Parameters).")
 
-    # Environments
-    envs: list[Path] = Field(default_factory=lambda: [Path("./envs/10x10.json")], description="Environment JSON files for training.")
-    randomise_observations: bool = Field(default=True, description="Randomise observations in environments.")
+    # Data/environment settings
+    data: DataSettings = Field(default_factory=DataSettings, description="Data generation and environment settings.")
+
+    # Training schedule settings
+    schedule: ScheduleSettings = Field(default_factory=ScheduleSettings, description="Training schedules (loss weights, LR, etc).")
 
     # Runtime
     seed: int = Field(default=0, description="Random seed.")
@@ -47,7 +50,7 @@ class RunSettings(BaseSettings):
 
     # Lightning Trainer config (passed to Trainer())
     trainer: dict[str, Any] = Field(
-        default_factory=lambda: {"max_steps": -1, "log_every_n_steps": 10, "enable_progress_bar": True},
+        default_factory=lambda: {"max_steps": 20000, "log_every_n_steps": 10, "enable_progress_bar": True},
         description="PyTorch Lightning Trainer kwargs.",
     )
 
@@ -66,11 +69,14 @@ def main():
 
     settings = RunSettings()
     seed_everything(settings.seed, workers=True)
-    params = settings.model_params.model_dump(by_alias=True)
 
-    # Use train_it from params if max_steps not explicitly set
-    if settings.trainer.get("max_steps") == -1:
-        settings.trainer["max_steps"] = params["train_it"]
+    # Merge all settings into single params dict for model/datamodule/training
+    params = {
+        **settings.model_params.model_dump(),
+        **settings.data.model_dump(),
+        **settings.schedule.model_dump(),
+        "max_steps": int(settings.trainer["max_steps"]),
+    }
 
     # Setup Lightning components
     logger = TensorBoardLogger(
@@ -89,8 +95,8 @@ def main():
 
     # Train
     trainer.fit(
-        model=training.TEMLightningModule(params, settings),
-        datamodule=training.TEMDataModule(settings.envs, params, settings),
+        model=training.TEMLightningModule(params),
+        datamodule=training.TEMDataModule(settings.data.envs, params),
         ckpt_path=str(settings.ckpt_path) if settings.ckpt_path else None,
     )
 

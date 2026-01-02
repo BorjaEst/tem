@@ -29,85 +29,18 @@ from torch_tem.modules import MLP
 
 class Parameters(BaseModel):
     """
-    Pydantic model for Tolman-Eichenbaum Machine parameters.
+    Pydantic model for Tolman-Eichenbaum Machine model parameters.
 
-    This model defines all hyperparameters for the TEM model, including
-    world parameters, training parameters, model architecture, and connectivity matrices.
+    This model defines model architecture and inference parameters only.
+    Training schedules and data generation settings are in torch_tem.settings.
     """
 
-    # -- World parameters
+    # -- World/action parameters
     has_static_action: bool = Field(default=True, description="Does this world include the standing still action?")
     n_actions: int = Field(default=4, description="Number of available actions, excluding the stand still action")
-    explore_bias: int = Field(default=2, description="Bias for explorative behaviour to pick the same action again, to encourage straight walks")
-    shiny_rate: int = Field(default=0, description="Rate at which environments with shiny objects occur between training environments. Set to 0 for no shiny environments at all")
-    shiny_gamma: float = Field(default=0.7, description="Discount factor in calculating Q-values to generate shiny object oriented behaviour")
-    shiny_beta: float = Field(default=1.5, description="Inverse temperature for shiny object behaviour to pick actions based on Q-values")
-    shiny_n: int = Field(default=2, description="Number of shiny objects in the arena")
-    shiny_returns: int = Field(default=15, description="Number of times to return to a shiny object after finding it")
 
-    @computed_field
-    @property
-    def shiny(self) -> dict:
-        """Group all shiny parameters together to pass them to the world object."""
-        return {"gamma": self.shiny_gamma, "beta": self.shiny_beta, "n": self.shiny_n, "returns": self.shiny_returns}
-
-    # -- Training parameters
-    max_steps: int = Field(
-        default=20000, 
-        validation_alias=AliasChoices("train_it", "max_steps"), 
-        serialization_alias="train_it",
-        description="Number of walks to generate"
-    )
-    n_rollout: int = Field(default=20, description="Number of steps to roll out before backpropagation through time")
-    batch_size: int = Field(default=16, description="Batch size: number of walks for training simultaneously")
-    walk_it_min: int = Field(default=25, description="Minimum length of a walk on one environment")
-    walk_it_max: int = Field(default=300, description="Maximum length of a walk on one environment")
-
-    @computed_field
-    @property
-    def walk_it_window(self) -> float:
-        """Width of window from which walk lengths are sampled."""
-        return 0.2 * (self.walk_it_max - self.walk_it_min)
-
-    loss_weights_x: float = Field(default=1.0, description="Weights of prediction losses")
-    loss_weights_p: float = Field(default=1.0, description="Weights of grounded location losses")
-    loss_weights_g: float = Field(default=1.0, description="Weights of abstract location losses")
-    loss_weights_reg_g: float = Field(default=0.01, description="Weights of regularisation losses for g")
-    loss_weights_reg_p: float = Field(default=0.02, description="Weights of regularisation losses for p")
-
-    @computed_field
-    @property
-    def loss_weights(self) -> torch.Tensor:
-        """
-        Weights of losses: re-balance contributions of L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p.
-        """
-        return torch.tensor(
-            [
-                self.loss_weights_p,
-                self.loss_weights_p,
-                self.loss_weights_x,
-                self.loss_weights_x,
-                self.loss_weights_x,
-                self.loss_weights_g,
-                self.loss_weights_reg_g,
-                self.loss_weights_reg_p,
-            ],
-            dtype=torch.float,
-        )
-
-    loss_weights_p_g_it: int = Field(default=2000, description="Number of backprop iters until latent parameter losses (L_p_g, L_p_x, L_g) are all fully weighted")
-    loss_weights_reg_p_it: int = Field(default=4000, description="Number of backprop iters until regularisation losses are fully weighted for p")
-    loss_weights_reg_g_it: int = Field(default=40000000, description="Number of backprop iters until regularisation losses are fully weighted for g")
-    eta_it: int = Field(default=16000, description="Number of backprop iters until eta (rate of remembering) is completely 'on'")
-    lambda_it: int = Field(default=200, description="Number of backprop iters until lambda (rate of forgetting) is completely 'on'")
-    p2g_scale_offset: float = Field(default=0.0, description="How much to use an offset for the standard deviation of the inferred grounded location")
+    # -- Inference parameters
     p2g_sig_val: float = Field(default=10000.0, description="Additional value to offset standard deviation of inferred grounded location")
-    p2g_sig_half_it: int = Field(default=400, description="Number of iterations where offset scaling should be 0.5")
-    p2g_sig_scale_it: int = Field(default=200, description="How fast offset scaling should decrease")
-    lr_max: float = Field(default=9.4e-4, description="Maximum learning rate")
-    lr_min: float = Field(default=8e-5, description="Minimum learning rate")
-    lr_decay_rate: float = Field(default=0.5, description="Rate of learning rate decay")
-    lr_decay_steps: int = Field(default=4000, description="Steps of learning rate decay")
 
     # -- Model parameters
     do_sample: bool = Field(default=False, description="Whether to sample, or assume no noise and simply take mean of all distributions")
@@ -368,10 +301,10 @@ def parameter_iteration(iteration, params):
     # Calculate current learning rate
     lr = max(params["lr_min"] + (params["lr_max"] - params["lr_min"]) * (params["lr_decay_rate"] ** (iteration / params["lr_decay_steps"])), params["lr_min"])
     # Calculate center of walk length window, within which the walk lenghts of new walks are uniformly sampled
+    # Use max_steps (Lightning's Trainer.max_steps) as the training horizon
+    max_steps = max(int(params.get("max_steps", 1)), 1)
     walk_length_center = (
-        params["walk_it_max"]
-        - params["walk_it_window"] * 0.5
-        - min((iteration + 1) / params["train_it"], 1) * (params["walk_it_max"] - params["walk_it_min"] - params["walk_it_window"])
+        params["walk_it_max"] - params["walk_it_window"] * 0.5 - min((iteration + 1) / max_steps, 1) * (params["walk_it_max"] - params["walk_it_min"] - params["walk_it_window"])
     )
     # Calculate current loss weights
     L_p_g = min((iteration + 1) / params["loss_weights_p_g_it"], 1) * params["loss_weights_p"]
@@ -596,7 +529,11 @@ class Model(torch.nn.Module):
             # Append inference memory only if memory is used in grounded location inference
             if self.hyper["use_p_inf"]:
                 # If inference and generative network share common memory: reuse same connectivity, and same memory vectors. Else, create a new empty memory list for inference network
-                M.append(M[0] if self.hyper["common_memory"] else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=x.device))
+                M.append(
+                    M[0]
+                    if self.hyper["common_memory"]
+                    else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=x.device)
+                )
         # Initialise previous abstract location by stacking abstract location prior
         g_inf = [torch.stack([self.g_init[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
         # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing

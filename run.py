@@ -18,7 +18,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 # Own module imports
-from torch_tem import data, parameters, utils
+from torch_tem import data, utils
 from torch_tem.core import model
 
 # Set random seeds for reproducibility
@@ -74,7 +74,7 @@ else:
             shutil.copy2(file, os.path.join(script_path, file))
 
     # Initalise hyperparameters for model
-    params = parameters.parameters()
+    params = model.parameters()
     # Save parameters
     np.save(os.path.join(save_path, "params"), params)
 
@@ -113,7 +113,7 @@ for i in range(i_start, params["train_it"]):
     # Get start time for function timing
     start_time = time.time()
     # Get updated parameters for this backprop iteration
-    eta_new, lambda_new, p2g_scale_offset, lr, walk_length_center, loss_weights = parameters.parameter_iteration(i, params)
+    eta_new, lambda_new, p2g_scale_offset, lr, walk_length_center, loss_weights = model.parameter_iteration(i, params)
     # Update eta and lambda
     tem.hyper["eta"] = eta_new
     tem.hyper["lambda"] = lambda_new

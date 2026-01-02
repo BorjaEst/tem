@@ -19,6 +19,7 @@ import torch_tem.core.model as model
 import torch_tem.data as data
 import torch_tem.figures as figures
 import torch_tem.parameters as parameters
+from torch_tem.modules import LSTM
 
 # Set random seeds for reproducibility
 np.random.seed(0)
@@ -31,7 +32,7 @@ grid = data.World("./graphs/5x5.json", 45)
 params = parameters.parameters(grid)
 
 # Create lstm, to see if that learns well
-lstm = model.LSTM(params["n_x"] + params["n_actions"], 100, params["n_x"], n_a=params["n_actions"])
+lstm = LSTM(params["n_x"] + params["n_actions"], 100, params["n_x"], n_a=params["n_actions"])
 
 # Create set of training worlds, as many as there are batches
 environments = [data.World("./graphs/5x5.json", 45) for batch in range(params["n_batches"])]

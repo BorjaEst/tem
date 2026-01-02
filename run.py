@@ -17,12 +17,9 @@ import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-import torch_tem.core.model as model
-
 # Own module imports
-import torch_tem.data as data
-import torch_tem.parameters as parameters
-import torch_tem.utils as utils
+from torch_tem import data, parameters, utils
+from torch_tem.core import model
 
 # Set random seeds for reproducibility
 np.random.seed(0)

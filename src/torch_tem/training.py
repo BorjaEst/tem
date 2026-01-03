@@ -11,10 +11,11 @@ import torch
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from torch.optim import Adam
 
+from torch_tem import utils
 from torch_tem.core.model import TEMModel, TEMState
 from torch_tem.settings import ScheduleSettings, TrainerSettings
 
-# Loss component names (order matches model.loss() output and schedule loss_weights)
+# Loss component names (order matches training loss component order)
 LOSS_NAMES = ("p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p")
 
 
@@ -144,16 +145,23 @@ class TEMLightningModule(pl.LightningModule):
         if not forward:
             raise ValueError("Empty chunk received - cannot compute loss")
 
+        # Get use_p_inf flag from model (controls L_p_x computation)
+        use_p_inf = self.tem.hyper["use_p_inf"]
+
         # Accumulate loss across timesteps
         total_loss = torch.zeros((), device=self.device)
         components_sum = torch.zeros(8, device=self.device)
         plot_loss = np.zeros(8, dtype=np.float32)
 
         for step in forward:
+            # Compute raw loss components for this timestep
+            step_losses_raw = _compute_step_losses(step, use_p_inf)
+
+            # Apply visited-location filtering and weighting (same logic as before)
             step_loss = []
             for env_i, env_visited in enumerate(visited):
                 if env_visited[step.g[env_i]["id"]]:
-                    step_loss.append(loss_weights * torch.stack([l[env_i] for l in step.L]))
+                    step_loss.append(loss_weights * torch.stack([l[env_i] for l in step_losses_raw]))
                 else:
                     env_visited[step.g[env_i]["id"]] = True
             step_loss_vec = torch.zeros(8, device=self.device) if not step_loss else torch.mean(torch.stack(step_loss, dim=0), dim=0)
@@ -255,3 +263,38 @@ class LossOutput:
     acc_p: float  # Grounded location accuracy (%)
     acc_g: float  # Abstract location accuracy (%)
     acc_gt: float  # Ground truth location accuracy (%)
+
+
+def _compute_step_losses(step: TEMState, use_p_inf: bool) -> list[torch.Tensor]:
+    """Compute the 8 loss components for a single TEM timestep.
+
+    Args:
+        step: TEMState containing all model outputs for this timestep.
+        use_p_inf: Whether to use p_inf (from model.hyper["use_p_inf"]).
+
+    Returns:
+        List of 8 loss tensors [batch_size] in LOSS_NAMES order:
+        [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]
+    """
+    # L_p_g: squared error between inferred grounded location and grounded location from inferred abstract location
+    L_p_g = torch.sum(torch.stack(utils.squared_error(step.p_inf, step.p_gen), dim=0), dim=0)
+
+    # L_p_x: squared error between inferred grounded location and grounded location from sensory input
+    L_p_x = torch.sum(torch.stack(utils.squared_error(step.p_inf, step.p_inf_x), dim=0), dim=0) if use_p_inf else torch.zeros_like(L_p_g)
+
+    # L_x_*: cross-entropy losses for sensory reconstruction from three pathways
+    labels = torch.argmax(step.x, 1)
+    L_x_p = utils.cross_entropy(step.x_logits[0], labels)  # From p_inf -> x
+    L_x_g = utils.cross_entropy(step.x_logits[1], labels)  # From g_inf -> p -> x
+    L_x_gen = utils.cross_entropy(step.x_logits[2], labels)  # From g_prev -> g -> p -> x
+
+    # L_g: squared error between generated and inferred abstract location
+    L_g = torch.sum(torch.stack(utils.squared_error(step.g_inf, step.g_gen), dim=0), dim=0)
+
+    # L_reg_g: L2 regularization on abstract location
+    L_reg_g = torch.sum(torch.stack([torch.sum(g**2, dim=1) for g in step.g_inf], dim=0), dim=0)
+
+    # L_reg_p: L1 regularization on grounded location
+    L_reg_p = torch.sum(torch.stack([torch.sum(torch.abs(p), dim=1) for p in step.p_inf], dim=0), dim=0)
+
+    return [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]

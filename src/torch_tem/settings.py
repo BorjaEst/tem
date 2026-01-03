@@ -122,7 +122,7 @@ class ScheduleSettings(BaseModel):
     @computed_field
     @property
     def loss_weights_base(self) -> torch.Tensor:
-        """Base loss weights vector in model.loss() order."""
+        """Base loss weights vector in training loss component order."""
         return torch.tensor(
             [
                 self.loss_weights_p,

@@ -15,11 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import torch_tem.analyse as analyse
-
-# Own module imports. Note how model module is not imported, since we'll used the model from the training run
-import torch_tem.data as data
-import torch_tem.figures as figures
+from torch_tem import analyse, core, data, figures
 
 # Set random seeds for reproducibility
 np.random.seed(0)
@@ -38,7 +34,7 @@ model_spec.loader.exec_module(model)
 # Load the parameters of the model
 params = torch.load("../Summaries/" + date + "/run" + run + "/model/params_" + index + ".pt", weights_only=False)
 # Create a new tem model with the loaded parameters
-tem = model.Model(params)
+tem = core.TEMModel(params)
 # Load the model weights after training
 model_weights = torch.load("../Summaries/" + date + "/run" + run + "/model/tem_" + index + ".pt", weights_only=False)
 # Set the model weights to the loaded trained model weights

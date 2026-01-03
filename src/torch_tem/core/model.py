@@ -563,7 +563,7 @@ class TEMModel(torch.nn.Module):
                         g_inf[a_i, :] = self.g_init[f]
                     # Reset the sensory experience for this walk
                     for f, x_inf in enumerate(prev_iter[0].x_inf):
-                        x_inf[a_i, :] = torch.zeros(self.hyper["n_x_f"][f])
+                        x_inf[a_i, :].zero_()
         # Return the iteration with reset parameters (or simply the empty array if prev_iter was empty)
         return prev_iter
 

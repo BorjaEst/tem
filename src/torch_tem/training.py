@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 import lightning.pytorch as pl
 import numpy as np
@@ -10,8 +11,11 @@ import torch
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from torch.optim import Adam
 
-from torch_tem.core.model import TEMModel
+from torch_tem.core.model import TEMModel, TEMState
 from torch_tem.settings import ScheduleSettings, TrainerSettings
+
+# Loss component names (order matches model.loss() output and schedule loss_weights)
+LOSS_NAMES = ("p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p")
 
 
 class TEMLightningModule(pl.LightningModule):
@@ -28,8 +32,8 @@ class TEMLightningModule(pl.LightningModule):
         self.save_hyperparameters(params)
 
         # Store TEM model
-        self.tem = model
-        self.prev_iter = None
+        self.tem: TEMModel = model
+        self.prev_iter: Optional[list[TEMState]] = None
 
     def forward(self, chunk):
         """Forward pass through TEM."""
@@ -37,100 +41,114 @@ class TEMLightningModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx) -> STEP_OUTPUT:
         """Single training step."""
-        chunk, visited = batch
-
-        # Compute schedule values for current iteration
-        i = self.global_step
-        eta_new, hebbian_decay_new, p2g_scale_offset, walk_length_center, loss_weights = self._compute_schedule(i)
-
-        # Update model runtime hyperparameters (explicit typed interface)
-        self.tem.set_runtime_hyperparams(
-            eta=eta_new,
-            hebbian_decay=hebbian_decay_new,
-            p2g_scale_offset=p2g_scale_offset,
-        )
-
-        # Update dataset's walk_length_center (via datamodule control surface)
-        if hasattr(self.trainer, "datamodule") and hasattr(self.trainer.datamodule, "set_walk_length_center"):
-            self.trainer.datamodule.set_walk_length_center(walk_length_center)
-
-        # Move loss_weights to device
-        loss_weights = loss_weights.to(self.device)
-
-        # Compute loss and metrics
-        loss, plot_loss, acc_p, acc_g, acc_gt = self._compute_loss_and_metrics(chunk, visited, loss_weights)
-
-        # Log metrics
-        self.log("loss", loss, prog_bar=True)
-        self.log("Losses/Total", loss.detach())
-        for idx, name in enumerate(["p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p"]):
-            self.log(f"Losses/{name}", plot_loss[idx])
-        self.log("Accuracies/p", acc_p)
-        self.log("Accuracies/g", acc_g)
-        self.log("Accuracies/gt", acc_gt)
-
-        return loss
+        return self._shared_step(batch, stage="train")
 
     def validation_step(self, batch, batch_idx) -> STEP_OUTPUT:
         """Single validation step."""
-        chunk, visited = batch
-
-        # Use fixed schedule values (no curriculum during validation)
-        loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
-
-        # Compute loss and metrics (without updating prev_iter)
-        loss, plot_loss, acc_p, acc_g, acc_gt = self._compute_loss_and_metrics(chunk, visited, loss_weights, update_prev_iter=False)
-
-        # Log validation metrics
-        self.log("val/loss", loss, prog_bar=True)
-        self.log("val/Losses/Total", loss.detach())
-        for idx, name in enumerate(["p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p"]):
-            self.log(f"val/Losses/{name}", plot_loss[idx])
-        self.log("val/Accuracies/p", acc_p)
-        self.log("val/Accuracies/g", acc_g)
-        self.log("val/Accuracies/gt", acc_gt)
-
-        return loss
+        return self._shared_step(batch, stage="val")
 
     def test_step(self, batch, batch_idx) -> STEP_OUTPUT:
         """Single test step."""
+        return self._shared_step(batch, stage="test")
+
+    def _shared_step(self, batch, stage: str) -> STEP_OUTPUT:
+        """Shared logic for train/val/test steps.
+
+        Args:
+            batch: Tuple of (chunk, visited).
+            stage: One of "train", "val", "test".
+
+        Returns:
+            Scalar total loss.
+
+        Note:
+            Val/test set runtime hyperparameters (eta, hebbian_decay, p2g_scale_offset)
+            to match the schedule at current global_step for deterministic evaluation,
+            but use fixed base loss_weights and do not update prev_iter or walk curriculum.
+        """
         chunk, visited = batch
 
-        # Use fixed schedule values (no curriculum during test)
-        loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
+        if stage == "train":
+            # Compute schedule values for current iteration
+            i = self.global_step
+            eta_new, hebbian_decay_new, p2g_scale_offset, walk_length_center, loss_weights = self._compute_schedule(i)
 
-        # Compute loss and metrics (without updating prev_iter)
-        loss, plot_loss, acc_p, acc_g, acc_gt = self._compute_loss_and_metrics(chunk, visited, loss_weights, update_prev_iter=False)
+            # Update model runtime hyperparameters
+            self.tem.set_runtime_hyperparams(
+                eta=eta_new,
+                hebbian_decay=hebbian_decay_new,
+                p2g_scale_offset=p2g_scale_offset,
+            )
 
-        # Log test metrics
-        self.log("test/loss", loss)
-        self.log("test/Losses/Total", loss.detach())
-        for idx, name in enumerate(["p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p"]):
-            self.log(f"test/Losses/{name}", plot_loss[idx])
-        self.log("test/Accuracies/p", acc_p)
-        self.log("test/Accuracies/g", acc_g)
-        self.log("test/Accuracies/gt", acc_gt)
+            # Update dataset's walk_length_center (via datamodule control surface)
+            if hasattr(self.trainer, "datamodule") and hasattr(self.trainer.datamodule, "set_walk_length_center"):
+                self.trainer.datamodule.set_walk_length_center(walk_length_center)
 
-        return loss
+            loss_weights = loss_weights.to(self.device)
+            use_prev_iter = True
+            update_prev_iter = True
+        else:
+            # Val/test: set runtime hyperparameters to match schedule at current step
+            # (for deterministic eval), but use fixed base loss weights and no prev_iter
+            i = self.global_step
+            eta_new, hebbian_decay_new, p2g_scale_offset, _, _ = self._compute_schedule(i)
 
-    def _compute_loss_and_metrics(self, chunk, visited, loss_weights: torch.Tensor, update_prev_iter: bool = True) -> tuple[torch.Tensor, np.ndarray, float, float, float]:
-        """Shared loss and metrics computation for train/val/test steps.
+            self.tem.set_runtime_hyperparams(
+                eta=eta_new,
+                hebbian_decay=hebbian_decay_new,
+                p2g_scale_offset=p2g_scale_offset,
+            )
+
+            loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
+            use_prev_iter = False
+            update_prev_iter = False
+
+        # Compute loss and metrics
+        loss_output = self.loss(chunk, visited, loss_weights, use_prev_iter, update_prev_iter)
+
+        # Log metrics with appropriate prefix
+        prefix = "" if stage == "train" else f"{stage}/"
+        self.log(f"{prefix}loss", loss_output.total, prog_bar=True)
+        self.log(f"{prefix}Losses/Total", loss_output.total.detach())
+        for idx, name in enumerate(LOSS_NAMES):
+            self.log(f"{prefix}Losses/{name}", loss_output.plot_loss[idx])
+        self.log(f"{prefix}Accuracies/p", loss_output.acc_p)
+        self.log(f"{prefix}Accuracies/g", loss_output.acc_g)
+        self.log(f"{prefix}Accuracies/gt", loss_output.acc_gt)
+
+        return loss_output.total
+
+    def loss(self, chunk, visited, loss_weights: torch.Tensor, use_prev_iter: bool = True, update_prev_iter: bool = True) -> LossOutput:
+        """Compute loss and metrics for a batch chunk.
 
         Args:
             chunk: Batch chunk data.
             visited: Visit tracking for environments.
-            loss_weights: Loss weights vector.
-            update_prev_iter: Whether to update self.prev_iter (True for training, False for val/test).
+            loss_weights: Loss weights vector [8] (applied to raw loss components).
+            use_prev_iter: Whether to condition forward pass on self.prev_iter.
+            update_prev_iter: Whether to update self.prev_iter after forward pass.
 
         Returns:
-            Tuple of (loss, plot_loss, acc_p, acc_g, acc_gt).
-        """
-        # Forward pass
-        forward = self(chunk)
+            LossOutput with total loss, accumulated components, and accuracies.
 
-        # Compute loss
-        loss = torch.tensor(0.0, device=self.device)
-        plot_loss = 0
+        Note:
+            Both components and plot_loss represent weighted, env-averaged losses
+            summed across timesteps. components is device-resident torch tensor,
+            plot_loss is CPU numpy array for logging.
+        """
+        # Forward pass (use prev_iter only if requested, e.g., training)
+        prev_state = self.prev_iter if use_prev_iter else None
+        forward = self.tem(chunk, prev_state)
+
+        # Guard against empty chunks (shouldn't happen with current dataloader)
+        if not forward:
+            raise ValueError("Empty chunk received - cannot compute loss")
+
+        # Accumulate loss across timesteps
+        total_loss = torch.zeros((), device=self.device)
+        components_sum = torch.zeros(8, device=self.device)
+        plot_loss = np.zeros(8, dtype=np.float32)
+
         for step in forward:
             step_loss = []
             for env_i, env_visited in enumerate(visited):
@@ -138,11 +156,12 @@ class TEMLightningModule(pl.LightningModule):
                     step_loss.append(loss_weights * torch.stack([l[env_i] for l in step.L]))
                 else:
                     env_visited[step.g[env_i]["id"]] = True
-            step_loss = torch.tensor(0, device=self.device) if not step_loss else torch.mean(torch.stack(step_loss, dim=0), dim=0)
-            plot_loss = plot_loss + step_loss.detach().cpu().numpy()
-            loss = loss + torch.sum(step_loss)
+            step_loss_vec = torch.zeros(8, device=self.device) if not step_loss else torch.mean(torch.stack(step_loss, dim=0), dim=0)
+            components_sum = components_sum + step_loss_vec
+            plot_loss = plot_loss + step_loss_vec.detach().cpu().numpy()
+            total_loss = total_loss + torch.sum(step_loss_vec)
 
-        # Update prev_iter for next step (only during training)
+        # Update prev_iter for next training step (only if requested)
         if update_prev_iter:
             self.prev_iter = [forward[-1].detach()]
 
@@ -150,7 +169,14 @@ class TEMLightningModule(pl.LightningModule):
         acc_p, acc_g, acc_gt = np.mean([[np.mean(a) for a in step.correct()] for step in forward], axis=0)
         acc_p, acc_g, acc_gt = [a * 100 for a in (acc_p, acc_g, acc_gt)]
 
-        return loss, plot_loss, acc_p, acc_g, acc_gt
+        return LossOutput(
+            total=total_loss,
+            components=components_sum,  # Accumulated weighted components across chunk
+            plot_loss=plot_loss,
+            acc_p=acc_p,
+            acc_g=acc_g,
+            acc_gt=acc_gt,
+        )
 
     def configure_optimizers(self):
         """Configure optimizer with dynamic learning rate."""
@@ -179,8 +205,6 @@ class TEMLightningModule(pl.LightningModule):
 
     def _compute_schedule(self, iteration: int) -> tuple[float, float, float, float, torch.Tensor]:
         """Compute all schedule values for current iteration."""
-        import numpy as np
-
         s = self.schedule_settings
         t = self.trainer_settings
 
@@ -208,3 +232,26 @@ class TEMLightningModule(pl.LightningModule):
         loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p])
 
         return eta, lamb, p2g_scale_offset, walk_length_center, loss_weights
+
+
+@dataclass
+class LossOutput:
+    """Output from loss computation containing total loss, components, and metrics.
+
+    Attributes:
+        total: Scalar total loss for backprop (sum of all weighted components).
+        components: Weighted loss components tensor [8], summed across timesteps.
+                   Represents the chunk's total contribution per component (device-resident).
+        plot_loss: Same as components, but as CPU numpy array for logging.
+                  Both are weighted by loss_weights and env-averaged.
+        acc_p: Grounded location accuracy (%).
+        acc_g: Abstract location accuracy (%).
+        acc_gt: Ground truth location accuracy (%).
+    """
+
+    total: torch.Tensor  # Scalar total loss for backprop
+    components: torch.Tensor  # Loss components tensor [8] (device-resident, summed across timesteps)
+    plot_loss: np.ndarray  # Accumulated loss components for logging [8] (weighted, env-averaged)
+    acc_p: float  # Grounded location accuracy (%)
+    acc_g: float  # Abstract location accuracy (%)
+    acc_gt: float  # Ground truth location accuracy (%)

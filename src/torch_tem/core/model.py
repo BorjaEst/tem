@@ -14,6 +14,7 @@ Release v1.0.0: Fully functional pytorch model, without any extensions
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 # Standard modules
@@ -265,6 +266,19 @@ class Parameters(BaseModel):
     model_config = {"populate_by_name": True, "arbitrary_types_allowed": True}
 
 
+@dataclass
+class RuntimeHyperparameters:
+    """Runtime hyperparameters injected by training (not part of model architecture).
+
+    These values are computed by the training schedule and updated each step.
+    They control time-varying aspects of model behavior during training.
+    """
+
+    eta: float = 0.0  # Hebbian learning rate (rate of remembering)
+    hebbian_decay: float = 0.9999  # Hebbian decay factor (rate of forgetting)
+    p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
+
+
 # This specifies how parameters are updated at every backpropagation iteration/gradient update
 def parameter_iteration(iteration, params):
     # Calculate eta (rate of remembering) and hebian decay (rate of forgetting) for Hebbian memory updates
@@ -302,8 +316,25 @@ class Model(torch.nn.Module):
         super(Model, self).__init__()
         # Copy hyperparameters (e.g. network sizes) from parameter dict, usually generated from parameters() in parameters.py
         self.hyper = copy.deepcopy(params)
+
+        # Initialize runtime hyperparameters with safe defaults
+        # These will be updated by training before each forward pass
+        self.runtime = RuntimeHyperparameters()
+
         # Create trainable parameters
         self.init_trainable()
+
+    def set_runtime_hyperparams(self, eta: float, hebbian_decay: float, p2g_scale_offset: float) -> None:
+        """Set runtime hyperparameters (called by training loop each step).
+
+        Args:
+            eta: Hebbian learning rate (rate of remembering)
+            hebbian_decay: Hebbian decay factor (rate of forgetting)
+            p2g_scale_offset: Variance offset scaling for p->g inference
+        """
+        self.runtime.eta = eta
+        self.runtime.hebbian_decay = hebbian_decay
+        self.runtime.p2g_scale_offset = p2g_scale_offset
 
     def _apply(self, fn):
         """Override _apply to move tensors in self.hyper when model is moved to GPU/CPU."""
@@ -731,8 +762,8 @@ class Model(torch.nn.Module):
     def f_sigma_g_mem(self, g_downsampled):
         # Multi layer perceptron to generate standard deviation of abstract location from down-sampled abstract location, obtained by summing over sensory dimension of grounded location
         sigma = self.MLP_sigma_g_mem(g_downsampled)
-        # Not in paper, but also offset this sigma over training, so you can reduce influence of inferred p early on
-        return [sigma[f] + self.hyper["p2g_scale_offset"] * self.hyper["p2g_sig_val"] for f in range(self.hyper["n_f"])]
+        # Not in paper, but also offset this sigma over training, so you can reduce influence of inferred p early on (from runtime, not hyper)
+        return [sigma[f] + self.runtime.p2g_scale_offset * self.hyper["p2g_sig_val"] for f in range(self.hyper["n_f"])]
 
     def f_mu_g_shiny(self, shiny):
         # Multi layer perceptron to generate mean of abstract location from boolean location shiny-ness
@@ -820,8 +851,8 @@ class Model(torch.nn.Module):
         if do_hierarchical_connections:
             M_new = M_new * self.hyper["p_update_mask"]
         # Store grounded location in attractor network memory with weights M by Hebbian learning of pattern
-        hebbian_decay = self.hyper.get("hebbian_decay")
-        M = torch.clamp(hebbian_decay * M_prev + self.hyper["eta"] * M_new, min=-1, max=1)
+        # Rate of remembering controlled by eta, rate of forgetting by hebbian_decay (from runtime, not hyper)
+        M = torch.clamp(self.runtime.hebbian_decay * M_prev + self.runtime.eta * M_new, min=-1, max=1)
         return M
 
 

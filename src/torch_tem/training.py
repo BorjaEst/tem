@@ -179,10 +179,12 @@ class TEMLightningModule(pl.LightningModule):
         i = self.global_step
         eta_new, hebbian_decay_new, p2g_scale_offset, walk_length_center, loss_weights = self._compute_schedule(i)
 
-        # Update model hyperparameters
-        self.tem.hyper["eta"] = eta_new
-        self.tem.hyper["hebbian_decay"] = hebbian_decay_new
-        self.tem.hyper["p2g_scale_offset"] = p2g_scale_offset
+        # Update model runtime hyperparameters (explicit typed interface)
+        self.tem.set_runtime_hyperparams(
+            eta=eta_new,
+            hebbian_decay=hebbian_decay_new,
+            p2g_scale_offset=p2g_scale_offset,
+        )
 
         # Update dataset's walk_length_center (via datamodule control surface)
         if hasattr(self.trainer, "datamodule") and hasattr(self.trainer.datamodule, "set_walk_length_center"):

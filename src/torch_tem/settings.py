@@ -21,6 +21,14 @@ class DataSettings(BaseModel):
     batch_size: int = Field(default=16, description="Number of parallel walks.")
     n_rollout: int = Field(default=20, description="Steps per truncated BPTT chunk.")
 
+    # Validation and test settings (optional, disabled by default)
+    enable_validation: bool = Field(default=False, description="Enable validation loop during training.")
+    enable_test: bool = Field(default=False, description="Enable test loop after training.")
+    val_batches: int = Field(default=10, description="Number of batches per validation epoch (finite).")
+    test_batches: int = Field(default=10, description="Number of batches per test epoch (finite).")
+    val_seed: int = Field(default=42, description="Random seed for validation dataset (deterministic).")
+    test_seed: int = Field(default=43, description="Random seed for test dataset (deterministic).")
+
     # World exploration
     explore_bias: int = Field(default=2, description="Bias for explorative behaviour to pick the same action again, to encourage straight walks")
 

@@ -26,17 +26,21 @@ Examples:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
+import torch
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import training
-from torch_tem.core.model import Model, Parameters
+from torch_tem import core, data, training
+from torch_tem.core import Parameters
 from torch_tem.settings import CheckpointSettings, DataSettings, LoggerSettings, ScheduleSettings, TrainerSettings
+
+# Configure PyTorch for better performance on modern GPUs
+torch.set_float32_matmul_precision("medium")
 
 
 # ============================================================================
@@ -100,7 +104,7 @@ if __name__ == "__main__":
 
     # Step 3: Construct the TEM model from architecture parameters
     # model_dump() converts the Pydantic Parameters model to a plain dict
-    tem_model = Model(settings.model_params.model_dump())
+    tem_model = core.Model(settings.model_params.model_dump())
 
     # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control
@@ -120,7 +124,7 @@ if __name__ == "__main__":
         # Lightning module: training step, optimizer, schedule computation
         training.TEMLightningModule(tem_model, settings.schedule, settings.trainer),
         # Data module: generates environment walks and batches
-        datamodule=training.TEMDataModule(settings.data, settings.schedule),
+        datamodule=data.TEMDataModule(settings.data, settings.schedule),
         # Optional: resume from checkpoint
         ckpt_path=str(settings.ckpt_path) if settings.ckpt_path else None,
     )

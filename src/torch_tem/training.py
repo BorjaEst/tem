@@ -2,169 +2,33 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any, Optional
 
 import lightning.pytorch as pl
 import numpy as np
 import torch
 from lightning.pytorch.utilities.types import STEP_OUTPUT
-from pydantic import BaseModel, Field
 from torch.optim import Adam
-from torch.utils.data import IterableDataset
-from torch.utils.tensorboard import SummaryWriter
 
-from torch_tem import data, utils
-from torch_tem.core import model
-from torch_tem.core.model import Parameters
-from torch_tem.settings import DataSettings, ScheduleSettings, TrainerSettings
-
-
-class TEMDataModule(pl.LightningDataModule):
-    """Lightning DataModule for TEM training."""
-
-    def __init__(self, data_settings: DataSettings, schedule_settings: ScheduleSettings):
-        super().__init__()
-        self.data_settings = data_settings
-        self.schedule_settings = schedule_settings
-        self.dataset: Optional[TEMDataset] = None
-
-    def setup(self, stage: str = None):
-        """Setup is called on every process."""
-        pass
-
-    def train_dataloader(self):
-        """Return training dataloader (iterable dataset)."""
-        self.dataset = TEMDataset(
-            self.data_settings,
-            walk_it_min=self.schedule_settings.walk_it_min,
-            walk_it_max=self.schedule_settings.walk_it_max,
-            walk_it_window=self.schedule_settings.walk_it_window,
-        )
-        return self.dataset
-
-    def set_walk_length_center(self, value: float):
-        """Control surface: set walk length center (called by trainer during training)."""
-        if self.dataset is not None:
-            self.dataset.walk_length_center = value
-
-
-class TEMDataset(IterableDataset):
-    """Iterable dataset that generates TEM batches on-the-fly."""
-
-    def __init__(self, data_settings: DataSettings, walk_it_min: int, walk_it_max: int, walk_it_window: float):
-        super().__init__()
-        self.data_settings = data_settings
-        self.env_paths = [str(p) for p in data_settings.envs]
-
-        # Walk curriculum bounds (owned by schedule, injected here)
-        self.walk_it_min = walk_it_min
-        self.walk_it_max = walk_it_max
-        self.walk_it_window = walk_it_window
-        self._walk_length_center = walk_it_max  # Default to max
-
-        # Initialize environments and walks
-        self.environments, self.walks, self.visited = self._setup_environments()
-
-    def _setup_environments(self):
-        """Initialize training environments, walks, and visit tracking."""
-        environments = [
-            data.World(
-                graph,
-                randomise_observations=self.data_settings.randomise_observations,
-                shiny=(self.data_settings.shiny if np.random.rand() < self.data_settings.shiny_rate else None),
-            )
-            for graph in np.random.choice(self.env_paths, self.data_settings.batch_size)
-        ]
-
-        visited = [[False for _ in range(env.n_locations)] for env in environments]
-
-        walks = [
-            env.generate_walks(
-                self.data_settings.n_rollout * np.random.randint(self.walk_it_min, self.walk_it_max),
-                1,
-            )[0]
-            for env in environments
-        ]
-
-        return environments, walks, visited
-
-    @property
-    def walk_length_center(self) -> float:
-        """Current center of walk length sampling window (updated by trainer)."""
-        return self._walk_length_center
-
-    @walk_length_center.setter
-    def walk_length_center(self, value: float):
-        """Update walk length center (called by LightningModule during training)."""
-        self._walk_length_center = value
-
-    def __iter__(self):
-        """Generate batches indefinitely."""
-        while True:
-            yield self._generate_batch()
-
-    def _generate_batch(self):
-        """Generate a single batch (chunk) of data."""
-        walk_length_center = int(self._walk_length_center)
-        low = max(1, int(walk_length_center - self.walk_it_window * 0.5))
-        high = max(low + 1, int(walk_length_center + self.walk_it_window * 0.5))
-
-        # Build batch chunk
-        chunk: list[list[list[Any]]] = []
-        for env_i, walk in enumerate(self.walks):
-            if len(walk) < self.data_settings.n_rollout:
-                # Generate new environment and walk
-                self.environments[env_i] = data.World(
-                    self.env_paths[np.random.randint(len(self.env_paths))],
-                    randomise_observations=self.data_settings.randomise_observations,
-                    shiny=(self.data_settings.shiny if np.random.rand() < self.data_settings.shiny_rate else None),
-                )
-                self.visited[env_i] = [False for _ in range(self.environments[env_i].n_locations)]
-                walk = self.environments[env_i].generate_walks(
-                    self.data_settings.n_rollout * np.random.randint(low, high),
-                    1,
-                )[0]
-                self.walks[env_i] = walk
-
-            for step in range(self.data_settings.n_rollout):
-                if len(chunk) < self.data_settings.n_rollout:
-                    chunk.append([[comp] for comp in walk.pop(0)])
-                else:
-                    for comp_i, comp in enumerate(walk.pop(0)):
-                        chunk[step][comp_i].append(comp)
-
-        # Stack observations
-        for i_step, step in enumerate(chunk):
-            chunk[i_step][1] = torch.stack(step[1], dim=0)
-
-        return chunk, self.visited
+from torch_tem.core.model import Model
+from torch_tem.settings import ScheduleSettings, TrainerSettings
 
 
 class TEMLightningModule(pl.LightningModule):
     """Lightning wrapper for TEM model."""
 
-    def __init__(
-        self,
-        tem_model: model.Model,
-        schedule_settings: ScheduleSettings,
-        trainer_settings: TrainerSettings,
-    ):
+    def __init__(self, model: Model, scheduling: ScheduleSettings, training: TrainerSettings):
         super().__init__()
         # Store settings for schedule computation
-        self.schedule_settings = schedule_settings
-        self.trainer_settings = trainer_settings
+        self.schedule_settings = scheduling
+        self.trainer_settings = training
 
         # Save hyperparameters (namespaced for clarity)
-        self.save_hyperparameters(
-            {
-                "schedule": schedule_settings.model_dump(),
-                "trainer": trainer_settings.model_dump(),
-            }
-        )
+        params = {"schedule": scheduling.model_dump(), "trainer": training.model_dump()}
+        self.save_hyperparameters(params)
 
         # Store TEM model
-        self.tem = tem_model
+        self.tem = model
         self.prev_iter = None
 
     def forward(self, chunk):
@@ -193,6 +57,74 @@ class TEMLightningModule(pl.LightningModule):
         # Move loss_weights to device
         loss_weights = loss_weights.to(self.device)
 
+        # Compute loss and metrics
+        loss, plot_loss, acc_p, acc_g, acc_gt = self._compute_loss_and_metrics(chunk, visited, loss_weights)
+
+        # Log metrics
+        self.log("loss", loss, prog_bar=True)
+        self.log("Losses/Total", loss.detach())
+        for idx, name in enumerate(["p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p"]):
+            self.log(f"Losses/{name}", plot_loss[idx])
+        self.log("Accuracies/p", acc_p)
+        self.log("Accuracies/g", acc_g)
+        self.log("Accuracies/gt", acc_gt)
+
+        return loss
+
+    def validation_step(self, batch, batch_idx) -> STEP_OUTPUT:
+        """Single validation step."""
+        chunk, visited = batch
+
+        # Use fixed schedule values (no curriculum during validation)
+        loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
+
+        # Compute loss and metrics (without updating prev_iter)
+        loss, plot_loss, acc_p, acc_g, acc_gt = self._compute_loss_and_metrics(chunk, visited, loss_weights, update_prev_iter=False)
+
+        # Log validation metrics
+        self.log("val/loss", loss, prog_bar=True)
+        self.log("val/Losses/Total", loss.detach())
+        for idx, name in enumerate(["p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p"]):
+            self.log(f"val/Losses/{name}", plot_loss[idx])
+        self.log("val/Accuracies/p", acc_p)
+        self.log("val/Accuracies/g", acc_g)
+        self.log("val/Accuracies/gt", acc_gt)
+
+        return loss
+
+    def test_step(self, batch, batch_idx) -> STEP_OUTPUT:
+        """Single test step."""
+        chunk, visited = batch
+
+        # Use fixed schedule values (no curriculum during test)
+        loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
+
+        # Compute loss and metrics (without updating prev_iter)
+        loss, plot_loss, acc_p, acc_g, acc_gt = self._compute_loss_and_metrics(chunk, visited, loss_weights, update_prev_iter=False)
+
+        # Log test metrics
+        self.log("test/loss", loss)
+        self.log("test/Losses/Total", loss.detach())
+        for idx, name in enumerate(["p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p"]):
+            self.log(f"test/Losses/{name}", plot_loss[idx])
+        self.log("test/Accuracies/p", acc_p)
+        self.log("test/Accuracies/g", acc_g)
+        self.log("test/Accuracies/gt", acc_gt)
+
+        return loss
+
+    def _compute_loss_and_metrics(self, chunk, visited, loss_weights: torch.Tensor, update_prev_iter: bool = True) -> tuple[torch.Tensor, np.ndarray, float, float, float]:
+        """Shared loss and metrics computation for train/val/test steps.
+
+        Args:
+            chunk: Batch chunk data.
+            visited: Visit tracking for environments.
+            loss_weights: Loss weights vector.
+            update_prev_iter: Whether to update self.prev_iter (True for training, False for val/test).
+
+        Returns:
+            Tuple of (loss, plot_loss, acc_p, acc_g, acc_gt).
+        """
         # Forward pass
         forward = self(chunk)
 
@@ -210,23 +142,15 @@ class TEMLightningModule(pl.LightningModule):
             plot_loss = plot_loss + step_loss.detach().cpu().numpy()
             loss = loss + torch.sum(step_loss)
 
-        # Update prev_iter for next step
-        self.prev_iter = [forward[-1].detach()]
+        # Update prev_iter for next step (only during training)
+        if update_prev_iter:
+            self.prev_iter = [forward[-1].detach()]
 
         # Compute accuracies
         acc_p, acc_g, acc_gt = np.mean([[np.mean(a) for a in step.correct()] for step in forward], axis=0)
         acc_p, acc_g, acc_gt = [a * 100 for a in (acc_p, acc_g, acc_gt)]
 
-        # Log metrics
-        self.log("loss", loss, prog_bar=True)
-        self.log("Losses/Total", loss.detach())
-        for idx, name in enumerate(["p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p"]):
-            self.log(f"Losses/{name}", plot_loss[idx])
-        self.log("Accuracies/p", acc_p)
-        self.log("Accuracies/g", acc_g)
-        self.log("Accuracies/gt", acc_gt)
-
-        return loss
+        return loss, plot_loss, acc_p, acc_g, acc_gt
 
     def configure_optimizers(self):
         """Configure optimizer with dynamic learning rate."""

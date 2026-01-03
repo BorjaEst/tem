@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import lightning.pytorch as pl
 import numpy as np
@@ -40,75 +40,57 @@ class TEMLightningModule(pl.LightningModule):
         """Forward pass through TEM."""
         return self.tem(chunk, self.prev_iter)
 
-    def training_step(self, batch, batch_idx) -> STEP_OUTPUT:
+    def training_step(self, batch: Any, batch_idx: int) -> STEP_OUTPUT:
         """Single training step."""
-        return self._shared_step(batch, stage="train")
-
-    def validation_step(self, batch, batch_idx) -> STEP_OUTPUT:
-        """Single validation step."""
-        return self._shared_step(batch, stage="val")
-
-    def test_step(self, batch, batch_idx) -> STEP_OUTPUT:
-        """Single test step."""
-        return self._shared_step(batch, stage="test")
-
-    def _shared_step(self, batch, stage: str) -> STEP_OUTPUT:
-        """Shared logic for train/val/test steps.
-
-        Args:
-            batch: Tuple of (chunk, visited).
-            stage: One of "train", "val", "test".
-
-        Returns:
-            Scalar total loss.
-
-        Note:
-            Val/test set runtime hyperparameters (eta, hebbian_decay, p2g_scale_offset)
-            to match the schedule at current global_step for deterministic evaluation,
-            but use fixed base loss_weights and do not update prev_iter or walk curriculum.
-        """
         chunk, visited = batch
+        i = self.global_step
 
-        if stage == "train":
-            # Compute schedule values for current iteration
-            i = self.global_step
-            eta_new, hebbian_decay_new, p2g_scale_offset, walk_length_center, loss_weights = self._compute_schedule(i)
+        # Update model runtime hyperparameters and datamodule curriculum
+        eta_new, hebbian_decay_new, p2g_scale_offset, walk_length_center, loss_weights = self._compute_schedule(i)
+        self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
+        self._maybe_set_walk_length_center(walk_length_center)
 
-            # Update model runtime hyperparameters
-            self.tem.set_runtime_hyperparams(
-                eta=eta_new,
-                hebbian_decay=hebbian_decay_new,
-                p2g_scale_offset=p2g_scale_offset,
-            )
+        loss_output = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=True, update_prev_iter=True)
+        self._log_step_metrics(prefix="", loss_output=loss_output)
+        return loss_output.total
 
-            # Update dataset's walk_length_center (via datamodule control surface)
-            if hasattr(self.trainer, "datamodule") and hasattr(self.trainer.datamodule, "set_walk_length_center"):
-                self.trainer.datamodule.set_walk_length_center(walk_length_center)
+    def validation_step(self, batch: Any, batch_idx: int) -> STEP_OUTPUT:
+        """Single validation step."""
+        chunk, visited = batch
+        i = self.global_step
 
-            loss_weights = loss_weights.to(self.device)
-            use_prev_iter = True
-            update_prev_iter = True
-        else:
-            # Val/test: set runtime hyperparameters to match schedule at current step
-            # (for deterministic eval), but use fixed base loss weights and no prev_iter
-            i = self.global_step
-            eta_new, hebbian_decay_new, p2g_scale_offset, _, _ = self._compute_schedule(i)
+        # Keep eval deterministic by matching runtime hparams to current global_step.
+        eta_new, hebbian_decay_new, p2g_scale_offset, _, _ = self._compute_schedule(i)
+        self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
 
-            self.tem.set_runtime_hyperparams(
-                eta=eta_new,
-                hebbian_decay=hebbian_decay_new,
-                p2g_scale_offset=p2g_scale_offset,
-            )
+        loss_weights = self.schedule_settings.loss_weights_base
+        loss_output = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=False, update_prev_iter=False)
+        self._log_step_metrics(prefix="val/", loss_output=loss_output)
+        return loss_output.total
 
-            loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
-            use_prev_iter = False
-            update_prev_iter = False
+    def test_step(self, batch: Any, batch_idx: int) -> STEP_OUTPUT:
+        """Single test step."""
+        chunk, visited = batch
+        i = self.global_step
 
-        # Compute loss and metrics
-        loss_output = self.loss(chunk, visited, loss_weights, use_prev_iter, update_prev_iter)
+        # Keep eval deterministic by matching runtime hparams to current global_step.
+        eta_new, hebbian_decay_new, p2g_scale_offset, _, _ = self._compute_schedule(i)
+        self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
 
-        # Log metrics with appropriate prefix
-        prefix = "" if stage == "train" else f"{stage}/"
+        loss_weights = self.schedule_settings.loss_weights_base
+        loss_output = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=False, update_prev_iter=False)
+        self._log_step_metrics(prefix="test/", loss_output=loss_output)
+        return loss_output.total
+
+    def _maybe_set_walk_length_center(self, walk_length_center: float) -> None:
+        """Update datamodule curriculum control surface if present."""
+        datamodule = getattr(self.trainer, "datamodule", None)
+        setter = getattr(datamodule, "set_walk_length_center", None) if datamodule is not None else None
+        if callable(setter):
+            setter(walk_length_center)
+
+    def _log_step_metrics(self, *, prefix: str, loss_output: "LossOutput") -> None:
+        """Log losses + accuracies with an optional prefix."""
         self.log(f"{prefix}loss", loss_output.total, prog_bar=True)
         self.log(f"{prefix}Losses/Total", loss_output.total.detach())
         for idx, name in enumerate(LOSS_NAMES):
@@ -116,8 +98,6 @@ class TEMLightningModule(pl.LightningModule):
         self.log(f"{prefix}Accuracies/p", loss_output.acc_p)
         self.log(f"{prefix}Accuracies/g", loss_output.acc_g)
         self.log(f"{prefix}Accuracies/gt", loss_output.acc_gt)
-
-        return loss_output.total
 
     def loss(self, chunk, visited, loss_weights: torch.Tensor, use_prev_iter: bool = True, update_prev_iter: bool = True) -> LossOutput:
         """Compute loss and metrics for a batch chunk.

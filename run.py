@@ -6,7 +6,7 @@ Tolman-Eichenbaum Machine (TEM) implementation in this repository.
 It wires together:
 
 - Settings parsing via Pydantic Settings (`RunSettings`).
-- Model construction (`torch_tem.core.model.Model`).
+- Model construction (`torch_tem.core.model.TEMModel`).
 - Lightning `Trainer`, logger, and checkpoint callback.
 - Training loop defined in `torch_tem.training`.
 
@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     # Step 3: Construct the TEM model from architecture parameters
     # model_dump() converts the Pydantic Parameters model to a plain dict
-    tem_model = core.Model(settings.model_params.model_dump())
+    tem_model = core.TEMModel(settings.model_params.model_dump())
 
     # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlias
 
 # Standard modules
 import numpy as np
@@ -23,6 +23,7 @@ import torch
 from pydantic import AliasChoices, BaseModel, Field, computed_field
 from scipy.special import comb
 from scipy.stats import truncnorm
+from torch import Tensor
 
 from torch_tem import utils
 from torch_tem.modules import MLP
@@ -310,10 +311,10 @@ def parameter_iteration(iteration, params):
     return eta, lamb, p2g_scale_offset, lr, walk_length_center, loss_weights
 
 
-class Model(torch.nn.Module):
+class TEMModel(torch.nn.Module):
     def __init__(self, params):
         # First call super class init function to set up torch.nn.Module style model and inherit it's functionality
-        super(Model, self).__init__()
+        super(TEMModel, self).__init__()
         # Copy hyperparameters (e.g. network sizes) from parameter dict, usually generated from parameters() in parameters.py
         self.hyper = copy.deepcopy(params)
 
@@ -361,15 +362,15 @@ class Model(torch.nn.Module):
         for g, x, a in walk:
             # If there is no previous iteration at all: all walks are new, initialise a whole new iteration object
             if steps is None:
-                # Use an Iteration object to set initial values before any real iterations, initialising M, x_inf as zero. Set actions to None blank to indicate there was no previous action
+                # Use an TEMState object to set initial values before any real iterations, initialising M, x_inf as zero. Set actions to None blank to indicate there was no previous action
                 steps = [self.init_iteration(g, x, [None for _ in range(len(a))], prev_M)]
             # Perform TEM iteration using transition from previous iteration
             L, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf = self.iteration(x, g, steps[-1].a, steps[-1].M, steps[-1].x_inf, steps[-1].g_inf)
             # Store this iteration in iteration object in steps list
-            steps.append(Iteration(g, x, a, L, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf))
+            steps.append(TEMState(g, x, a, L, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf))
         # The first step is either a step from a previous walk or initialisiation rubbish, so remove it
         steps = steps[1:]
-        # Return steps, which is a list of Iteration objects
+        # Return steps, which is a list of TEMState objects
         return steps
 
     def iteration(self, x, locations, a_prev, M_prev, x_prev, g_prev):
@@ -545,10 +546,10 @@ class Model(torch.nn.Module):
         # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
         x_inf = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x_f"][f]), device=x.device) for f in range(self.hyper["n_f"])]
         # And construct new iteration for that g, x, a, and M
-        return Iteration(g=g, x=x, a=a, M=M, x_inf=x_inf, g_inf=g_inf)
+        return TEMState(g=g, x=x, a=a, M=M, x_inf=x_inf, g_inf=g_inf)
 
     def init_walks(self, prev_iter):
-        # Only reset parameters for previous iteration if a previous iteration was actually provided - if it wasn't, all parameters will be reset when creating a fresh Iteration object in init_iteration
+        # Only reset parameters for previous iteration if a previous iteration was actually provided - if it wasn't, all parameters will be reset when creating a fresh TEMState object in init_iteration
         if prev_iter is not None:
             # The supplied previous iteration might have new walks starting, with empty actions. For these walks some parameters need to be reset
             for a_i, a in enumerate(prev_iter[0].a):
@@ -856,39 +857,63 @@ class Model(torch.nn.Module):
         return M
 
 
-class Iteration:
-    def __init__(self, g=None, x=None, a=None, L=None, M=None, g_gen=None, p_gen=None, x_gen=None, x_logits=None, x_inf=None, g_inf=None, p_inf=None):
-        # Copy all inputs
-        self.g = g
-        self.x = x
-        self.a = a
-        self.L = L
-        self.M = M
-        self.g_gen = g_gen
-        self.p_gen = p_gen
-        self.x_gen = x_gen
-        self.x_logits = x_logits
-        self.x_inf = x_inf
-        self.g_inf = g_inf
-        self.p_inf = p_inf
+@dataclass
+class TEMState:
+    """Outputs from a single timestep TEM iteration."""
 
-    def correct(self):
-        # Detach observation and all predictions, moving to CPU first
+    g: Any = None
+    x: Optional[Tensor] = None
+    a: Any = None
+
+    L: Optional[List[Tensor]] = None
+    M: Optional[List[Tensor]] = None
+
+    g_gen: Optional[List[Tensor]] = None
+    p_gen: Optional[List[Tensor]] = None
+
+    x_gen: Optional[Sequence[Tensor]] = None
+    x_logits: Optional[Sequence[Tensor]] = None
+
+    x_inf: Optional[List[Tensor]] = None
+    g_inf: Optional[List[Tensor]] = None
+    p_inf: Optional[List[Tensor]] = None
+
+    def correct(self) -> List[np.ndarray]:
+        """Return per-prediction correctness arrays for the current timestep."""
+        if self.x is None or self.x_gen is None:
+            return []
+
         observation = self.x.detach().cpu().numpy()
         predictions = [tensor.detach().cpu().numpy() for tensor in self.x_gen]
-        # Did the model predict the right observation in this iteration?
-        accuracy = [np.argmax(prediction, axis=-1) == np.argmax(observation, axis=-1) for prediction in predictions]
-        return accuracy
+        return [np.argmax(pred, axis=-1) == np.argmax(observation, axis=-1) for pred in predictions]
 
-    def detach(self):
-        # Detach all tensors contained in this iteration
-        self.L = [tensor.detach() for tensor in self.L]
-        self.M = [tensor.detach() for tensor in self.M]
-        self.g_gen = [tensor.detach() for tensor in self.g_gen]
-        self.p_gen = [tensor.detach() for tensor in self.p_gen]
-        self.x_gen = [tensor.detach() for tensor in self.x_gen]
-        self.x_inf = [tensor.detach() for tensor in self.x_inf]
-        self.g_inf = [tensor.detach() for tensor in self.g_inf]
-        self.p_inf = [tensor.detach() for tensor in self.p_inf]
-        # Return self after detaching everything
-        return self
+    def detach(self) -> "TEMState":
+        """Return a detached copy suitable for storing as `prev_iter`."""
+
+        def _detach(obj: Any) -> Any:
+            if obj is None:
+                return None
+            if torch.is_tensor(obj):
+                return obj.detach()
+            if isinstance(obj, list):
+                return [_detach(v) for v in obj]
+            if isinstance(obj, tuple):
+                return tuple(_detach(v) for v in obj)
+            if isinstance(obj, dict):
+                return {k: _detach(v) for k, v in obj.items()}
+            return obj
+
+        return TEMState(
+            g=self.g,
+            x=_detach(self.x),
+            a=self.a,
+            L=_detach(self.L),
+            M=_detach(self.M),
+            g_gen=_detach(self.g_gen),
+            p_gen=_detach(self.p_gen),
+            x_gen=_detach(self.x_gen),
+            x_logits=_detach(self.x_logits),
+            x_inf=_detach(self.x_inf),
+            g_inf=_detach(self.g_inf),
+            p_inf=_detach(self.p_inf),
+        )

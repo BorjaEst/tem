@@ -10,14 +10,14 @@ import torch
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from torch.optim import Adam
 
-from torch_tem.core.model import Model
+from torch_tem.core.model import TEMModel
 from torch_tem.settings import ScheduleSettings, TrainerSettings
 
 
 class TEMLightningModule(pl.LightningModule):
     """Lightning wrapper for TEM model."""
 
-    def __init__(self, model: Model, scheduling: ScheduleSettings, training: TrainerSettings):
+    def __init__(self, model: TEMModel, scheduling: ScheduleSettings, training: TrainerSettings):
         super().__init__()
         # Store settings for schedule computation
         self.schedule_settings = scheduling

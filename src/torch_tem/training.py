@@ -11,9 +11,10 @@ import torch
 from torch import Tensor
 from torch.optim import Adam
 
-from torch_tem import losses, utils
+from torch_tem import losses, metrics, utils
 from torch_tem.core.model import TEMModel, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
+from torch_tem.metrics import AccuracyX
 from torch_tem.settings import ScheduleSettings, TrainerSettings
 from torch_tem.types import Observation
 
@@ -40,6 +41,7 @@ class TEMLightningModule(pl.LightningModule):
         self.loss_p_fn = losses.GroundedLocationLoss(reduction="none")
         self.loss_g_fn = losses.AbstractLocationLoss(mode="mse", reduction="none")
         self.loss_reg_fn = losses.RegularizationLoss(reduction="none")
+        self.acc_x_fn = metrics.SensoryAccuracy(reduction="none")
 
     def forward(self, chunk):
         """Forward pass through TEM."""
@@ -55,8 +57,9 @@ class TEMLightningModule(pl.LightningModule):
         self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
         self._maybe_set_walk_length_center(walk_length_center)
 
-        loss_output = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=True, update_prev_iter=True)
+        loss_output, accuracies = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=True, update_prev_iter=True)
         self._log_step_metrics(prefix="", loss_output=loss_output)
+        self._log_accuracy_metrics(prefix="", accuracies=accuracies)
         return loss_output.total
 
     def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
@@ -69,8 +72,9 @@ class TEMLightningModule(pl.LightningModule):
         self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
 
         loss_weights = self.schedule_settings.loss_weights_base
-        loss_output = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=False, update_prev_iter=False)
+        loss_output, accuracies = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=False, update_prev_iter=False)
         self._log_step_metrics(prefix="val/", loss_output=loss_output)
+        self._log_accuracy_metrics(prefix="val/", accuracies=accuracies)
         return loss_output.total
 
     def test_step(self, batch: Any, batch_idx: int) -> Tensor:
@@ -83,8 +87,9 @@ class TEMLightningModule(pl.LightningModule):
         self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
 
         loss_weights = self.schedule_settings.loss_weights_base
-        loss_output = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=False, update_prev_iter=False)
+        loss_output, accuracies = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=False, update_prev_iter=False)
         self._log_step_metrics(prefix="test/", loss_output=loss_output)
+        self._log_accuracy_metrics(prefix="test/", accuracies=accuracies)
         return loss_output.total
 
     def _maybe_set_walk_length_center(self, walk_length_center: float) -> None:
@@ -112,7 +117,13 @@ class TEMLightningModule(pl.LightningModule):
         self.log(f"{prefix}Losses/lp", loss_output.p.total)
         self.log(f"{prefix}Losses/lg", loss_output.g.total)
 
-    def loss(self, chunk, visited, loss_weights: torch.Tensor, use_prev_iter: bool = True, update_prev_iter: bool = True) -> AccumLoss:
+    def _log_accuracy_metrics(self, *, prefix: str, accuracies: AccuracyX) -> None:
+        """Log sensory prediction accuracies with an optional prefix."""
+        self.log(f"{prefix}Accuracies/p", accuracies.p)
+        self.log(f"{prefix}Accuracies/g", accuracies.g)
+        self.log(f"{prefix}Accuracies/gt", accuracies.gt)
+
+    def loss(self, chunk, visited, loss_weights: torch.Tensor, use_prev_iter: bool = True, update_prev_iter: bool = True) -> tuple[AccumLoss, AccuracyX]:
         """Compute loss and metrics for a batch chunk.
 
         Args:
@@ -123,7 +134,7 @@ class TEMLightningModule(pl.LightningModule):
             update_prev_iter: Whether to update self.prev_iter after forward pass.
 
         Returns:
-            LossOutput with total loss, accumulated components, and accuracies.
+            Tuple of (LossOutput, AccuracyX) with accumulated losses and accuracies.
 
         Note:
             Both components and plot_loss represent weighted, env-averaged losses
@@ -144,9 +155,16 @@ class TEMLightningModule(pl.LightningModule):
         # Accumulate loss across timesteps
         accum = AccumLoss.zero(device=self.device)
 
+        # Accumulate accuracies over visited timesteps/environments
+        acc_correct = {"p": 0.0, "g": 0.0, "gt": 0.0}
+        acc_total = 0
+
         for step in forward:
             # Compute raw loss components for this timestep
             step_losses = self._step_loss(step, use_p_inf)
+
+            # Compute accuracies for this timestep (per-env, reduction="none")
+            step_accuracies = self.acc_x_fn(step.x_logits, step.x)
 
             # Apply visited-location filtering and weighting
             step_loss = []
@@ -166,6 +184,12 @@ class TEMLightningModule(pl.LightningModule):
                         ]
                     )
                     step_loss.append(loss_weights * env_components)
+
+                    # Accumulate accuracy for this visited env
+                    acc_correct["p"] += step_accuracies.p[env_i].item()
+                    acc_correct["g"] += step_accuracies.g[env_i].item()
+                    acc_correct["gt"] += step_accuracies.gt[env_i].item()
+                    acc_total += 1
                 else:
                     env_visited[step.g[env_i]["id"]] = True
 
@@ -184,7 +208,21 @@ class TEMLightningModule(pl.LightningModule):
         if update_prev_iter:
             self.prev_iter = [forward[-1].detach()]
 
-        return accum
+        # Compute final averaged accuracies
+        if acc_total > 0:
+            final_acc = AccuracyX(
+                p=torch.tensor(acc_correct["p"] / acc_total, device=self.device),
+                g=torch.tensor(acc_correct["g"] / acc_total, device=self.device),
+                gt=torch.tensor(acc_correct["gt"] / acc_total, device=self.device),
+            )
+        else:
+            final_acc = AccuracyX(
+                p=torch.tensor(0.0, device=self.device),
+                g=torch.tensor(0.0, device=self.device),
+                gt=torch.tensor(0.0, device=self.device),
+            )
+
+        return accum, final_acc
 
     def configure_optimizers(self):
         """Configure optimizer with dynamic learning rate."""

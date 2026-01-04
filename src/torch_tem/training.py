@@ -8,8 +8,7 @@ from typing import Any, Optional
 import lightning.pytorch as pl
 import numpy as np
 import torch
-from lightning.pytorch.utilities.types import STEP_OUTPUT
-from pydantic import BaseModel
+from torch import Tensor
 from torch.optim import Adam
 
 from torch_tem import losses, utils
@@ -17,9 +16,6 @@ from torch_tem.core.model import TEMModel, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.settings import ScheduleSettings, TrainerSettings
 from torch_tem.types import Observation
-
-# Loss component names (order matches training loss component order)
-LOSS_NAMES = ("p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p")
 
 
 class TEMLightningModule(pl.LightningModule):
@@ -39,11 +35,17 @@ class TEMLightningModule(pl.LightningModule):
         self.tem: TEMModel = model
         self.prev_iter: Optional[list[TEMState]] = None
 
+        # Instantiate loss modules once (reused across all steps)
+        self.loss_x_fn = losses.SensoryReconstructionLoss(reduction="none")
+        self.loss_p_fn = losses.GroundedLocationLoss(reduction="none")
+        self.loss_g_fn = losses.AbstractLocationLoss(mode="mse", reduction="none")
+        self.loss_reg_fn = losses.RegularizationLoss(reduction="none")
+
     def forward(self, chunk):
         """Forward pass through TEM."""
         return self.tem(chunk, self.prev_iter)
 
-    def training_step(self, batch: Any, batch_idx: int) -> STEP_OUTPUT:
+    def training_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single training step."""
         chunk, visited = batch
         i = self.global_step
@@ -57,7 +59,7 @@ class TEMLightningModule(pl.LightningModule):
         self._log_step_metrics(prefix="", loss_output=loss_output)
         return loss_output.total
 
-    def validation_step(self, batch: Any, batch_idx: int) -> STEP_OUTPUT:
+    def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single validation step."""
         chunk, visited = batch
         i = self.global_step
@@ -71,7 +73,7 @@ class TEMLightningModule(pl.LightningModule):
         self._log_step_metrics(prefix="val/", loss_output=loss_output)
         return loss_output.total
 
-    def test_step(self, batch: Any, batch_idx: int) -> STEP_OUTPUT:
+    def test_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single test step."""
         chunk, visited = batch
         i = self.global_step
@@ -144,7 +146,7 @@ class TEMLightningModule(pl.LightningModule):
 
         for step in forward:
             # Compute raw loss components for this timestep
-            step_losses = _compute_step_losses(step, use_p_inf)
+            step_losses = self._step_loss(step, use_p_inf)
 
             # Apply visited-location filtering and weighting
             step_loss = []
@@ -239,75 +241,21 @@ class TEMLightningModule(pl.LightningModule):
 
         return eta, lamb, p2g_scale_offset, walk_length_center, loss_weights
 
+    def _step_loss(self, step: TEMState, use_p_inf: bool) -> StepLoss:
+        """Compute per-timestep loss using modular loss components.
 
-def _compute_step_losses(step: TEMState, use_p_inf: bool) -> StepLoss:
-    """Compute the 8 loss components for a single TEM timestep.
+        Args:
+            step: TEMState containing model outputs for this timestep.
+            use_p_inf: Whether to compute L_p_x (sensory consistency term).
 
-    Args:
-        step: TEMState containing all model outputs for this timestep.
-        use_p_inf: Whether to use p_inf (from model.hyper["use_p_inf"]).
+        Returns:
+            StepLoss with all components computed via loss modules.
+        """
+        # Use instantiated loss modules (with reduction="none" for per-env outputs)
+        L_x = self.loss_x_fn(step.x_logits, step.x)
+        L_p = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_p_inf)
+        L_g = self.loss_g_fn(step.g_inf, step.g_gen)
+        L_reg = self.loss_reg_fn(step.g_inf, step.p_inf)
 
-    Returns:
-        LossOutput with 8 individual components (shape [batch_size] each).
-        Note: total is NOT computed here (will be computed during accumulation).
-    """
-    # L_p_g: squared error between inferred grounded location and grounded location from inferred abstract location
-    L_p_g = torch.sum(torch.stack(utils.squared_error(step.p_inf, step.p_gen), dim=0), dim=0)
-
-    # L_p_x: squared error between inferred grounded location and grounded location from sensory input
-    L_p_x = torch.sum(torch.stack(utils.squared_error(step.p_inf, step.p_inf_x), dim=0), dim=0) if use_p_inf else torch.zeros_like(L_p_g)
-
-    # L_x_*: cross-entropy losses for sensory reconstruction from three pathways
-    labels = torch.argmax(step.x, 1)
-    L_x_p = utils.cross_entropy(step.x_logits[0], labels)  # From p_inf -> x
-    L_x_g = utils.cross_entropy(step.x_logits[1], labels)  # From g_inf -> p -> x
-    L_x_gen = utils.cross_entropy(step.x_logits[2], labels)  # From g_prev -> g -> p -> x
-
-    # L_g: squared error between generated and inferred abstract location
-    L_g = torch.sum(torch.stack(utils.squared_error(step.g_inf, step.g_gen), dim=0), dim=0)
-
-    # L_reg_g: L2 regularization on abstract location
-    L_reg_g = torch.sum(torch.stack([torch.sum(g**2, dim=1) for g in step.g_inf], dim=0), dim=0)
-
-    # L_reg_p: L1 regularization on grounded location
-    L_reg_p = torch.sum(torch.stack([torch.sum(torch.abs(p), dim=1) for p in step.p_inf], dim=0), dim=0)
-
-    # Return as compositional LossOutput
-    return StepLoss(
-        x=LossX(infer=L_x_p, retrieved=L_x_g, ancestral=L_x_gen),
-        p=LossP(abstract=L_p_g, sensory=L_p_x),
-        g=LossG(transition=L_g),
-        reg=LossReg(g_l2=L_reg_g, p_l1=L_reg_p),
-    )
-
-
-# # Initialize loss components
-# loss_x_fn = losses.SensoryReconstructionLoss()
-# loss_p_fn = losses.GroundedLocationLoss()
-# loss_g_fn = losses.AbstractLocationLoss()
-# loss_reg_fn = losses.RegularizationLoss()
-# loss_total_fn = losses.TEMLoss(config)
-
-# def _new_compute_step_losses(model, o: Observation, state: TEMState) -> StepLoss:
-#     # Extract grounded locations from TEM state for loss computation
-#     p_x, p_g, p = state.grounded
-#     g_gen = model.mec.projection(state.mec.transition_stats.mean)  # Project predicted abstract location
-#     p_gen = model.hpc.retrieve(g_gen, for_inference=False, state=state.hpc)  # Retrieve from generative memory
-
-#     # L_x: Sensory reconstruction from three pathways (teacher forcing)
-#     Lx = [
-#         # self.loss_x_fn(prediction=self.lec.decode(p_x), target=x),  # From sensory retrieval
-#         loss_x_fn(prediction=model.lec.decode(p_g), target=o),  # From abstract retrieval
-#         loss_x_fn(prediction=model.lec.decode(p), target=o),  # From inference
-#         loss_x_fn(prediction=model.lec.decode(p_gen), target=o),  # From generative prediction
-#     ]
-#     # L_p: Grounded location consistency (inference matches memory retrieval)
-#     Lp = loss_p_fn(p=p, p_g=p_g, p_x=p_x)
-#     # L_g: Abstract location KL divergence (posterior vs prior)
-#     Lg = loss_g_fn(g=state.abstract_location, g_gen=state.transition_stats)
-
-#     # Regularization losses
-#     L_reg_g, L_reg_p = loss_reg_fn(g=state.abstract_location, p=p)
-
-#     # Compute total ELBO
-#     return loss_total_fn(sum(Lx), Lp, Lg, L_reg_g, L_reg_p)
+        # Return as compositional LossOutput
+        return StepLoss(x=L_x, p=L_p, g=L_g, reg=L_reg)

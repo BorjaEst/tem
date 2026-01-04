@@ -21,6 +21,38 @@ These losses collectively enforce consistency between the "What" (LEC sensory pa
 and "Where" (MEC spatial pathway), enabling the model to generalize spatial knowledge
 across different sensory contexts.
 
+Loss Mode Architecture Decision
+=================================
+
+This implementation supports both "surrogate ELBO" (mean-only) and "full ELBO"
+(probabilistic) training modes for the abstract location loss (L_g).
+
+**MSE Mode (default, legacy-compatible)**:
+- Uses simple squared error: 0.5 * ||g_inf - g_gen||²
+- Matches the paper's approach for tasks without uncertainty
+- Faster computation, stable gradients
+- Sufficient when environment is fully observable and deterministic
+- Default to preserve legacy training dynamics
+
+**KL Mode (probabilistic ELBO)**:
+- Uses KL divergence with learned uncertainty
+- Requires Transition dataclass with .mean and .uncertainty
+- Enables Bayesian treatment of spatial uncertainty
+- Useful for partially observable or stochastic environments
+
+Migration Path
+--------------
+1. Legacy code uses MSE mode for reproducibility (mode='mse')
+2. New architectures can opt into KL mode via LossConfig.lg_mode
+3. Both modes produce LossG dataclass for uniform interface
+
+Implementation Notes
+--------------------
+- All squared errors include 0.5 factor by convention (matching utils.squared_error)
+- Loss modules return dataclasses (LossX, LossP, LossG, LossReg) not scalars
+- Reduction is configurable: 'none' (per-env), 'sum', or 'mean'
+- Training loop uses reduction='none' for per-env weighting and masking
+
 References:
     Whittington et al. (2020). The Tolman-Eichenbaum Machine: Unifying Space and
     Relational Memory through Generalization in the Hippocampal Formation.
@@ -48,6 +80,12 @@ class LossConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    # ===================================================================================
+    # LOSS COMPUTATION MODE
+    # ===================================================================================
+
+    lg_mode: Literal["mse", "kl"] = Field(default="mse", description="Abstract location loss mode: 'mse'(legacy surrogate), 'kl'(KL divergence)")
 
     # ===================================================================================
     # LOSS WEIGHTS
@@ -287,41 +325,40 @@ class SensoryReconstructionLoss(nn.Module):
         super().__init__()
         self.reduction = reduction
 
-    def forward(self, prediction: SensoryPrediction, target: Tensor) -> Tensor:
-        """Compute L_x using categorical cross-entropy.
+    def forward(self, x_logits: list[Tensor], x: Tensor) -> LossX:
+        """Compute L_x for all three pathways using categorical cross-entropy.
 
         Args:
-            prediction: Predicted sensory observation containing:
-                - logits: List of unnormalized log-probabilities (multi-scale).
-                - values: List of softmax-normalized probabilities.
-            target: Ground truth observation. Can be:
+            x_logits: List of 3 logit tensors [infer, retrieved, ancestral].
+                Each tensor has shape (B, n_classes).
+            x: Ground truth observation. Can be:
+                - One-hot encoded: shape (B, n_classes)
                 - Class indices: shape (B,) or (B, 1)
-                - One-hot encoded: shape (B, C) where C is number of classes
 
         Returns:
-            Scalar loss value.
+            LossX dataclass with per-pathway losses.
 
         Note:
-            Uses the reduction method specified in __init__.
+            Uses the reduction method specified in __init__ (default 'sum').
+            Returns per-env vectors [B] when reduction='none', scalars otherwise.
         """
-        # Extract logits from the highest frequency scale (index 0)
-        # Multi-scale predictions allow hierarchical sensory processing,
-        # but for the main reconstruction loss we use the finest resolution
-        logits = prediction.logits[0]
-
-        # Handle different target formats flexibly
-        if target.dim() == 1 or (target.dim() == 2 and target.shape[1] == 1):
-            # Class indices: (B,) or (B, 1)
-            # Convert to 1D long tensor for cross_entropy
-            loss = F.cross_entropy(logits, target.view(-1).long(), reduction=self.reduction)
-        elif target.dim() == 2 and target.shape[1] == logits.shape[1]:
-            # One-hot or soft targets: (B, C)
-            # Cross-entropy handles both hard (one-hot) and soft (probability) targets
-            loss = F.cross_entropy(logits, target, reduction=self.reduction)
+        # Extract class labels from ground truth observation
+        if x.dim() == 2 and x.shape[1] > 1:
+            # One-hot encoded: take argmax
+            labels = torch.argmax(x, dim=1)
         else:
-            raise ValueError(f"Shape mismatch: logits {logits.shape}, target {target.shape}")
+            # Already class indices
+            labels = x.view(-1).long()
 
-        return loss
+        # Compute cross-entropy for each pathway
+        # x_logits[0]: p_inf → x (inferred grounded location)
+        # x_logits[1]: g_inf → p → x (retrieved via abstract location)
+        # x_logits[2]: g_prev → g → p → x (ancestral/generative pathway)
+        loss_infer = F.cross_entropy(x_logits[0], labels, reduction=self.reduction)
+        loss_retrieved = F.cross_entropy(x_logits[1], labels, reduction=self.reduction)
+        loss_ancestral = F.cross_entropy(x_logits[2], labels, reduction=self.reduction)
+
+        return LossX(infer=loss_infer, retrieved=loss_retrieved, ancestral=loss_ancestral)
 
 
 class AbstractLocationLoss(nn.Module):
@@ -333,7 +370,31 @@ class AbstractLocationLoss(nn.Module):
     1. Path Integration (Prior): Where you should be based on movement alone
     2. Landmark Correction (Posterior): Where you are after sensory correction
 
-    Mathematical Formulation:
+    Dual-Mode Architecture:
+        This module supports two computational modes to accommodate different
+        training paradigms:
+
+        **MSE Mode (default, legacy-compatible)**:
+            L_g = ||g_inf - g_gen||²
+            Simple squared error between inferred and generated abstract locations.
+            Matches the paper's "mean-only surrogate" loss for tasks without uncertainty.
+            This is the default to preserve legacy training dynamics.
+
+        **KL Mode (probabilistic ELBO)**:
+            L_g = D_KL( q(g | x, a) || p(g | a) )
+            Analytical KL divergence assuming Gaussian prior with learned uncertainty.
+            Approximates posterior as delta function at μ_post.
+
+            KL ≈ 0.5 * ((μ_post - μ_prior) / σ_prior)² + ln(σ_prior)
+
+            The first term is Mahalanobis distance (uncertainty-weighted squared error),
+            and the second is the entropy of the prior.
+
+    Usage:
+        - For reproducing legacy results: use mode='mse' (default)
+        - For probabilistic TEM with uncertainty: use mode='kl'
+
+    Mathematical Formulation (KL mode):
         L_g = D_KL( q(g | x, a) || p(g | a) )
 
     where:
@@ -342,86 +403,90 @@ class AbstractLocationLoss(nn.Module):
         - a: Action taken
         - q(g | x, a): Posterior after incorporating sensory evidence
         - p(g | a): Prior from path integration alone
-
-    Implementation:
-        We compute an analytical KL divergence assuming:
-        - Prior p(g|a) is Gaussian with learned mean μ_prior and std σ_prior
-        - Posterior q(g|x,a) is approximated as a delta function at μ_post
-
-        This gives:
-        KL ≈ 0.5 * ((μ_post - μ_prior) / σ_prior)² + ln(σ_prior)
-
-        The first term is the Mahalanobis distance (squared error normalized by
-        uncertainty), and the second is the entropy of the prior.
-
-    Intuition:
-        If this loss is high, the grid cells are failing to predict future location
-        from movement, requiring constant sensory correction. Training reduces this
-        by learning accurate transition models.
     """
 
-    def __init__(self, reduction: Literal["sum", "mean"] = "sum"):
+    def __init__(self, mode: Literal["mse", "kl"] = "mse", reduction: Literal["sum", "mean"] = "sum"):
         """Initialize AbstractLocationLoss.
 
         Args:
+            mode: Computation mode:
+                'mse': Legacy squared error (default for backward compatibility)
+                'kl': Probabilistic KL divergence with uncertainty
             reduction: Specifies the reduction to apply to the output:
                 'sum': Sum the loss over the batch.
                 'mean': Take the mean of the loss over the batch.
                 Default: 'sum'.
         """
         super().__init__()
+        self.mode = mode
         self.reduction = reduction
 
-    def forward(self, g: AbstractLocation, g_gen: Transition) -> Tensor:
-        """Compute L_g using analytical KL divergence.
+    def forward(self, g_inf: AbstractLocation, g_gen: AbstractLocation | Transition) -> LossG:
+        """Compute L_g using either MSE or KL divergence based on mode.
 
         Args:
-            g: Posterior abstract location (inferred from sensory + path integration).
+            g_inf: Inferred abstract location (posterior from sensory + path integration).
                 List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
-            g_gen: Prior abstract location (from path integration alone).
-                Contains:
-                - mean: List of predicted location means
-                - uncertainty: List of predicted location standard deviations
+            g_gen: Generated/predicted abstract location.
+                For MSE mode: List of tensors (same structure as g_inf)
+                For KL mode: Transition dataclass with mean and uncertainty
 
         Returns:
-            Scalar loss value.
+            LossG dataclass with transition loss.
 
         Note:
             Uses the reduction method specified in __init__.
         """
-        total_kl = torch.tensor(0.0, device=g[0].device)
+        if self.mode == "mse":
+            # Legacy surrogate: simple squared error between inferred and generated
+            g_gen_list = g_gen.mean if isinstance(g_gen, Transition) else g_gen
 
-        # Iterate over frequency modules (typically 4-6 modules at different spatial scales)
-        for i, (mu_post, mu_prior, sigma_prior) in enumerate(zip(g, g_gen.mean, g_gen.uncertainty)):
-            # Compute KL divergence between posterior (delta function at mu_post)
-            # and prior (Gaussian with mean mu_prior and std sigma_prior)
-            #
-            # Mathematical derivation:
-            #   KL(δ(g - μ_post) || N(μ_prior, σ_prior²))
-            #   = -ln p(μ_post | μ_prior, σ_prior)
-            #   = 0.5 * ((μ_post - μ_prior) / σ_prior)² + ln(σ_prior) + const
-            #
-            # where the constant (0.5 * ln(2π)) is dropped as it doesn't affect gradients
+            # Accumulate squared errors across all frequency modules
+            loss_per_env = None
+            for g_i, g_g in zip(g_inf, g_gen_list):
+                se = 0.5 * (g_i - g_g).pow(2).sum(dim=-1)  # 0.5 factor by convention, sum over features, keep batch dim: [B]
+                loss_per_env = se if loss_per_env is None else loss_per_env + se
 
-            # Clamp sigma to avoid numerical instability from division by zero
-            # Small sigma means high confidence in the path integration prediction
-            sigma_prior = torch.clamp(sigma_prior, min=1e-6)
+            # Apply reduction
+            if self.reduction == "sum":
+                return LossG(transition=loss_per_env.sum())
+            elif self.reduction == "mean":
+                return LossG(transition=loss_per_env.mean())
+            else:  # reduction == "none"
+                return LossG(transition=loss_per_env)
 
-            # Mahalanobis distance: squared error weighted by inverse uncertainty
-            # High uncertainty → low penalty for mismatch
-            # Low uncertainty → high penalty for mismatch
-            diff = mu_post - mu_prior
-            mahalanobis = 0.5 * (diff / sigma_prior).pow(2)
+        elif self.mode == "kl":
+            # Probabilistic ELBO: KL divergence with uncertainty
+            if not isinstance(g_gen, Transition):
+                raise ValueError(f"KL mode requires g_gen to be Transition with uncertainty, got {type(g_gen)}")
 
-            # Log-determinant term: entropy of the prior distribution
-            # Encourages the model to maintain reasonable uncertainty estimates
-            log_det = torch.log(sigma_prior)
+            # Accumulate KL across frequency modules
+            kl_per_env = None
+            for mu_post, mu_prior, sigma_prior in zip(g_inf, g_gen.mean, g_gen.uncertainty):
+                # Clamp sigma to avoid numerical instability
+                sigma_prior = torch.clamp(sigma_prior, min=1e-6)
 
-            # Sum over all dimensions (batch, grid cells) for this frequency
-            kl_f = (mahalanobis + log_det).sum() if self.reduction == "sum" else (mahalanobis + log_det).mean()
-            total_kl += kl_f
+                # Mahalanobis distance: squared error weighted by inverse uncertainty
+                diff = mu_post - mu_prior
+                mahalanobis = 0.5 * (diff / sigma_prior).pow(2)
 
-        return total_kl
+                # Log-determinant term: entropy of the prior
+                log_det = torch.log(sigma_prior)
+
+                # Sum over features, keep batch dim: [B]
+                kl_f = (mahalanobis + log_det).sum(dim=-1)
+                kl_per_env = kl_f if kl_per_env is None else kl_per_env + kl_f
+
+            # Apply reduction
+            if self.reduction == "sum":
+                return LossG(transition=kl_per_env.sum())
+            elif self.reduction == "mean":
+                return LossG(transition=kl_per_env.mean())
+            else:  # reduction == "none"
+                return LossG(transition=kl_per_env)
+
+        else:
+            raise ValueError(f"Unknown mode: {self.mode}. Expected 'mse' or 'kl'.")
 
 
 class GroundedLocationLoss(nn.Module):
@@ -465,43 +530,52 @@ class GroundedLocationLoss(nn.Module):
         super().__init__()
         self.reduction = reduction
 
-    def forward(self, p: GroundedLocation, p_g: Optional[GroundedLocation] = None, p_x: Optional[GroundedLocation] = None) -> Tensor:
-        """Compute L_p as MSE between inferred and retrieved place cells.
+    def forward(self, p_inf: GroundedLocation, p_gen: GroundedLocation, p_inf_x: Optional[GroundedLocation] = None, use_p_inf: bool = True) -> LossP:
+        """Compute L_p using mean squared error for both pathways.
 
         Args:
-            p: Inferred grounded location (conjunctive code from x ⊗ g).
-                List of tensors, one per frequency. Shape: [(B, n_p_f1), (B, n_p_f2), ...]
-            p_g: Retrieved grounded location (from memory via abstract location g).
-                This represents "Where you think you are → What you expect to see".
-                Optional; if None, this component is skipped.
-            p_x: Retrieved grounded location (from memory via sensory input x).
-                This represents "What you see → Where you might be".
-                Optional; if None, this component is skipped.
+            p_inf: Inferred grounded location (conjunctive place cells).
+                List of tensors, one per frequency module. Shape: [(B, n_p_f1), (B, n_p_f2), ...]
+            p_gen: Grounded location retrieved via abstract location (g_inf → p).
+                Required for L_p_g computation.
+            p_inf_x: Grounded location from sensory memory retrieval (x → p).
+                Used for L_p_x if use_p_inf=True.
+            use_p_inf: Whether to compute L_p_x (sensory consistency term).
+                Set to False to disable this term (returns zeros).
 
         Returns:
-            Scalar loss value.
+            LossP dataclass with abstract and sensory components.
 
         Note:
-            Both p_g and p_x can be provided to enforce consistency across both
-            inference and generative pathways ("teacher forcing").
+            Uses the reduction method specified in __init__.
+            Matches legacy behavior: sum of squared errors across all frequencies.
         """
-        total_loss = torch.tensor(0.0, device=p[0].device)
+        # L_p_g (abstract): consistency between inferred p and p retrieved via g
+        # This is always computed
+        loss_abstract_per_env = None
+        for p_i, p_g in zip(p_inf, p_gen):
+            se = 0.5 * (p_i - p_g).pow(2).sum(dim=-1)  # 0.5 factor by convention, sum over features, keep batch: [B]
+            loss_abstract_per_env = se if loss_abstract_per_env is None else loss_abstract_per_env + se
 
-        # L_p_g: Consistency with generative memory (retrieved from g)
-        # Ensures that inferring location from (x, g) gives similar place cells
-        # as retrieving from memory using g alone
-        if p_g is not None:
-            for p_inf, p_ret in zip(p, p_g):
-                total_loss += F.mse_loss(p_inf, p_ret, reduction=self.reduction)
+        # L_p_x (sensory): consistency between inferred p and p retrieved via x
+        # Only computed if use_p_inf=True and p_inf_x is provided
+        if use_p_inf and p_inf_x is not None:
+            loss_sensory_per_env = None
+            for p_i, p_x in zip(p_inf, p_inf_x):
+                se = 0.5 * (p_i - p_x).pow(2).sum(dim=-1)  # [B]
+                loss_sensory_per_env = se if loss_sensory_per_env is None else loss_sensory_per_env + se
+        else:
+            # Return zeros if disabled (matching legacy behavior)
+            batch_size = p_inf[0].shape[0]
+            loss_sensory_per_env = torch.zeros(batch_size, device=p_inf[0].device, dtype=p_inf[0].dtype)
 
-        # L_p_x: Consistency with inference memory (retrieved from x)
-        # Ensures that inferring location from (x, g) gives similar place cells
-        # as retrieving from memory using x alone
-        if p_x is not None:
-            for p_inf, p_ret in zip(p, p_x):
-                total_loss += F.mse_loss(p_inf, p_ret, reduction=self.reduction)
-
-        return total_loss
+        # Apply reduction
+        if self.reduction == "sum":
+            return LossP(abstract=loss_abstract_per_env.sum(), sensory=loss_sensory_per_env.sum())
+        elif self.reduction == "mean":
+            return LossP(abstract=loss_abstract_per_env.mean(), sensory=loss_sensory_per_env.mean())
+        else:  # reduction == "none"
+            return LossP(abstract=loss_abstract_per_env, sensory=loss_sensory_per_env)
 
 
 class RegularizationLoss(nn.Module):
@@ -537,7 +611,7 @@ class RegularizationLoss(nn.Module):
         super().__init__()
         self.reduction = reduction
 
-    def forward(self, g: AbstractLocation, p: GroundedLocation) -> Tuple[Tensor, Tensor]:
+    def forward(self, g: AbstractLocation, p: GroundedLocation) -> LossReg:
         """Compute regularization penalties.
 
         Args:
@@ -545,79 +619,30 @@ class RegularizationLoss(nn.Module):
             p: Grounded location (place cells). List of tensors per frequency.
 
         Returns:
-            Tuple of (l_reg_g, l_reg_p):
-                - l_reg_g: L2 penalty on grid cells
-                - l_reg_p: L1 penalty on place cells
-        """
-        # L2 regularization on grid cells: penalizes large activations
-        # Σ_f Σ_b Σ_i g_{f,b,i}²
-        if self.reduction == "sum":
-            l_reg_g = sum(g_i.pow(2).sum() for g_i in g)
-        else:
-            l_reg_g = sum(g_i.pow(2).mean() for g_i in g)
-
-        # L1 regularization on place cells: enforces sparsity
-        # Σ_f Σ_b Σ_i |p_{f,b,i}|
-        if self.reduction == "sum":
-            l_reg_p = sum(p_i.abs().sum() for p_i in p)
-        else:
-            l_reg_p = sum(p_i.abs().mean() for p_i in p)
-
-        return l_reg_g, l_reg_p
-
-
-class TEMLoss(nn.Module):
-    """Aggregates all TEM loss components into the final ELBO objective.
-
-    This class combines the three main ELBO components (L_x, L_g, L_p) with
-    optional regularization terms, using learnable or fixed weights to balance
-    their contributions.
-
-    The final objective is:
-        L_total = weights_x * L_x + weights_g * L_g + weights_p * L_p + weights_reg_g * L_reg_g + weights_reg_p * L_reg_p
-
-    Weight Selection Guidelines:
-        - weights_x: Typically 1.0 (baseline)
-        - weights_g: Controls path integration accuracy (0.1 - 1.0)
-        - weights_p: Controls memory consistency (0.1 - 1.0)
-        - weights_reg_g: Prevents grid cell saturation (0.01 - 0.1)
-        - weights_reg_p: Enforces place cell sparsity (0.01 - 0.1)
-
-    These weights may require tuning based on environment complexity and model size.
-    """
-
-    def __init__(self, config: Optional[LossConfig] = None):
-        """Initialize TEM loss aggregator.
-
-        Args:
-            config: Configuration object containing loss weights. If None, uses default weights (all 1.0).
-        """
-        super().__init__()
-        self.config = config or LossConfig()
-
-    def forward(self, lx: Tensor, lp: Tensor, lg: Tensor, l_reg_g: Optional[Tensor] = None, l_reg_p: Optional[Tensor] = None) -> LossOutput:
-        """Compute weighted sum of all loss components.
-
-        Args:
-            lx: Sensory reconstruction loss (from SensoryReconstructionLoss).
-            lp: Grounded location consistency loss (from GroundedLocationLoss).
-            lg: Abstract location KL divergence (from AbstractLocationLoss).
-            l_reg_g: Optional grid cell regularization (from RegularizationLoss).
-            l_reg_p: Optional place cell regularization (from RegularizationLoss).
-
-        Returns:
-            LossOutput containing weighted components.
+            LossReg dataclass with g_l2 and p_l1 components.
 
         Note:
-            This method expects ALREADY weighted inputs (from individual loss modules).
-            The config weights are applied here as additional scaling.
+            Uses the reduction method specified in __init__.
+            Matches legacy: sum over all frequencies and dimensions.
         """
-        # Note: For now, this legacy interface creates a simple LossOutput
-        # In practice, the training loop uses _compute_step_losses directly
-        # This is kept for backward compatibility with the fbdd1b1 branch
+        # L2 regularization on grid cells: penalizes large activations
+        # Σ_f g_{f,b,i}²
+        reg_g_per_env = None
+        for g_f in g:
+            l2 = (g_f**2).sum(dim=-1)  # Sum over features, keep batch: [B]
+            reg_g_per_env = l2 if reg_g_per_env is None else reg_g_per_env + l2
 
-        # Create dummy component structure (this path is not used in current training)
-        # If this is actually called, it means we need to refactor the caller
-        raise NotImplementedError(
-            "TEMLoss.forward() is deprecated. Use _compute_step_losses() in training.py instead. " "This class remains only for backward compatibility documentation."
-        )
+        # L1 regularization on place cells: enforces sparsity
+        # Σ_f |p_{f,b,i}|
+        reg_p_per_env = None
+        for p_f in p:
+            l1 = torch.abs(p_f).sum(dim=-1)  # [B]
+            reg_p_per_env = l1 if reg_p_per_env is None else reg_p_per_env + l1
+
+        # Apply reduction
+        if self.reduction == "sum":
+            return LossReg(g_l2=reg_g_per_env.sum(), p_l1=reg_p_per_env.sum())
+        elif self.reduction == "mean":
+            return LossReg(g_l2=reg_g_per_env.mean(), p_l1=reg_p_per_env.mean())
+        else:  # reduction == "none"
+            return LossReg(g_l2=reg_g_per_env, p_l1=reg_p_per_env)

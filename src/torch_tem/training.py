@@ -40,7 +40,7 @@ from torch.optim import Adam
 from torch_tem import losses, metrics
 from torch_tem.core.model import Rollout, TEMModel, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
-from torch_tem.metrics import AccuracyX
+from torch_tem.metrics import AccuracyCounts, AccuracyX
 from torch_tem.settings import ScheduleSettings, TrainerSettings
 
 
@@ -119,8 +119,7 @@ class TEMLightningModule(pl.LightningModule):
             raise ValueError("forward requires a non-empty chunk")
 
         accum = AccumLoss.zero(device=self.device)
-        acc_correct = {"p": 0.0, "g": 0.0, "gt": 0.0}
-        acc_total = 0
+        acc_counts = AccuracyCounts.zero(device=self.device)
 
         last_state: Optional[TEMState] = None
 
@@ -131,22 +130,12 @@ class TEMLightningModule(pl.LightningModule):
             # Accumulate loss and accuracies
             if step_contrib is not None:
                 accum = accum + step_contrib
-
-            acc_correct["p"] += acc_increments["p"]
-            acc_correct["g"] += acc_increments["g"]
-            acc_correct["gt"] += acc_increments["gt"]
-            acc_total += acc_increments["total"]
+            acc_counts = acc_counts + acc_increments
 
         if last_state is None:
             raise ValueError("Rollout produced no states; check chunk formatting")
 
-        # If no environment contributed (e.g., all first visits), avoid NaNs.
-        denom = float(acc_total) if acc_total > 0 else 1.0
-        final_acc = AccuracyX(
-            p=torch.tensor(acc_correct["p"] / denom, device=self.device),
-            g=torch.tensor(acc_correct["g"] / denom, device=self.device),
-            gt=torch.tensor(acc_correct["gt"] / denom, device=self.device),
-        )
+        final_acc = acc_counts.to_accuracy()
 
         return accum, final_acc, last_state
 
@@ -178,7 +167,7 @@ class TEMLightningModule(pl.LightningModule):
 
         return self.tem.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], memory)
 
-    def model_iteration(self, step: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], dict[str, float]]:
+    def model_iteration(self, step: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyCounts]:
         """Compute visit-masked loss and accuracy for a single timestep.
 
         Implements the revisit gating policy: losses and accuracies are only
@@ -194,30 +183,23 @@ class TEMLightningModule(pl.LightningModule):
             Tuple of:
                 step_loss: Mean loss over contributing environments, or None if
                     all environments are on first visits.
-                accuracy_increments: Dict with keys ``p``, ``g``, ``gt`` (running
-                    sums of correct predictions) and ``total`` (count of
-                    contributing environments).
+                accuracy_counts: :class:`AccuracyCounts` with summed correct
+                    predictions and total count.
         """
         use_p_inf = self.tem.hyper["use_p_inf"]
         step_losses = self.loss_fn(step, use_p_inf)
         step_acc = self.acc_x_fn(step.x_logits, step.x)
 
         losses_per_env: list[StepLoss] = []
-        acc_total = {"p": 0.0, "g": 0.0, "gt": 0.0, "total": 0}
+        acc_total = AccuracyCounts.zero(device=self.device)
 
         for env_i, env_visited in enumerate(visited):
             loc_id = step.g[env_i]["id"]
-
             if not env_contributes_and_update(env_visited, loc_id):
                 continue
 
             losses_per_env.append(env_step_loss(step_losses, env_i))
-
-            acc_inc = env_acc_increments(step_acc, env_i)
-            acc_total["p"] += acc_inc["p"]
-            acc_total["g"] += acc_inc["g"]
-            acc_total["gt"] += acc_inc["gt"]
-            acc_total["total"] += acc_inc["total"]
+            acc_total = acc_total + env_acc_increments(step_acc, env_i)
 
         return mean_step_losses(losses_per_env), acc_total
 
@@ -492,22 +474,21 @@ def env_step_loss(step_losses: LossOutput, env_i: int) -> StepLoss:
     )
 
 
-def env_acc_increments(step_acc: AccuracyX, env_i: int) -> dict[str, float]:
-    """Extract scalar accuracy values for one environment.
+def env_acc_increments(step_acc: AccuracyX, env_i: int) -> AccuracyCounts:
+    """Extract accuracy counts for one environment.
 
     Args:
         step_acc: Batch-level accuracy (possibly unreduced).
         env_i: Environment index to extract.
 
     Returns:
-        Dict with keys ``p``, ``g``, ``gt`` (floats) and ``total`` (count of 1).
+        :class:`AccuracyCounts` with per-pathway correctness and count of 1.
     """
-    return {
-        "p": select_env(step_acc.p, env_i).item(),
-        "g": select_env(step_acc.g, env_i).item(),
-        "gt": select_env(step_acc.gt, env_i).item(),
-        "total": 1,
-    }
+    p = select_env(step_acc.p, env_i)
+    g = select_env(step_acc.g, env_i)
+    gt = select_env(step_acc.gt, env_i)
+    total = torch.ones((), device=p.device, dtype=p.dtype)
+    return AccuracyCounts(p=p, g=g, gt=gt, total=total)
 
 
 def mean_step_losses(losses_per_env: list[StepLoss]) -> Optional[StepLoss]:

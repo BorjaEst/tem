@@ -34,6 +34,85 @@ class AccuracyX:
     gt: Tensor  # x_gen accuracy (ancestral/generative pathway)
 
 
+@dataclass
+class AccuracyCounts:
+    """Accumulator for sensory accuracy computation.
+
+    Stores sums of correct predictions (numerators) and the number of evaluated
+    predictions (denominator). This mirrors the loss accumulation pattern and
+    can be converted to :class:`AccuracyX` at the end of a rollout.
+
+    Attributes:
+        p: Sum of correct predictions from inference pathway.
+        g: Sum of correct predictions from retrieved pathway.
+        gt: Sum of correct predictions from ancestral pathway.
+        total: Total number of evaluated predictions.
+    """
+
+    p: Tensor
+    g: Tensor
+    gt: Tensor
+    total: Tensor
+
+    @classmethod
+    def zero(cls, *, device: torch.device | str, dtype: torch.dtype = torch.float32) -> "AccuracyCounts":
+        """Create a zero-initialized accumulator.
+
+        Args:
+            device: Device for tensor allocation.
+            dtype: Data type for tensors.
+
+        Returns:
+            Zero-initialized :class:`AccuracyCounts`.
+        """
+        z = torch.zeros((), device=device, dtype=dtype)
+        return cls(p=z.clone(), g=z.clone(), gt=z.clone(), total=z.clone())
+
+    def __add__(self, other: "AccuracyCounts") -> "AccuracyCounts":
+        """Add two accuracy accumulators element-wise.
+
+        Args:
+            other: Another :class:`AccuracyCounts` to add.
+
+        Returns:
+            New :class:`AccuracyCounts` with summed components.
+        """
+        return AccuracyCounts(
+            p=self.p + other.p,
+            g=self.g + other.g,
+            gt=self.gt + other.gt,
+            total=self.total + other.total,
+        )
+
+    def __truediv__(self, divisor: int | float) -> "AccuracyCounts":
+        """Divide all components by a scalar.
+
+        Args:
+            divisor: Scalar divisor.
+
+        Returns:
+            New :class:`AccuracyCounts` with scaled components.
+        """
+        return AccuracyCounts(
+            p=self.p / divisor,
+            g=self.g / divisor,
+            gt=self.gt / divisor,
+            total=self.total / divisor,
+        )
+
+    def to_accuracy(self) -> AccuracyX:
+        """Convert accumulated counts to mean accuracies.
+
+        Divides summed correct predictions by total count, handling the
+        zero-denominator case.
+
+        Returns:
+            :class:`AccuracyX` with mean accuracies in [0.0, 1.0].
+        """
+        denom = torch.clamp(self.total, min=1.0)
+        return AccuracyX(p=self.p / denom, g=self.g / denom, gt=self.gt / denom)
+
+
 class SensoryAccuracy(nn.Module):
     """Compute sensory prediction accuracies.
 

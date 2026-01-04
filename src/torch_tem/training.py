@@ -1,4 +1,31 @@
-"""Training loop and utilities for TEM."""
+"""PyTorch Lightning training infrastructure for TEM.
+
+Provides :class:`TEMLightningModule`, a Lightning wrapper that implements the
+complete TEM training loop with visit-masked loss accumulation and curriculum
+scheduling.
+
+Key Features:
+    Streaming rollouts:
+        Losses are accumulated incrementally during iteration (memory-efficient,
+        no intermediate state storage).
+
+    Visit masking:
+        Only revisits contribute to optimization. First visits update the visited
+        mask but are excluded from loss/accuracy computation.
+
+    Stateful batches:
+        Final state from each training batch is detached and reused as the
+        initial state for the next batch (maintains RNN continuity).
+
+    Curriculum scheduling:
+        Learning rate, Hebbian parameters, and walk length are scheduled
+        dynamically during training.
+
+See Also:
+    :class:`torch_tem.losses.TEMLoss`: Loss computation
+    :class:`torch_tem.core.model.TEMModel`: Core TEM model
+    :class:`torch_tem.core.model.Rollout`: Streaming rollout iterator
+"""
 
 from __future__ import annotations
 
@@ -15,42 +42,90 @@ from torch_tem.core.model import Rollout, TEMModel, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.metrics import AccuracyX
 from torch_tem.settings import ScheduleSettings, TrainerSettings
-from torch_tem.types import Observation
 
 
 class TEMLightningModule(pl.LightningModule):
-    """Lightning wrapper for TEM model."""
+    """PyTorch Lightning module for TEM training.
+
+    Integrates TEM model training with PyTorch Lightning, handling:
+        - Visit-masked loss accumulation during streaming rollouts
+        - Dynamic hyperparameter scheduling (learning rate, Hebbian parameters)
+        - Stateful batch processing for recurrent continuity
+        - Curriculum control (walk length annealing)
+        - Metric logging and validation
+
+    The module maintains an internal state (``prev_state``) that carries recurrent
+    memory across training batches. This state is detached after each step to
+    prevent gradient accumulation across batches while preserving memory content.
+
+    Attributes:
+        tem: The wrapped TEM model.
+        loss_fn: Loss computation module.
+        acc_x_fn: Sensory accuracy metric.
+        prev_state: Previous batch's final state (detached).
+        schedule_settings: Hyperparameter schedule configuration.
+        trainer_settings: Training curriculum configuration.
+    """
 
     def __init__(self, model: TEMModel, scheduling: ScheduleSettings, training: TrainerSettings):
+        """Initialize the Lightning module.
+
+        Args:
+            model: TEM model to wrap.
+            scheduling: Schedule settings used for runtime hyperparameters and
+                learning rate.
+            training: Trainer settings (used for curriculum parameters).
+        """
         super().__init__()
-        # Store settings for schedule computation
         self.schedule_settings = scheduling
         self.trainer_settings = training
 
-        # Save hyperparameters (namespaced for clarity)
         params = {"schedule": scheduling.model_dump(), "trainer": training.model_dump()}
         self.save_hyperparameters(params)
 
-        # Store TEM model
         self.tem: TEMModel = model
         self.prev_state: Optional[TEMState] = None
 
-        # Instantiate loss modules once (reused across all steps)
         self.loss_fn = losses.TEMLoss(scheduling.loss)
         self.acc_x_fn = metrics.SensoryAccuracy(reduction="none")
 
-    def forward(self, batch, prev_state=None) -> tuple[LossOutput, AccuracyX, TEMState]:
-        """Forward pass through TEM with streaming loss computation."""
-        chunk, visited = batch
+    def forward(self, batch: Any, prev_state: Optional[TEMState] = None) -> tuple[LossOutput, AccuracyX, TEMState]:
+        """Execute streaming rollout with visit-masked loss accumulation.
 
-        # Accumulate loss across timesteps (streaming, no state list)
+        Iterates through environment steps, computing and accumulating losses only
+        for locations that have been previously visited (revisits). First visits
+        update the visited mask but do not contribute to the loss.
+
+        Args:
+            batch: Tuple ``(chunk, visited)`` where:
+                chunk: Iterable of ``(locations, observations, actions)`` tuples
+                    for one rollout segment.
+                visited: List of per-environment boolean masks ``[env_i][loc_id]``
+                    tracking which locations have been visited. Updated in-place.
+            prev_state: Initial state for the rollout. If None, a fresh state is
+                initialized.
+
+        Returns:
+            Tuple of:
+                loss_output: Accumulated losses over all revisits.
+                accuracies: Mean sensory prediction accuracies.
+                last_state: Final TEM state from the rollout.
+
+        Raises:
+            ValueError: If chunk is empty or rollout produces no states.
+        """
+        chunk, visited = batch
+        if len(chunk) == 0:
+            raise ValueError("forward requires a non-empty chunk")
+
         accum = AccumLoss.zero(device=self.device)
         acc_correct = {"p": 0.0, "g": 0.0, "gt": 0.0}
         acc_total = 0
 
-        # Single-pass rollout with on-the-fly loss computation
+        last_state: Optional[TEMState] = None
+
         for step in Rollout(self.tem, chunk, prev_state):
-            # Process this step: compute loss and update accuracies
+            last_state = step
             step_contrib, acc_increments = self.model_iteration(step, visited)
 
             # Accumulate loss and accuracies
@@ -62,17 +137,38 @@ class TEMLightningModule(pl.LightningModule):
             acc_correct["gt"] += acc_increments["gt"]
             acc_total += acc_increments["total"]
 
-        # Compute final averaged accuracies
+        if last_state is None:
+            raise ValueError("Rollout produced no states; check chunk formatting")
+
+        # If no environment contributed (e.g., all first visits), avoid NaNs.
+        denom = float(acc_total) if acc_total > 0 else 1.0
         final_acc = AccuracyX(
-            p=torch.tensor(acc_correct["p"] / acc_total, device=self.device),
-            g=torch.tensor(acc_correct["g"] / acc_total, device=self.device),
-            gt=torch.tensor(acc_correct["gt"] / acc_total, device=self.device),
+            p=torch.tensor(acc_correct["p"] / denom, device=self.device),
+            g=torch.tensor(acc_correct["g"] / denom, device=self.device),
+            gt=torch.tensor(acc_correct["gt"] / denom, device=self.device),
         )
 
-        return accum, final_acc, step
+        return accum, final_acc, last_state
 
     def init_state(self, batch: Any, memory: Optional[list[Tensor]] = None) -> TEMState:
-        """Create a clean initial state for evaluation (optionally preserving memory)."""
+        """Initialize clean state for validation/test rollouts.
+
+        Creates a fresh initial state while optionally preserving Hebbian memory.
+        Used to reset recurrent state at evaluation boundaries while maintaining
+        learned associations.
+
+        Args:
+            batch: Tuple ``(chunk, visited)`` where chunk[0] provides initial
+                location and observation.
+            memory: Optional Hebbian memory matrices to preserve across episodes.
+                If None, memory is freshly initialized.
+
+        Returns:
+            Fresh :class:`~torch_tem.core.model.TEMState` with given memory.
+
+        Raises:
+            ValueError: If chunk is empty.
+        """
         chunk, _visited = batch
         if len(chunk) == 0:
             raise ValueError("init_state requires a non-empty chunk")
@@ -82,17 +178,30 @@ class TEMLightningModule(pl.LightningModule):
 
         return self.tem.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], memory)
 
-    def model_iteration(self, step: TEMState, visited) -> tuple[Optional[StepLoss], dict[str, float]]:
-        """Process a single rollout step: compute loss and update accuracies.
+    def model_iteration(self, step: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], dict[str, float]]:
+        """Compute visit-masked loss and accuracy for a single timestep.
 
-        This applies a revisit-only gating policy: only environments that have
-        previously visited their current location contribute to the loss.
+        Implements the revisit gating policy: losses and accuracies are only
+        accumulated for environments visiting previously-seen locations. First
+        visits are excluded from optimization but update the visited mask.
+
+        Args:
+            step: Current TEM state containing predictions and ground truth.
+            visited: Per-environment visited masks ``visited[env_i][loc_id]``.
+                Updated in-place when environments visit new locations.
+
+        Returns:
+            Tuple of:
+                step_loss: Mean loss over contributing environments, or None if
+                    all environments are on first visits.
+                accuracy_increments: Dict with keys ``p``, ``g``, ``gt`` (running
+                    sums of correct predictions) and ``total`` (count of
+                    contributing environments).
         """
         use_p_inf = self.tem.hyper["use_p_inf"]
         step_losses = self.loss_fn(step, use_p_inf)
         step_acc = self.acc_x_fn(step.x_logits, step.x)
 
-        # Collect per-env contributions
         losses_per_env: list[StepLoss] = []
         acc_total = {"p": 0.0, "g": 0.0, "gt": 0.0, "total": 0}
 
@@ -100,9 +209,8 @@ class TEMLightningModule(pl.LightningModule):
             loc_id = step.g[env_i]["id"]
 
             if not env_contributes_and_update(env_visited, loc_id):
-                continue  # First visit: skip loss, mark visited
+                continue
 
-            # Revisit: include in loss and accuracy
             losses_per_env.append(env_step_loss(step_losses, env_i))
 
             acc_inc = env_acc_increments(step_acc, env_i)
@@ -114,7 +222,15 @@ class TEMLightningModule(pl.LightningModule):
         return mean_step_losses(losses_per_env), acc_total
 
     def training_step(self, batch: Any, batch_idx: int) -> Tensor:
-        """Single training step."""
+        """Execute one training step.
+
+        Args:
+            batch: Training batch from dataloader.
+            batch_idx: Batch index (unused).
+
+        Returns:
+            Total loss for optimization.
+        """
         loss_output, accuracies, state = self(batch, self.prev_state)
         self.prev_state = state.detach()
 
@@ -123,7 +239,17 @@ class TEMLightningModule(pl.LightningModule):
         return loss_output.total
 
     def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
-        """Single validation step."""
+        """Execute one validation step.
+
+        Resets recurrent state (except memory) at batch boundaries.
+
+        Args:
+            batch: Validation batch from dataloader.
+            batch_idx: Batch index (unused).
+
+        Returns:
+            Total loss for logging.
+        """
         memory = self.prev_state.M if self.prev_state is not None else None
         init_state = self.init_state(batch, memory)
         loss_output, accuracies, _ = self(batch, init_state)
@@ -133,7 +259,17 @@ class TEMLightningModule(pl.LightningModule):
         return loss_output.total
 
     def test_step(self, batch: Any, batch_idx: int) -> Tensor:
-        """Single test step."""
+        """Execute one test step.
+
+        Resets recurrent state (except memory) at batch boundaries.
+
+        Args:
+            batch: Test batch from dataloader.
+            batch_idx: Batch index (unused).
+
+        Returns:
+            Total loss for logging.
+        """
         memory = self.prev_state.M if self.prev_state is not None else None
         init_state = self.init_state(batch, memory)
         loss_output, accuracies, _ = self(batch, init_state)
@@ -143,39 +279,75 @@ class TEMLightningModule(pl.LightningModule):
         return loss_output.total
 
     def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
-        """Update schedules before training step (Lightning hook)."""
+        """Update runtime hyperparameters before training step.
+
+        Applies curriculum scheduling to learning rate, Hebbian parameters,
+        and walk length based on global step count.
+
+        Args:
+            batch: Training batch (unused).
+            batch_idx: Batch index (unused).
+        """
         eta, hebbian_decay, p2g_scale_offset, walk_center = self._compute_schedule(self.global_step)
         self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
         self._maybe_set_walk_length_center(walk_center)
 
     def on_validation_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
-        """Update runtime hyperparams before validation step (Lightning hook)."""
+        """Update runtime hyperparameters before validation step.
+
+        Args:
+            batch: Validation batch (unused).
+            batch_idx: Batch index (unused).
+            dataloader_idx: Dataloader index for multiple validation sets.
+        """
         eta, hebbian_decay, p2g_scale_offset, _ = self._compute_schedule(self.global_step)
         self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
 
     def on_test_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
-        """Update runtime hyperparams before test step (Lightning hook)."""
+        """Update runtime hyperparameters before test step.
+
+        Args:
+            batch: Test batch (unused).
+            batch_idx: Batch index (unused).
+            dataloader_idx: Dataloader index for multiple test sets.
+        """
         eta, hebbian_decay, p2g_scale_offset, _ = self._compute_schedule(self.global_step)
         self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
 
     def on_before_optimizer_step(self, optimizer) -> None:
-        """Update learning rate before optimizer step (Lightning hook)."""
+        """Apply learning rate schedule before optimizer step.
+
+        Args:
+            optimizer: The optimizer being used (Adam).
+        """
         lr = self._compute_lr(self.global_step)
         for group in optimizer.param_groups:
             group["lr"] = lr
 
     def _maybe_set_walk_length_center(self, walk_length_center: float) -> None:
-        """Update datamodule curriculum control surface if present."""
+        """Update datamodule walk length curriculum if available.
+
+        Attempts to call ``datamodule.set_walk_length_center()`` if the method
+        exists. Safe to call even if datamodule lacks curriculum support.
+
+        Args:
+            walk_length_center: Target mean walk length for curriculum annealing.
+        """
         datamodule = getattr(self.trainer, "datamodule", None)
         setter = getattr(datamodule, "set_walk_length_center", None) if datamodule is not None else None
         if callable(setter):
             setter(walk_length_center)
 
     def _log_step_metrics(self, *, prefix: str, loss_output: LossOutput) -> None:
-        """Log losses + accuracies with an optional prefix."""
+        """Log hierarchical loss components to tensorboard.
+
+        Args:
+            prefix: Metric namespace prefix (e.g., "val/", "test/", "").
+            loss_output: Complete loss output to log.
+        """
         self.log(f"{prefix}loss", loss_output.total, prog_bar=True)
         self.log(f"{prefix}Losses/Total", loss_output.total.detach())
-        # Log 8 individual components (legacy names/order)
+        # Individual components follow legacy naming for comparability.
         self.log(f"{prefix}Losses/p_g", loss_output.p.abstract)
         self.log(f"{prefix}Losses/p_x", loss_output.p.sensory)
         self.log(f"{prefix}Losses/x_gen", loss_output.x.ancestral)
@@ -184,26 +356,42 @@ class TEMLightningModule(pl.LightningModule):
         self.log(f"{prefix}Losses/g", loss_output.g.transition)
         self.log(f"{prefix}Losses/reg_g", loss_output.reg.g_l2)
         self.log(f"{prefix}Losses/reg_p", loss_output.reg.p_l1)
-        # Log grouped losses
         self.log(f"{prefix}Losses/lx", loss_output.x.total)
         self.log(f"{prefix}Losses/lp", loss_output.p.total)
         self.log(f"{prefix}Losses/lg", loss_output.g.total)
 
     def _log_accuracy_metrics(self, *, prefix: str, accuracies: AccuracyX) -> None:
-        """Log sensory prediction accuracies with an optional prefix."""
+        """Log sensory prediction accuracies to tensorboard.
+
+        Args:
+            prefix: Metric namespace prefix (e.g., "val/", "test/", "").
+            accuracies: Accuracy metrics for the three prediction pathways.
+        """
         self.log(f"{prefix}Accuracies/p", accuracies.p)
         self.log(f"{prefix}Accuracies/g", accuracies.g)
         self.log(f"{prefix}Accuracies/gt", accuracies.gt)
 
     def configure_optimizers(self):
-        """Configure optimizer.
+        """Configure optimizer for training.
 
-        Note: Learning rate is updated dynamically via on_before_optimizer_step hook.
+        Returns:
+            Adam optimizer with initial learning rate from schedule settings.
+
+        Note:
+            Learning rate is updated dynamically in :meth:`on_before_optimizer_step`
+            according to the exponential decay schedule.
         """
         return Adam(self.tem.parameters(), lr=self.schedule_settings.lr_max)
 
     def _compute_lr(self, iteration: int) -> float:
-        """Compute learning rate for given iteration."""
+        """Compute learning rate using exponential decay schedule.
+
+        Args:
+            iteration: Current global step.
+
+        Returns:
+            Learning rate (clamped to lr_min).
+        """
         s = self.schedule_settings
         return max(
             s.lr_min + (s.lr_max - s.lr_min) * (s.lr_decay_rate ** (iteration / s.lr_decay_steps)),
@@ -211,7 +399,18 @@ class TEMLightningModule(pl.LightningModule):
         )
 
     def _compute_schedule(self, iteration: int) -> tuple[float, float, float, float]:
-        """Compute all schedule values for current iteration."""
+        """Compute all scheduled hyperparameters for current iteration.
+
+        Args:
+            iteration: Current global step.
+
+        Returns:
+            Tuple of (eta, hebbian_decay, p2g_scale_offset, walk_length_center):
+                eta: Hebbian learning rate.
+                hebbian_decay: Hebbian memory decay factor.
+                p2g_scale_offset: Place-to-grid transition variance offset.
+                walk_length_center: Target mean walk length for curriculum.
+        """
         s = self.schedule_settings
         t = self.trainer_settings
 
@@ -230,20 +429,34 @@ class TEMLightningModule(pl.LightningModule):
 
 
 def select_env(t: Tensor, env_i: int) -> Tensor:
-    """Extract value for environment `env_i` from tensor `t`.
+    """Extract single environment from batch tensor.
 
-    If `t` is scalar (reduction="sum"/"mean"), return it unchanged.
-    Otherwise index into the batch dimension.
+    Handles both reduced (scalar) and unreduced (batched) tensors gracefully.
+
+    Args:
+        t: Input tensor. Either scalar (reduced) or ``(B, ...)`` (unreduced).
+        env_i: Environment index in ``[0, B)``.
+
+    Returns:
+        Scalar for reduced input, or ``t[env_i]`` for batched input.
     """
     return t if t.ndim == 0 else t[env_i]
 
 
 def env_contributes_and_update(visited_env: list[bool], loc_id: int) -> bool:
-    """Check if env should contribute loss this step; update visited in-place.
+    """Check and update visit status for one environment.
+
+    Implements the revisit gating policy: only revisited locations contribute
+    to training. First visits update the mask in-place but are excluded.
+
+    Args:
+        visited_env: Boolean mask ``visited_env[location_id]`` for one environment.
+            Modified in-place on first visit.
+        loc_id: Current location identifier.
 
     Returns:
-        True if location was already visited (include in loss).
-        False if first visit (exclude from loss, mark as visited).
+        True if location was previously visited (contribute to loss/accuracy).
+        False if first visit (exclude from optimization, mask updated).
     """
     if visited_env[loc_id]:
         return True
@@ -252,7 +465,15 @@ def env_contributes_and_update(visited_env: list[bool], loc_id: int) -> bool:
 
 
 def env_step_loss(step_losses: LossOutput, env_i: int) -> StepLoss:
-    """Build per-environment loss object from batch-level structured losses."""
+    """Extract single-environment loss from batch loss output.
+
+    Args:
+        step_losses: Batch-level loss output (possibly unreduced).
+        env_i: Environment index to extract.
+
+    Returns:
+        StepLoss with components for environment ``env_i``.
+    """
     return StepLoss(
         x=LossX(
             infer=select_env(step_losses.x.infer, env_i),
@@ -272,7 +493,15 @@ def env_step_loss(step_losses: LossOutput, env_i: int) -> StepLoss:
 
 
 def env_acc_increments(step_acc: AccuracyX, env_i: int) -> dict[str, float]:
-    """Extract scalar accuracy increments for one environment."""
+    """Extract scalar accuracy values for one environment.
+
+    Args:
+        step_acc: Batch-level accuracy (possibly unreduced).
+        env_i: Environment index to extract.
+
+    Returns:
+        Dict with keys ``p``, ``g``, ``gt`` (floats) and ``total`` (count of 1).
+    """
     return {
         "p": select_env(step_acc.p, env_i).item(),
         "g": select_env(step_acc.g, env_i).item(),
@@ -282,7 +511,14 @@ def env_acc_increments(step_acc: AccuracyX, env_i: int) -> dict[str, float]:
 
 
 def mean_step_losses(losses_per_env: list[StepLoss]) -> Optional[StepLoss]:
-    """Compute mean of per-env losses; return None if list is empty."""
+    """Average losses across contributing environments.
+
+    Args:
+        losses_per_env: Losses for environments that passed revisit gating.
+
+    Returns:
+        Mean loss over contributing environments, or None if list is empty.
+    """
     if not losses_per_env:
         return None
     total = losses_per_env[0]

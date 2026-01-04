@@ -1,23 +1,36 @@
-"""TEM loss components and structured loss outputs.
+"""Loss computation and structured outputs for TEM.
 
-This module provides two layers:
+This module provides the complete loss framework for TEM training:
 
-1) Lightweight dataclasses (e.g., `LossX`, `LossP`, `LossG`, `LossReg`,
-   `LossOutput`) that hold *structured* loss values. These support accumulation
-   (addition) and averaging (division) in the training loop.
-2) `torch.nn.Module` implementations that compute those dataclasses.
+1. **Structured loss containers**: Dataclasses (:class:`LossX`, :class:`LossP`,
+   :class:`LossG`, :class:`LossReg`, :class:`LossOutput`) that hold hierarchical
+   loss values and support arithmetic operations for accumulation and averaging.
 
-The default behaviour matches the legacy TEM training objective (mean-only
-surrogate; no sampling). `AbstractLocationLoss` also supports a KL-based mode
-for probabilistic training when transition uncertainty is available.
+2. **Loss computation modules**: ``torch.nn.Module`` implementations that compute
+   individual loss components from TEM states.
+
+3. **Configuration system**: Pydantic models for type-safe loss hyperparameter
+   management.
+
+Default Configuration:
+    The default ``reduction="none"`` produces per-environment losses (shape ``(B,)``)
+    to support visit masking in the training loop. Use ``reduction="mean"`` for
+    simple averaging.
 
 Conventions:
-    - Squared-error terms include a 0.5 factor (matches `utils.squared_error`).
-    - `reduction="none"` returns per-environment vectors of shape `[B]`, which
-      the training loop relies on for visit masking and per-env weighting.
+    Squared-error terms:
+        Include a 0.5 factor: ``0.5 * ||a - b||^2``
+
+    Cross-entropy terms:
+        Accept one-hot ``(B, n_classes)`` or integer class indices ``(B,)``
+
+    Reduction:
+        Feature dimensions are always reduced. The reduction parameter controls
+        batch/environment aggregation only.
 
 References:
-    Whittington et al. (2020). The Tolman-Eichenbaum Machine.
+    Whittington et al. (2020). The Tolman-Eichenbaum Machine: Unifying Memory
+    and Planning. Cell.
 """
 
 from dataclasses import dataclass
@@ -36,19 +49,26 @@ from torch_tem.types import AbstractLocation, GroundedLocation, Reduction, Scala
 
 @dataclass
 class LossX:
-    """Sensory reconstruction section (L_x).
+    """Sensory reconstruction loss container ($L_x$).
+
+    Holds cross-entropy losses for the three TEM sensory prediction pathways.
+    Supports arithmetic operations for accumulation during rollouts.
 
     Attributes:
-        infer: Prediction from inferred grounded location (p_inf → x).
-        retrieved: Prediction from memory retrieval via abstract location
-            (g_inf → p → x).
-        ancestral: Prediction from ancestral/generative rollout
-            (g_{t-1} → g_t → p → x).
+        infer: Inference pathway loss ($p_{inf} \to x$). Predicts sensory
+            observation directly from inferred grounded location.
+        retrieved: Retrieved pathway loss ($g_{inf} \to p \to x$). Predicts via
+            grounded location retrieved from inferred abstract location.
+        ancestral: Ancestral/generative pathway loss ($g_{t-1} \to g_t \to p \to x$).
+            Predicts via one-step transition in abstract space.
+
+    Note:
+        Shape is scalar (reduced) or ``(B,)`` depending on reduction mode.
     """
 
-    infer: Tensor  # x_p in legacy
-    retrieved: Tensor  # x_g in legacy
-    ancestral: Tensor  # x_gen in legacy
+    infer: Tensor
+    retrieved: Tensor
+    ancestral: Tensor
 
     @classmethod
     def zero(cls, *, device, dtype=torch.float32) -> "LossX":
@@ -96,11 +116,16 @@ class LossX:
 
 @dataclass
 class LossP:
-    """Grounded location consistency section (L_p).
+    """Grounded location consistency loss container ($L_p$).
+
+    Enforces consistency between inferred grounded location (place cells) and
+    memory retrieval pathways using squared-error terms.
 
     Attributes:
-        abstract: Consistency with memory retrieved via abstract location.
-        sensory: Consistency with memory retrieved via the sensory pathway.
+        abstract: Abstract pathway consistency ($||p_{inf} - p_{gen}||^2$).
+            Compares inference with retrieval via abstract location ($g \to p$).
+        sensory: Sensory pathway consistency ($||p_{inf} - p_{inf_x}||^2$).
+            Compares inference with retrieval via sensory input ($x \to p$).
     """
 
     abstract: Tensor
@@ -149,10 +174,13 @@ class LossP:
 
 @dataclass
 class LossG:
-    """Abstract location transition consistency section (L_g).
+    """Abstract location transition loss container ($L_g$).
+
+    Enforces consistency between inferred and predicted abstract locations (grid cells).
 
     Attributes:
-        transition: Transition consistency loss.
+        transition: Transition consistency ($||g_{inf} - g_{gen}||^2$ or KL divergence).
+            Compares inference with one-step prediction from previous timestep.
     """
 
     transition: Tensor
@@ -190,11 +218,13 @@ class LossG:
 
 @dataclass
 class LossReg:
-    """Regularization section (auxiliary penalties).
+    """Regularization loss container.
+
+    Auxiliary penalties to encourage sparse/bounded representations.
 
     Attributes:
-        g_l2: L2 penalty on abstract location codes.
-        p_l1: L1 penalty on grounded location codes.
+        g_l2: L2 penalty on abstract location codes (grid cells).
+        p_l1: L1 penalty on grounded location codes (place cells).
     """
 
     g_l2: Tensor
@@ -241,17 +271,28 @@ class LossReg:
 
 @dataclass
 class LossOutput:
-    """Container for all loss sections.
+    """Complete hierarchical loss output for TEM.
 
-    This is the primary object passed through the training loop. It supports
-    elementwise addition and scalar division, which makes it convenient for
-    accumulating per-timestep losses.
+    Primary container for all TEM loss components. Supports arithmetic operations
+    to enable efficient accumulation during streaming rollouts.
+
+    The total loss is computed as the sum of all section totals, where individual
+    components are already weighted by their respective configuration parameters.
 
     Attributes:
-        x: Sensory reconstruction losses.
-        p: Grounded location consistency losses.
-        g: Abstract location transition losses.
-        reg: Regularization losses.
+        x: Sensory reconstruction losses (:class:`LossX`).
+        p: Grounded location consistency losses (:class:`LossP`).
+        g: Abstract location transition losses (:class:`LossG`).
+        reg: Regularization penalties (:class:`LossReg`).
+
+    Example:
+        Accumulating losses over a rollout::
+
+            accum = LossOutput.zero(device=device)
+            for step in rollout:
+                step_loss = loss_fn(step)
+                accum = accum + step_loss
+            mean_loss = accum / len(rollout)
     """
 
     x: LossX
@@ -306,16 +347,24 @@ class LossOutput:
 
     @property
     def total(self) -> Tensor:
-        """Total loss (unweighted sum of all sections)."""
+        """Return total loss as a sum of section totals."""
         return self.x.total + self.p.total + self.g.total + self.reg.total
 
 
-StepLoss = LossOutput  # Alias for clarity in training context
-AccumLoss = LossOutput  # Alias for accumulated losses over rollouts
+#: Type alias for single-timestep loss (identical to LossOutput).
+StepLoss = LossOutput
+
+#: Type alias for accumulated rollout losses (identical to LossOutput).
+AccumLoss = LossOutput
 
 
 class SensoryReconstructionConfig(BaseModel):
-    """Configuration for sensory reconstruction loss (L_x)."""
+    """Configuration for sensory reconstruction loss ($L_x$).
+
+    Attributes:
+        reduction: How to aggregate per-environment losses ("none", "mean", "sum").
+        weight: Global multiplier applied to all $L_x$ components.
+    """
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
@@ -324,18 +373,23 @@ class SensoryReconstructionConfig(BaseModel):
 
 
 class SensoryReconstructionLoss(nn.Module):
-    """Compute sensory reconstruction losses (L_x).
+    """Compute sensory reconstruction losses ($L_x$).
 
-    This computes three cross-entropy losses, one per TEM prediction pathway.
-    It expects logits that already correspond to the three pathways used in the
-    legacy implementation.
+    Evaluates the model's ability to predict sensory observations through three
+    parallel pathways, each testing different aspects of TEM's spatial memory:
+
+    1. **Inference pathway**: Direct prediction from current place cells
+    2. **Retrieved pathway**: Prediction via grid→place retrieval
+    3. **Ancestral pathway**: Prediction via grid transition and retrieval
+
+    All pathways use cross-entropy loss with the ground-truth observation.
     """
 
     def __init__(self, config: Optional[SensoryReconstructionConfig] = None):
         """Initialize the loss module.
 
         Args:
-
+            config: Optional configuration. If omitted, defaults are used.
         """
         super().__init__()
         self.config = config or SensoryReconstructionConfig()
@@ -347,6 +401,7 @@ class SensoryReconstructionLoss(nn.Module):
 
     @property
     def weight(self) -> float:
+        """Return weight multiplier applied to all $L_x$ components."""
         return self.config.weight
 
     def forward(self, x_logits: list[Tensor], x: Tensor) -> LossX:
@@ -381,7 +436,14 @@ class SensoryReconstructionLoss(nn.Module):
 
 
 class AbstractLocationConfig(BaseModel):
-    """Configuration for abstract location transition loss (L_g)."""
+    """Configuration for abstract location transition loss ($L_g$).
+
+    Attributes:
+        mode: Loss computation mode. "mse" uses squared error (legacy), "kl"
+            uses KL divergence with transition uncertainty.
+        reduction: How to aggregate per-environment losses.
+        weight: Global multiplier for the transition loss.
+    """
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
@@ -391,19 +453,28 @@ class AbstractLocationConfig(BaseModel):
 
 
 class AbstractLocationLoss(nn.Module):
-    """Compute abstract location transition consistency losses (L_g).
+    """Compute abstract location transition consistency ($L_g$).
 
-    The default mode (`mode="mse"`) matches the legacy surrogate objective:
-    $0.5\,\lVert g_{\mathrm{inf}} - g_{\mathrm{gen}} \rVert^2$.
+    Enforces that the inferred abstract location (grid cells from path integration
+    and sensory input) matches the predicted abstract location (from previous
+    grid cells via transition model).
 
-    In `mode="kl"`, this computes an uncertainty-weighted term that requires a
-    `Transition` (mean + uncertainty) and returns a per-frequency KL-like cost.
+    Modes:
+        mse:
+            Surrogate objective using squared error (legacy):
+            $0.5 \sum_f ||g_{inf}^f - g_{gen}^f||^2$
+
+        kl:
+            Uncertainty-weighted KL divergence. Requires :class:`Transition`
+            input with mean and uncertainty:
+            $\sum_f D_{KL}(g_{inf}^f || \mathcal{N}(g_{gen}^f, \sigma_{gen}^f))$
     """
 
     def __init__(self, config: Optional[AbstractLocationConfig] = None):
         """Initialize the loss module.
 
         Args:
+            config: Optional configuration. If omitted, defaults are used.
         """
         super().__init__()
         self.config = config or AbstractLocationConfig()
@@ -468,7 +539,12 @@ class AbstractLocationLoss(nn.Module):
 
 
 class GroundedLocationConfig(BaseModel):
-    """Configuration for grounded location consistency loss (L_p)."""
+    """Configuration for grounded location consistency loss ($L_p$).
+
+    Attributes:
+        reduction: How to aggregate per-environment losses.
+        weight: Global multiplier applied to both abstract and sensory components.
+    """
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
@@ -477,18 +553,27 @@ class GroundedLocationConfig(BaseModel):
 
 
 class GroundedLocationLoss(nn.Module):
-    """Compute grounded location consistency losses (L_p).
+    """Compute grounded location consistency ($L_p$).
 
-    This uses squared-error terms (with a 0.5 factor) to keep inferred grounded
-    location codes consistent with memory retrieval via:
-    - abstract location (g → p), and
-    - sensory input (x → p), optionally.
+    Ensures that inferred place cell representations remain consistent with
+    memory retrieval through both abstract and sensory pathways.
+
+    Components:
+        Abstract ($L_{p,g}$):
+            $0.5 \sum_f ||p_{inf}^f - p_{gen}^f||^2$
+            where $p_{gen}$ is retrieved via grid cells ($g \to p$)
+
+        Sensory ($L_{p,x}$):
+            $0.5 \sum_f ||p_{inf}^f - p_{inf,x}^f||^2$
+            where $p_{inf,x}$ is retrieved via sensory input ($x \to p$)
+            (optional, controlled by ``use_p_inf`` flag)
     """
 
     def __init__(self, config: Optional[GroundedLocationConfig] = None):
         """Initialize the loss module.
 
         Args:
+            config: Optional configuration. If omitted, defaults are used.
         """
         super().__init__()
         self.config = config or GroundedLocationConfig()
@@ -541,7 +626,13 @@ class GroundedLocationLoss(nn.Module):
 
 
 class RegularizationConfig(BaseModel):
-    """Configuration for regularization penalties."""
+    """Configuration for regularization penalties.
+
+    Attributes:
+        reduction: How to aggregate per-environment losses.
+        weight_g_l2: Multiplier for abstract location L2 penalty.
+        weight_p_l1: Multiplier for grounded location L1 penalty.
+    """
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
@@ -551,17 +642,25 @@ class RegularizationConfig(BaseModel):
 
 
 class RegularizationLoss(nn.Module):
-    """Compute auxiliary regularization losses.
+    """Compute auxiliary regularization penalties.
 
-    Computes:
-    - L2 penalty on abstract locations (g)
-    - L1 penalty on grounded locations (p)
+    Encourages sparse and bounded neural representations:
+
+    Components:
+        g_l2:
+            $\lambda_g \sum_f ||g^f||_2^2$
+            Bounds magnitude of grid cell activations
+
+        p_l1:
+            $\lambda_p \sum_f ||p^f||_1$
+            Encourages sparse place cell activations
     """
 
     def __init__(self, config: Optional[RegularizationConfig] = None):
         """Initialize the loss module.
 
         Args:
+            config: Optional configuration. If omitted, defaults are used.
         """
         super().__init__()
         self.config = config or RegularizationConfig()
@@ -599,6 +698,14 @@ class RegularizationLoss(nn.Module):
 
 
 class LossConfig(BaseModel):
+    """Complete configuration tree for TEM loss computation.
+
+    Attributes:
+        x: Configuration for sensory reconstruction losses.
+        g: Configuration for abstract location transition losses.
+        p: Configuration for grounded location consistency losses.
+        reg: Configuration for regularization penalties.
+    """
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
@@ -609,14 +716,32 @@ class LossConfig(BaseModel):
 
 
 class TEMLoss(nn.Module):
-    """Compute weighted per-env loss components for a single TEM step.
-    This module encapsulates all loss computation and weighting, returning a
-    `LossOutput` where each component is already weighted according to config.
-    With default reduction="none", outputs are per-env vectors suitable for
-    visited masking in the training loop.
+    """Top-level TEM loss computation module.
+
+    Orchestrates all loss components for a single timestep, applying configured
+    weights and reduction modes. This is the primary interface used by the
+    training loop.
+
+    The module computes:
+        - Sensory reconstruction ($L_x$)
+        - Grounded location consistency ($L_p$)
+        - Abstract location transition ($L_g$)
+        - Regularization penalties
+
+    Returns :class:`LossOutput` with pre-weighted components ready for
+    optimization or visit-masked accumulation.
+
+    Note:
+        Default ``reduction="none"`` produces per-environment vectors ``(B,)``
+        to support visit masking in :class:`~torch_tem.training.TEMLightningModule`.
     """
 
     def __init__(self, config: LossConfig):
+        """Initialize the composite TEM loss.
+
+        Args:
+            config: Loss configuration tree.
+        """
         super().__init__()
         self._config = config
 

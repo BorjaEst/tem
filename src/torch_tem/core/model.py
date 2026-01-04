@@ -14,6 +14,7 @@ Release v1.0.0: Fully functional pytorch model, without any extensions
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlias
 
@@ -355,25 +356,7 @@ class TEMModel(torch.nn.Module):
             return tuple(self._apply_to_nested_tensors(v, fn) for v in obj)
         return obj
 
-    def forward(self, walk, prev_iter=None, prev_M=None):
-        # The previous iteration may contain walks without action. These are new walks, for which some parameters need to be reset.
-        steps = self.init_walks(prev_iter)
-        # Forward pass: perform a TEM iteration for each set of [place, observation, action], and produce inferred and generated variables for each step.
-        for g, x, a in walk:
-            # If there is no previous iteration at all: all walks are new, initialise a whole new iteration object
-            if steps is None:
-                # Use an TEMState object to set initial values before any real iterations, initialising M, x_inf as zero. Set actions to None blank to indicate there was no previous action
-                steps = [self.init_iteration(g, x, [None for _ in range(len(a))], prev_M)]
-            # Perform TEM iteration using transition from previous iteration
-            M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf, p_inf_x = self.iteration(x, g, steps[-1].a, steps[-1].M, steps[-1].x_inf, steps[-1].g_inf)
-            # Store this iteration in iteration object in steps list
-            steps.append(TEMState(g, x, a, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf, p_inf_x))
-        # The first step is either a step from a previous walk or initialisiation rubbish, so remove it
-        steps = steps[1:]
-        # Return steps, which is a list of TEMState objects
-        return steps
-
-    def iteration(self, x, locations, a_prev, M_prev, x_prev, g_prev):
+    def forward(self, x, locations, a_prev, M_prev, x_prev, g_prev):
         # First, do the transition step, as it will be necessary for both the inference and generative part of the model
         gt_gen, gt_inf = self.gen_g(a_prev, g_prev, locations)
         # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_inf_x
@@ -521,25 +504,6 @@ class TEMModel(torch.nn.Module):
         x_inf = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x_f"][f]), device=x.device) for f in range(self.hyper["n_f"])]
         # And construct new iteration for that g, x, a, and M
         return TEMState(g=g, x=x, a=a, M=M, x_inf=x_inf, g_inf=g_inf)
-
-    def init_walks(self, prev_iter):
-        # Only reset parameters for previous iteration if a previous iteration was actually provided - if it wasn't, all parameters will be reset when creating a fresh TEMState object in init_iteration
-        if prev_iter is not None:
-            # The supplied previous iteration might have new walks starting, with empty actions. For these walks some parameters need to be reset
-            for a_i, a in enumerate(prev_iter[0].a):
-                # A new walk is indicated by having a None action in the previous iteration
-                if a is None:
-                    # Reset the initial connectivity matrix for this walk
-                    for M in prev_iter[0].M:
-                        M[a_i, :, :] = 0
-                    # Reset the abstract location for this walk
-                    for f, g_inf in enumerate(prev_iter[0].g_inf):
-                        g_inf[a_i, :] = self.g_init[f]
-                    # Reset the sensory experience for this walk
-                    for f, x_inf in enumerate(prev_iter[0].x_inf):
-                        x_inf[a_i, :].zero_()
-        # Return the iteration with reset parameters (or simply the empty array if prev_iter was empty)
-        return prev_iter
 
     def gen_g(self, a_prev, g_prev, locations):
         # Transition from previous abstract location to new abstract location using weights specific to action taken for each frequency module
@@ -891,3 +855,92 @@ class TEMState:
             p_inf=_detach(self.p_inf),
             p_inf_x=_detach(self.p_inf_x),
         )
+
+
+class Rollout(Iterator[TEMState]):
+    def __init__(self, model: TEMModel, walk, prev_iter: Optional[List[TEMState]] = None, prev_M: Optional[List[Tensor]] = None):
+        self.model = model
+        self._walk_iter = iter(walk)
+
+        # Prepare initial prev-values by peeking first step
+        try:
+            first_step = next(self._walk_iter)
+        except StopIteration:
+            # Empty walk - create a dummy iterator
+            self._walk_iter = iter([])
+            self._a_prev = None
+            self._M_prev = None
+            self._x_prev = None
+            self._g_prev = None
+            return
+
+        locations, x, a = first_step
+
+        # Initialize or reset previous state
+        if prev_iter is not None:
+            # Apply new-walk reset (mutates prev_iter[0] in-place)
+            self._reset_new_walks(prev_iter[0])
+            prev_state = prev_iter[0]
+        else:
+            # Create fresh initial state
+            prev_state = model.init_iteration(locations, x, [None for _ in range(len(a))], prev_M)
+
+        # Extract prev-values for circuit forward
+        self._a_prev = prev_state.a
+        self._M_prev = prev_state.M
+        self._x_prev = prev_state.x_inf
+        self._g_prev = prev_state.g_inf
+
+        # Reconstruct iterator with first step at the front
+        from itertools import chain
+
+        self._walk_iter = chain([first_step], self._walk_iter)
+
+    def _reset_new_walks(self, prev_state: TEMState) -> None:
+        if prev_state.a is None:
+            return
+
+        for a_i, a in enumerate(prev_state.a):
+            if a is None:
+                # Reset memory for this walk
+                for M in prev_state.M:
+                    M[a_i, :, :] = 0
+                # Reset abstract location
+                for f, g_inf in enumerate(prev_state.g_inf):
+                    g_inf[a_i, :] = self.model.g_init[f]
+                # Reset sensory experience
+                for f, x_inf in enumerate(prev_state.x_inf):
+                    x_inf[a_i, :].zero_()
+
+    def __iter__(self) -> "Rollout":
+        return self
+
+    def __next__(self) -> TEMState:
+        locations, x, a = next(self._walk_iter)  # raises StopIteration when done
+
+        # Run circuit forward (no conditionals)
+        M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf, p_inf_x = self.model(x, locations, self._a_prev, self._M_prev, self._x_prev, self._g_prev)
+
+        # Build state
+        state = TEMState(
+            g=locations,
+            x=x,
+            a=a,
+            M=M,
+            g_gen=g_gen,
+            p_gen=p_gen,
+            x_gen=x_gen,
+            x_logits=x_logits,
+            x_inf=x_inf,
+            g_inf=g_inf,
+            p_inf=p_inf,
+            p_inf_x=p_inf_x,
+        )
+
+        # Update prev-values for next iteration
+        self._a_prev = a
+        self._M_prev = M
+        self._x_prev = x_inf
+        self._g_prev = g_inf
+
+        return state

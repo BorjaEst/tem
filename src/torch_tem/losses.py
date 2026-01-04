@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 
+from torch_tem.core import TEMState
 from torch_tem.types import AbstractLocation, GroundedLocation, Transition
 
 Reduction: TypeAlias = Literal["none", "sum", "mean"]
@@ -54,10 +55,12 @@ class LossConfig(BaseModel):
     # LOSS COMPUTATION MODE
     # ===================================================================================
 
-    lg_mode: Literal["mse", "kl"] = Field(
-        default="mse",
-        description=("Abstract location loss mode: 'mse' (legacy surrogate), " "'kl' (KL divergence with uncertainty)."),
-    )
+    lg_mode: Literal["mse", "kl"] = Field(default="mse", description="Abstract location loss mode: 'mse' (legacy), 'kl'.")
+
+    x_reduction: Reduction = Field(default="none", description="Reduction for sensory reconstruction loss (L_x).")
+    p_reduction: Reduction = Field(default="none", description="Reduction for grounded location loss (L_p).")
+    g_reduction: Reduction = Field(default="none", description="Reduction for abstract location loss (L_g).")
+    reg_reduction: Reduction = Field(default="none", description="Reduction for regularization losses.")
 
     # ===================================================================================
     # LOSS WEIGHTS
@@ -555,3 +558,53 @@ class RegularizationLoss(nn.Module):
             return LossReg(g_l2=reg_g_per_env.mean(), p_l1=reg_p_per_env.mean())
         else:  # reduction == "none"
             return LossReg(g_l2=reg_g_per_env, p_l1=reg_p_per_env)
+
+
+class TEMLoss(nn.Module):
+    """Compute weighted per-env loss components for a single TEM step.
+
+    This module returns a `LossOutput` whose fields are already weighted according
+    to `LossConfig`. With reductions set to "none", each field is a vector of
+    shape [B], suitable for visited masking and per-env aggregation.
+    """
+
+    def __init__(self, config: LossConfig):
+        super().__init__()
+        self._config = config
+
+        # Per-env outputs are required by the training loop's visited mask,
+        # so the default config should use reduction="none".
+        self.loss_x_fn = SensoryReconstructionLoss(reduction=config.x_reduction)
+        self.loss_p_fn = GroundedLocationLoss(reduction=config.p_reduction)
+        self.loss_g_fn = AbstractLocationLoss(mode=config.lg_mode, reduction=config.g_reduction)
+        self.loss_reg_fn = RegularizationLoss(reduction=config.reg_reduction)
+
+    def forward(self, step: TEMState, use_p_inf: bool) -> LossOutput:
+        """Compute weighted loss components for one timestep.
+
+        Args:
+            step: TEMState at current timestep.
+            use_p_inf: Whether to include sensory grounded-location term.
+
+        Returns:
+            LossOutput where each component is already multiplied by config weights.
+        """
+        # Raw (possibly per-env) losses
+        lx: LossX = self.loss_x_fn(step.x_logits, step.x)
+        lp: LossP = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_p_inf)
+        lg: LossG = self.loss_g_fn(step.g_inf, step.g_gen)
+        lreg: LossReg = self.loss_reg_fn(step.g_inf, step.p_inf)
+
+        # Apply weights (scalar multipliers)
+        wx = self._config.weights_x
+        wp = self._config.weights_p
+        wg = self._config.weights_g
+        wrg = self._config.weights_reg_g
+        wrp = self._config.weights_reg_p
+
+        lx = LossX(infer=wx * lx.infer, retrieved=wx * lx.retrieved, ancestral=wx * lx.ancestral)
+        lp = LossP(abstract=wp * lp.abstract, sensory=wp * lp.sensory)
+        lg = LossG(transition=wg * lg.transition)
+        lreg = LossReg(g_l2=wrg * lreg.g_l2, p_l1=wrp * lreg.p_l1)
+
+        return LossOutput(x=lx, p=lp, g=lg, reg=lreg)

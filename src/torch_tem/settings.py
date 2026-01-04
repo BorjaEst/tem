@@ -8,6 +8,8 @@ from typing import Optional
 import torch
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from torch_tem.losses import LossConfig
+
 
 class DataSettings(BaseModel):
     """Data/environment generation settings (Lightning datamodule + dataset)."""
@@ -82,16 +84,8 @@ class ScheduleSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    # Loss weights
-    loss_weights_x: float = Field(default=1.0)
-    loss_weights_p: float = Field(default=1.0)
-    loss_weights_g: float = Field(default=1.0)
-    loss_weights_reg_g: float = Field(default=0.01)
-    loss_weights_reg_p: float = Field(default=0.02)
-
-    loss_weights_p_g_it: int = Field(default=2000)
-    loss_weights_reg_p_it: int = Field(default=4000)
-    loss_weights_reg_g_it: int = Field(default=40000000)
+    # Loss mode and weights
+    loss: LossConfig = Field(default_factory=LossConfig, description="Loss configuration.")
 
     # Memory schedules
     eta: float = Field(default=0.5, description="Base Hebbian rate of remembering")
@@ -118,21 +112,3 @@ class ScheduleSettings(BaseModel):
     def walk_it_window(self) -> float:
         """Width of window from which walk lengths are sampled."""
         return 0.2 * (self.walk_it_max - self.walk_it_min)
-
-    @computed_field
-    @property
-    def loss_weights_base(self) -> torch.Tensor:
-        """Base loss weights vector in training loss component order."""
-        return torch.tensor(
-            [
-                self.loss_weights_p,
-                self.loss_weights_p,
-                self.loss_weights_x,
-                self.loss_weights_x,
-                self.loss_weights_x,
-                self.loss_weights_g,
-                self.loss_weights_reg_g,
-                self.loss_weights_reg_p,
-            ],
-            dtype=torch.float,
-        )

@@ -12,7 +12,7 @@ from torch import Tensor
 from torch.optim import Adam
 
 from torch_tem import losses, metrics, utils
-from torch_tem.core.model import TEMModel, TEMState
+from torch_tem.core.model import Rollout, TEMModel, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.metrics import AccuracyX
 from torch_tem.settings import ScheduleSettings, TrainerSettings
@@ -37,68 +37,139 @@ class TEMLightningModule(pl.LightningModule):
         self.prev_iter: Optional[list[TEMState]] = None
 
         # Instantiate loss modules once (reused across all steps)
-        self.loss_x_fn = losses.SensoryReconstructionLoss(reduction="none")
-        self.loss_p_fn = losses.GroundedLocationLoss(reduction="none")
-        self.loss_g_fn = losses.AbstractLocationLoss(mode="mse", reduction="none")
-        self.loss_reg_fn = losses.RegularizationLoss(reduction="none")
+        self.loss_fn = losses.TEMLoss(scheduling.loss)
         self.acc_x_fn = metrics.SensoryAccuracy(reduction="none")
 
-        # Cache for current step's loss weights (set by on_train_batch_start)
-        self._loss_weights: Optional[Tensor] = None
+    def forward(self, batch, prev_iter=None) -> tuple[LossOutput, AccuracyX, TEMState]:
+        """Forward pass through TEM with streaming loss computation."""
+        chunk, visited = batch
 
-    def forward(self, chunk):
-        """Forward pass through TEM."""
-        return self.tem(chunk, self.prev_iter)
+        # Accumulate loss across timesteps (streaming, no state list)
+        accum = AccumLoss.zero(device=self.device)
+        acc_correct = {"p": 0.0, "g": 0.0, "gt": 0.0}
+        acc_total = 0
+
+        # Single-pass rollout with on-the-fly loss computation
+        for step in Rollout(self.tem, chunk, prev_iter):
+            # Process this step: compute loss and update accuracies
+            step_contrib, acc_increments = self.model_iteration(step, visited)
+
+            # Accumulate loss and accuracies
+            if step_contrib is not None:
+                accum = accum + step_contrib
+
+            acc_correct["p"] += acc_increments["p"]
+            acc_correct["g"] += acc_increments["g"]
+            acc_correct["gt"] += acc_increments["gt"]
+            acc_total += acc_increments["total"]
+
+        # Compute final averaged accuracies
+        if acc_total > 0:
+            final_acc = AccuracyX(
+                p=torch.tensor(acc_correct["p"] / acc_total, device=self.device),
+                g=torch.tensor(acc_correct["g"] / acc_total, device=self.device),
+                gt=torch.tensor(acc_correct["gt"] / acc_total, device=self.device),
+            )
+        else:
+            final_acc = AccuracyX(
+                p=torch.tensor(0.0, device=self.device),
+                g=torch.tensor(0.0, device=self.device),
+                gt=torch.tensor(0.0, device=self.device),
+            )
+
+        last_state = step.detach()
+        return accum, final_acc, last_state
+
+    def model_iteration(self, step: TEMState, visited) -> tuple[Optional[StepLoss], dict[str, float]]:
+        """Process a single rollout step: compute loss and update accuracies."""
+        # Compute weighted loss components for this timestep (already weighted by TEMLoss)
+        use_p_inf = self.tem.hyper["use_p_inf"]
+        step_losses = self.loss_fn(step, use_p_inf)
+
+        # Compute accuracies for this timestep (per-env, reduction="none")
+        step_accuracies = self.acc_x_fn(step.x_logits, step.x)
+
+        # Apply visited-location filtering (weights already applied by loss_fn)
+        step_loss = []
+        acc_increments = {"p": 0.0, "g": 0.0, "gt": 0.0, "total": 0}
+
+        for env_i, env_visited in enumerate(visited):
+            if env_visited[step.g[env_i]["id"]]:
+                # Extract [8] per-env components in LOSS_NAMES order (already weighted)
+                env_components = torch.stack(
+                    [
+                        step_losses.p.abstract[env_i],
+                        step_losses.p.sensory[env_i],
+                        step_losses.x.ancestral[env_i],
+                        step_losses.x.retrieved[env_i],
+                        step_losses.x.infer[env_i],
+                        step_losses.g.transition[env_i],
+                        step_losses.reg.g_l2[env_i],
+                        step_losses.reg.p_l1[env_i],
+                    ]
+                )
+                step_loss.append(env_components)
+
+                # Accumulate accuracy for this visited env
+                acc_increments["p"] += step_accuracies.p[env_i].item()
+                acc_increments["g"] += step_accuracies.g[env_i].item()
+                acc_increments["gt"] += step_accuracies.gt[env_i].item()
+                acc_increments["total"] += 1
+            else:
+                env_visited[step.g[env_i]["id"]] = True
+
+        # Average across visited environments and create LossOutput
+        if step_loss:
+            step_vec = torch.mean(torch.stack(step_loss, dim=0), dim=0)  # [8]
+            step_contrib = StepLoss(
+                x=LossX(infer=step_vec[4], retrieved=step_vec[3], ancestral=step_vec[2]),
+                p=LossP(abstract=step_vec[0], sensory=step_vec[1]),
+                g=LossG(transition=step_vec[5]),
+                reg=LossReg(g_l2=step_vec[6], p_l1=step_vec[7]),
+            )
+            return step_contrib, acc_increments
+
+        return None, acc_increments
 
     def training_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single training step."""
-        chunk, visited = batch
+        loss_output, accuracies, state = self(batch, self.prev_iter)
+        self.prev_iter = [state]  # store state for next iteration
 
-        # Loss weights are set by on_train_batch_start hook
-        loss_output, accuracies = self.loss(chunk, visited, self._loss_weights, use_prev_iter=True, update_prev_iter=True)
         self._log_step_metrics(prefix="", loss_output=loss_output)
         self._log_accuracy_metrics(prefix="", accuracies=accuracies)
         return loss_output.total
 
     def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single validation step."""
-        chunk, visited = batch
+        loss_output, accuracies = self(batch)
 
-        # Runtime hyperparams set by on_validation_batch_start hook
-        # Use base loss weights (no annealing during validation)
-        loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
-        loss_output, accuracies = self.loss(chunk, visited, loss_weights, use_prev_iter=False, update_prev_iter=False)
         self._log_step_metrics(prefix="val/", loss_output=loss_output)
         self._log_accuracy_metrics(prefix="val/", accuracies=accuracies)
         return loss_output.total
 
     def test_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single test step."""
-        chunk, visited = batch
+        loss_output, accuracies = self(batch)
 
-        # Runtime hyperparams set by on_test_batch_start hook
-        # Use base loss weights (no annealing during testing)
-        loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
-        loss_output, accuracies = self.loss(chunk, visited, loss_weights, use_prev_iter=False, update_prev_iter=False)
         self._log_step_metrics(prefix="test/", loss_output=loss_output)
         self._log_accuracy_metrics(prefix="test/", accuracies=accuracies)
         return loss_output.total
 
     def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
         """Update schedules before training step (Lightning hook)."""
-        eta, hebbian_decay, p2g_scale_offset, walk_center, loss_weights = self._compute_schedule(self.global_step)
+        eta, hebbian_decay, p2g_scale_offset, walk_center = self._compute_schedule(self.global_step)
         self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
         self._maybe_set_walk_length_center(walk_center)
-        self._loss_weights = loss_weights.to(self.device)
 
     def on_validation_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         """Update runtime hyperparams before validation step (Lightning hook)."""
-        eta, hebbian_decay, p2g_scale_offset, _, _ = self._compute_schedule(self.global_step)
+        eta, hebbian_decay, p2g_scale_offset, _ = self._compute_schedule(self.global_step)
         self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
 
     def on_test_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         """Update runtime hyperparams before test step (Lightning hook)."""
-        eta, hebbian_decay, p2g_scale_offset, _, _ = self._compute_schedule(self.global_step)
+        eta, hebbian_decay, p2g_scale_offset, _ = self._compute_schedule(self.global_step)
         self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
 
     def on_before_optimizer_step(self, optimizer) -> None:
@@ -138,107 +209,6 @@ class TEMLightningModule(pl.LightningModule):
         self.log(f"{prefix}Accuracies/g", accuracies.g)
         self.log(f"{prefix}Accuracies/gt", accuracies.gt)
 
-    def loss(self, chunk, visited, loss_weights: torch.Tensor, use_prev_iter: bool = True, update_prev_iter: bool = True) -> tuple[AccumLoss, AccuracyX]:
-        """Compute loss and metrics for a batch chunk.
-
-        Args:
-            chunk: Batch chunk data.
-            visited: Visit tracking for environments.
-            loss_weights: Loss weights vector [8] (applied to raw loss components).
-            use_prev_iter: Whether to condition forward pass on self.prev_iter.
-            update_prev_iter: Whether to update self.prev_iter after forward pass.
-
-        Returns:
-            Tuple of (LossOutput, AccuracyX) with accumulated losses and accuracies.
-
-        Note:
-            Both components and plot_loss represent weighted, env-averaged losses
-            summed across timesteps. components is device-resident torch tensor,
-            plot_loss is CPU numpy array for logging.
-        """
-        # Forward pass (use prev_iter only if requested, e.g., training)
-        prev_state = self.prev_iter if use_prev_iter else None
-        forward = self.tem(chunk, prev_state)
-
-        # Guard against empty chunks (shouldn't happen with current dataloader)
-        if not forward:
-            raise ValueError("Empty chunk received - cannot compute loss")
-
-        # Get use_p_inf flag from model (controls L_p_x computation)
-        use_p_inf = self.tem.hyper["use_p_inf"]
-
-        # Accumulate loss across timesteps
-        accum = AccumLoss.zero(device=self.device)
-
-        # Accumulate accuracies over visited timesteps/environments
-        acc_correct = {"p": 0.0, "g": 0.0, "gt": 0.0}
-        acc_total = 0
-
-        for step in forward:
-            # Compute raw loss components for this timestep
-            step_losses = self._step_loss(step, use_p_inf)
-
-            # Compute accuracies for this timestep (per-env, reduction="none")
-            step_accuracies = self.acc_x_fn(step.x_logits, step.x)
-
-            # Apply visited-location filtering and weighting
-            step_loss = []
-            for env_i, env_visited in enumerate(visited):
-                if env_visited[step.g[env_i]["id"]]:
-                    # Extract [8] per-env components in LOSS_NAMES order and apply weights
-                    env_components = torch.stack(
-                        [
-                            step_losses.p.abstract[env_i],
-                            step_losses.p.sensory[env_i],
-                            step_losses.x.ancestral[env_i],
-                            step_losses.x.retrieved[env_i],
-                            step_losses.x.infer[env_i],
-                            step_losses.g.transition[env_i],
-                            step_losses.reg.g_l2[env_i],
-                            step_losses.reg.p_l1[env_i],
-                        ]
-                    )
-                    step_loss.append(loss_weights * env_components)
-
-                    # Accumulate accuracy for this visited env
-                    acc_correct["p"] += step_accuracies.p[env_i].item()
-                    acc_correct["g"] += step_accuracies.g[env_i].item()
-                    acc_correct["gt"] += step_accuracies.gt[env_i].item()
-                    acc_total += 1
-                else:
-                    env_visited[step.g[env_i]["id"]] = True
-
-            # Average across visited environments and create LossOutput
-            if step_loss:
-                step_vec = torch.mean(torch.stack(step_loss, dim=0), dim=0)  # [8]
-                step_contrib = StepLoss(
-                    x=LossX(infer=step_vec[4], retrieved=step_vec[3], ancestral=step_vec[2]),
-                    p=LossP(abstract=step_vec[0], sensory=step_vec[1]),
-                    g=LossG(transition=step_vec[5]),
-                    reg=LossReg(g_l2=step_vec[6], p_l1=step_vec[7]),
-                )
-                accum = accum + step_contrib
-
-        # Update prev_iter for next training step (only if requested)
-        if update_prev_iter:
-            self.prev_iter = [forward[-1].detach()]
-
-        # Compute final averaged accuracies
-        if acc_total > 0:
-            final_acc = AccuracyX(
-                p=torch.tensor(acc_correct["p"] / acc_total, device=self.device),
-                g=torch.tensor(acc_correct["g"] / acc_total, device=self.device),
-                gt=torch.tensor(acc_correct["gt"] / acc_total, device=self.device),
-            )
-        else:
-            final_acc = AccuracyX(
-                p=torch.tensor(0.0, device=self.device),
-                g=torch.tensor(0.0, device=self.device),
-                gt=torch.tensor(0.0, device=self.device),
-            )
-
-        return accum, final_acc
-
     def configure_optimizers(self):
         """Configure optimizer.
 
@@ -254,7 +224,7 @@ class TEMLightningModule(pl.LightningModule):
             s.lr_min,
         )
 
-    def _compute_schedule(self, iteration: int) -> tuple[float, float, float, float, torch.Tensor]:
+    def _compute_schedule(self, iteration: int) -> tuple[float, float, float, float]:
         """Compute all schedule values for current iteration."""
         s = self.schedule_settings
         t = self.trainer_settings
@@ -270,35 +240,4 @@ class TEMLightningModule(pl.LightningModule):
         max_steps = max(int(t.max_steps), 1)
         walk_length_center = s.walk_it_max - s.walk_it_window * 0.5 - min((iteration + 1) / max_steps, 1) * (s.walk_it_max - s.walk_it_min - s.walk_it_window)
 
-        # Loss weights with annealing
-        L_p_g = min((iteration + 1) / s.loss_weights_p_g_it, 1) * s.loss_weights_p
-        L_p_x = min((iteration + 1) / s.loss_weights_p_g_it, 1) * s.loss_weights_p * (1 - p2g_scale_offset)
-        L_x_gen = s.loss_weights_x
-        L_x_g = s.loss_weights_x
-        L_x_p = s.loss_weights_x
-        L_g = min((iteration + 1) / s.loss_weights_p_g_it, 1) * s.loss_weights_g
-        L_reg_g = (1 - min((iteration + 1) / s.loss_weights_reg_g_it, 1)) * s.loss_weights_reg_g
-        L_reg_p = (1 - min((iteration + 1) / s.loss_weights_reg_p_it, 1)) * s.loss_weights_reg_p
-
-        loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p])
-
-        return eta, lamb, p2g_scale_offset, walk_length_center, loss_weights
-
-    def _step_loss(self, step: TEMState, use_p_inf: bool) -> StepLoss:
-        """Compute per-timestep loss using modular loss components.
-
-        Args:
-            step: TEMState containing model outputs for this timestep.
-            use_p_inf: Whether to compute L_p_x (sensory consistency term).
-
-        Returns:
-            StepLoss with all components computed via loss modules.
-        """
-        # Use instantiated loss modules (with reduction="none" for per-env outputs)
-        L_x = self.loss_x_fn(step.x_logits, step.x)
-        L_p = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_p_inf)
-        L_g = self.loss_g_fn(step.g_inf, step.g_gen)
-        L_reg = self.loss_reg_fn(step.g_inf, step.p_inf)
-
-        # Return as compositional LossOutput
-        return StepLoss(x=L_x, p=L_p, g=L_g, reg=L_reg)
+        return eta, lamb, p2g_scale_offset, walk_length_center

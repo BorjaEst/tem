@@ -6,6 +6,9 @@ from typing import Any, Optional
 
 import numpy as np
 import torch
+from torch import Tensor
+
+from torch_tem.types import Reduction
 
 
 def inv_var_weight(mus, sigmas):
@@ -215,3 +218,14 @@ def require_exists(path: Path, what: str) -> None:
     """Raise friendly error if path doesn't exist."""
     if not path.exists():
         raise FileNotFoundError(f"{what} not found: {path}")
+
+
+def reduce_per_env(loss_per_env: Tensor, reduction: Reduction) -> Tensor:
+    """Reduce a per-environment loss vector according to `reduction`."""
+    if reduction == "sum":
+        return loss_per_env.sum()
+    if reduction == "mean":
+        return loss_per_env.mean()
+    if reduction == "none":
+        return loss_per_env
+    raise ValueError(f"Unknown reduction: {reduction}")

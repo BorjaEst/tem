@@ -40,7 +40,7 @@ The type system follows the TEM architecture:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple, TypeAlias
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, TypeAlias
 
 from torch import Tensor
 
@@ -370,3 +370,8 @@ BatchedMemory = Matrix
 Note: In practice, memory is typically shared across a batch rather than
 per-sample, so this represents the global memory state.
 """
+
+
+# ....
+Reduction: TypeAlias = Literal["none", "sum", "mean"]
+Scalar: TypeAlias = int | float | Tensor

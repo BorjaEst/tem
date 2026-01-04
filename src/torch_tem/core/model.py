@@ -14,7 +14,7 @@ Release v1.0.0: Fully functional pytorch model, without any extensions
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlias
 
@@ -857,68 +857,63 @@ class TEMState:
         )
 
 
+Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, x, a)
+
+
 class Rollout(Iterator[TEMState]):
-    def __init__(self, model: TEMModel, walk, prev_iter: Optional[List[TEMState]] = None, prev_M: Optional[List[Tensor]] = None):
+    def __init__(self, model: TEMModel, walk: Walk, initial: Optional[TEMState] = None):
         self.model = model
-        self._walk_iter = iter(walk)
+        self.walk = list(walk)  # Materialize for predictable indexing
 
-        # Prepare initial prev-values by peeking first step
-        try:
-            first_step = next(self._walk_iter)
-        except StopIteration:
-            # Empty walk - create a dummy iterator
-            self._walk_iter = iter([])
-            self._a_prev = None
-            self._M_prev = None
-            self._x_prev = None
-            self._g_prev = None
-            return
+        if len(self.walk) == 0:
+            raise ValueError("Rollout requires at least 1 timestep in walk")
 
-        locations, x, a = first_step
+        # Extract first step to determine batch size and initialize state
+        locations_0, x_0, a_0 = self.walk[0]
 
-        # Initialize or reset previous state
-        if prev_iter is not None:
-            # Apply new-walk reset (mutates prev_iter[0] in-place)
-            self._reset_new_walks(prev_iter[0])
-            prev_state = prev_iter[0]
+        # Determine initial state
+        if initial is not None:
+            prev_state = initial
         else:
-            # Create fresh initial state
-            prev_state = model.init_iteration(locations, x, [None for _ in range(len(a))], prev_M)
+            # Create fresh initial state (init_iteration will create memory)
+            try:
+                batch_size = len(a_0)
+            except TypeError:
+                # a_0 might not have len() if it's a scalar or tensor
+                batch_size = int(x_0.shape[0]) if x_0.ndim > 1 else 1
 
-        # Extract prev-values for circuit forward
+            prev_state = model.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], None)
+
+        # Initialize prev-values for first forward pass
         self._a_prev = prev_state.a
         self._M_prev = prev_state.M
         self._x_prev = prev_state.x_inf
         self._g_prev = prev_state.g_inf
 
-        # Reconstruct iterator with first step at the front
-        from itertools import chain
-
-        self._walk_iter = chain([first_step], self._walk_iter)
-
-    def _reset_new_walks(self, prev_state: TEMState) -> None:
-        if prev_state.a is None:
-            return
-
-        for a_i, a in enumerate(prev_state.a):
-            if a is None:
-                # Reset memory for this walk
-                for M in prev_state.M:
-                    M[a_i, :, :] = 0
-                # Reset abstract location
-                for f, g_inf in enumerate(prev_state.g_inf):
-                    g_inf[a_i, :] = self.model.g_init[f]
-                # Reset sensory experience
-                for f, x_inf in enumerate(prev_state.x_inf):
-                    x_inf[a_i, :].zero_()
+        # Track current position in walk
+        self._idx = 0
 
     def __iter__(self) -> "Rollout":
+        """Return self as iterator."""
         return self
 
     def __next__(self) -> TEMState:
-        locations, x, a = next(self._walk_iter)  # raises StopIteration when done
+        """Process next timestep and return state.
 
-        # Run circuit forward (no conditionals)
+        Returns:
+            TEMState for current timestep.
+
+        Raises:
+            StopIteration: When all timesteps have been processed.
+        """
+        if self._idx >= len(self.walk):
+            raise StopIteration
+
+        # Get current timestep
+        locations, x, a = self.walk[self._idx]
+        self._idx += 1
+
+        # Run model forward
         M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf, p_inf_x = self.model(x, locations, self._a_prev, self._M_prev, self._x_prev, self._g_prev)
 
         # Build state

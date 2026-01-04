@@ -64,7 +64,7 @@ for i_step, step in enumerate(model_input):
 
 # Run a forward pass through the model using this data, without accumulating gradients
 with torch.no_grad():
-    forward = list(core.Rollout(tem, model_input, prev_iter=None))
+    forward = list(core.Rollout(tem, model_input))
 
 # Decide whether to include stay-still actions as valid occasions for inference
 include_stay_still = True

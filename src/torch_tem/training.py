@@ -9,11 +9,14 @@ import lightning.pytorch as pl
 import numpy as np
 import torch
 from lightning.pytorch.utilities.types import STEP_OUTPUT
+from pydantic import BaseModel
 from torch.optim import Adam
 
-from torch_tem import utils
+from torch_tem import losses, utils
 from torch_tem.core.model import TEMModel, TEMState
+from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.settings import ScheduleSettings, TrainerSettings
+from torch_tem.types import Observation
 
 # Loss component names (order matches training loss component order)
 LOSS_NAMES = ("p_g", "p_x", "x_gen", "x_g", "x_p", "g", "reg_g", "reg_p")
@@ -89,17 +92,25 @@ class TEMLightningModule(pl.LightningModule):
         if callable(setter):
             setter(walk_length_center)
 
-    def _log_step_metrics(self, *, prefix: str, loss_output: "LossOutput") -> None:
+    def _log_step_metrics(self, *, prefix: str, loss_output: LossOutput) -> None:
         """Log losses + accuracies with an optional prefix."""
         self.log(f"{prefix}loss", loss_output.total, prog_bar=True)
         self.log(f"{prefix}Losses/Total", loss_output.total.detach())
-        for idx, name in enumerate(LOSS_NAMES):
-            self.log(f"{prefix}Losses/{name}", loss_output.plot_loss[idx])
-        self.log(f"{prefix}Accuracies/p", loss_output.acc_p)
-        self.log(f"{prefix}Accuracies/g", loss_output.acc_g)
-        self.log(f"{prefix}Accuracies/gt", loss_output.acc_gt)
+        # Log 8 individual components (legacy names/order)
+        self.log(f"{prefix}Losses/p_g", loss_output.p.abstract)
+        self.log(f"{prefix}Losses/p_x", loss_output.p.sensory)
+        self.log(f"{prefix}Losses/x_gen", loss_output.x.ancestral)
+        self.log(f"{prefix}Losses/x_g", loss_output.x.retrieved)
+        self.log(f"{prefix}Losses/x_p", loss_output.x.infer)
+        self.log(f"{prefix}Losses/g", loss_output.g.transition)
+        self.log(f"{prefix}Losses/reg_g", loss_output.reg.g_l2)
+        self.log(f"{prefix}Losses/reg_p", loss_output.reg.p_l1)
+        # Log grouped losses
+        self.log(f"{prefix}Losses/lx", loss_output.x.total)
+        self.log(f"{prefix}Losses/lp", loss_output.p.total)
+        self.log(f"{prefix}Losses/lg", loss_output.g.total)
 
-    def loss(self, chunk, visited, loss_weights: torch.Tensor, use_prev_iter: bool = True, update_prev_iter: bool = True) -> LossOutput:
+    def loss(self, chunk, visited, loss_weights: torch.Tensor, use_prev_iter: bool = True, update_prev_iter: bool = True) -> AccumLoss:
         """Compute loss and metrics for a batch chunk.
 
         Args:
@@ -129,42 +140,49 @@ class TEMLightningModule(pl.LightningModule):
         use_p_inf = self.tem.hyper["use_p_inf"]
 
         # Accumulate loss across timesteps
-        total_loss = torch.zeros((), device=self.device)
-        components_sum = torch.zeros(8, device=self.device)
-        plot_loss = np.zeros(8, dtype=np.float32)
+        accum = AccumLoss.zero(device=self.device)
 
         for step in forward:
             # Compute raw loss components for this timestep
-            step_losses_raw = _compute_step_losses(step, use_p_inf)
+            step_losses = _compute_step_losses(step, use_p_inf)
 
-            # Apply visited-location filtering and weighting (same logic as before)
+            # Apply visited-location filtering and weighting
             step_loss = []
             for env_i, env_visited in enumerate(visited):
                 if env_visited[step.g[env_i]["id"]]:
-                    step_loss.append(loss_weights * torch.stack([l[env_i] for l in step_losses_raw]))
+                    # Extract [8] per-env components in LOSS_NAMES order and apply weights
+                    env_components = torch.stack(
+                        [
+                            step_losses.p.abstract[env_i],
+                            step_losses.p.sensory[env_i],
+                            step_losses.x.ancestral[env_i],
+                            step_losses.x.retrieved[env_i],
+                            step_losses.x.infer[env_i],
+                            step_losses.g.transition[env_i],
+                            step_losses.reg.g_l2[env_i],
+                            step_losses.reg.p_l1[env_i],
+                        ]
+                    )
+                    step_loss.append(loss_weights * env_components)
                 else:
                     env_visited[step.g[env_i]["id"]] = True
-            step_loss_vec = torch.zeros(8, device=self.device) if not step_loss else torch.mean(torch.stack(step_loss, dim=0), dim=0)
-            components_sum = components_sum + step_loss_vec
-            plot_loss = plot_loss + step_loss_vec.detach().cpu().numpy()
-            total_loss = total_loss + torch.sum(step_loss_vec)
+
+            # Average across visited environments and create LossOutput
+            if step_loss:
+                step_vec = torch.mean(torch.stack(step_loss, dim=0), dim=0)  # [8]
+                step_contrib = StepLoss(
+                    x=LossX(infer=step_vec[4], retrieved=step_vec[3], ancestral=step_vec[2]),
+                    p=LossP(abstract=step_vec[0], sensory=step_vec[1]),
+                    g=LossG(transition=step_vec[5]),
+                    reg=LossReg(g_l2=step_vec[6], p_l1=step_vec[7]),
+                )
+                accum = accum + step_contrib
 
         # Update prev_iter for next training step (only if requested)
         if update_prev_iter:
             self.prev_iter = [forward[-1].detach()]
 
-        # Compute accuracies
-        acc_p, acc_g, acc_gt = np.mean([[np.mean(a) for a in step.correct()] for step in forward], axis=0)
-        acc_p, acc_g, acc_gt = [a * 100 for a in (acc_p, acc_g, acc_gt)]
-
-        return LossOutput(
-            total=total_loss,
-            components=components_sum,  # Accumulated weighted components across chunk
-            plot_loss=plot_loss,
-            acc_p=acc_p,
-            acc_g=acc_g,
-            acc_gt=acc_gt,
-        )
+        return accum
 
     def configure_optimizers(self):
         """Configure optimizer with dynamic learning rate."""
@@ -222,30 +240,7 @@ class TEMLightningModule(pl.LightningModule):
         return eta, lamb, p2g_scale_offset, walk_length_center, loss_weights
 
 
-@dataclass
-class LossOutput:
-    """Output from loss computation containing total loss, components, and metrics.
-
-    Attributes:
-        total: Scalar total loss for backprop (sum of all weighted components).
-        components: Weighted loss components tensor [8], summed across timesteps.
-                   Represents the chunk's total contribution per component (device-resident).
-        plot_loss: Same as components, but as CPU numpy array for logging.
-                  Both are weighted by loss_weights and env-averaged.
-        acc_p: Grounded location accuracy (%).
-        acc_g: Abstract location accuracy (%).
-        acc_gt: Ground truth location accuracy (%).
-    """
-
-    total: torch.Tensor  # Scalar total loss for backprop
-    components: torch.Tensor  # Loss components tensor [8] (device-resident, summed across timesteps)
-    plot_loss: np.ndarray  # Accumulated loss components for logging [8] (weighted, env-averaged)
-    acc_p: float  # Grounded location accuracy (%)
-    acc_g: float  # Abstract location accuracy (%)
-    acc_gt: float  # Ground truth location accuracy (%)
-
-
-def _compute_step_losses(step: TEMState, use_p_inf: bool) -> list[torch.Tensor]:
+def _compute_step_losses(step: TEMState, use_p_inf: bool) -> StepLoss:
     """Compute the 8 loss components for a single TEM timestep.
 
     Args:
@@ -253,8 +248,8 @@ def _compute_step_losses(step: TEMState, use_p_inf: bool) -> list[torch.Tensor]:
         use_p_inf: Whether to use p_inf (from model.hyper["use_p_inf"]).
 
     Returns:
-        List of 8 loss tensors [batch_size] in LOSS_NAMES order:
-        [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]
+        LossOutput with 8 individual components (shape [batch_size] each).
+        Note: total is NOT computed here (will be computed during accumulation).
     """
     # L_p_g: squared error between inferred grounded location and grounded location from inferred abstract location
     L_p_g = torch.sum(torch.stack(utils.squared_error(step.p_inf, step.p_gen), dim=0), dim=0)
@@ -277,4 +272,42 @@ def _compute_step_losses(step: TEMState, use_p_inf: bool) -> list[torch.Tensor]:
     # L_reg_p: L1 regularization on grounded location
     L_reg_p = torch.sum(torch.stack([torch.sum(torch.abs(p), dim=1) for p in step.p_inf], dim=0), dim=0)
 
-    return [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]
+    # Return as compositional LossOutput
+    return StepLoss(
+        x=LossX(infer=L_x_p, retrieved=L_x_g, ancestral=L_x_gen),
+        p=LossP(abstract=L_p_g, sensory=L_p_x),
+        g=LossG(transition=L_g),
+        reg=LossReg(g_l2=L_reg_g, p_l1=L_reg_p),
+    )
+
+
+# # Initialize loss components
+# loss_x_fn = losses.SensoryReconstructionLoss()
+# loss_p_fn = losses.GroundedLocationLoss()
+# loss_g_fn = losses.AbstractLocationLoss()
+# loss_reg_fn = losses.RegularizationLoss()
+# loss_total_fn = losses.TEMLoss(config)
+
+# def _new_compute_step_losses(model, o: Observation, state: TEMState) -> StepLoss:
+#     # Extract grounded locations from TEM state for loss computation
+#     p_x, p_g, p = state.grounded
+#     g_gen = model.mec.projection(state.mec.transition_stats.mean)  # Project predicted abstract location
+#     p_gen = model.hpc.retrieve(g_gen, for_inference=False, state=state.hpc)  # Retrieve from generative memory
+
+#     # L_x: Sensory reconstruction from three pathways (teacher forcing)
+#     Lx = [
+#         # self.loss_x_fn(prediction=self.lec.decode(p_x), target=x),  # From sensory retrieval
+#         loss_x_fn(prediction=model.lec.decode(p_g), target=o),  # From abstract retrieval
+#         loss_x_fn(prediction=model.lec.decode(p), target=o),  # From inference
+#         loss_x_fn(prediction=model.lec.decode(p_gen), target=o),  # From generative prediction
+#     ]
+#     # L_p: Grounded location consistency (inference matches memory retrieval)
+#     Lp = loss_p_fn(p=p, p_g=p_g, p_x=p_x)
+#     # L_g: Abstract location KL divergence (posterior vs prior)
+#     Lg = loss_g_fn(g=state.abstract_location, g_gen=state.transition_stats)
+
+#     # Regularization losses
+#     L_reg_g, L_reg_p = loss_reg_fn(g=state.abstract_location, p=p)
+
+#     # Compute total ELBO
+#     return loss_total_fn(sum(Lx), Lp, Lg, L_reg_g, L_reg_p)

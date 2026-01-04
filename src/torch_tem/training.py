@@ -43,6 +43,9 @@ class TEMLightningModule(pl.LightningModule):
         self.loss_reg_fn = losses.RegularizationLoss(reduction="none")
         self.acc_x_fn = metrics.SensoryAccuracy(reduction="none")
 
+        # Cache for current step's loss weights (set by on_train_batch_start)
+        self._loss_weights: Optional[Tensor] = None
+
     def forward(self, chunk):
         """Forward pass through TEM."""
         return self.tem(chunk, self.prev_iter)
@@ -50,14 +53,9 @@ class TEMLightningModule(pl.LightningModule):
     def training_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single training step."""
         chunk, visited = batch
-        i = self.global_step
 
-        # Update model runtime hyperparameters and datamodule curriculum
-        eta_new, hebbian_decay_new, p2g_scale_offset, walk_length_center, loss_weights = self._compute_schedule(i)
-        self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
-        self._maybe_set_walk_length_center(walk_length_center)
-
-        loss_output, accuracies = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=True, update_prev_iter=True)
+        # Loss weights are set by on_train_batch_start hook
+        loss_output, accuracies = self.loss(chunk, visited, self._loss_weights, use_prev_iter=True, update_prev_iter=True)
         self._log_step_metrics(prefix="", loss_output=loss_output)
         self._log_accuracy_metrics(prefix="", accuracies=accuracies)
         return loss_output.total
@@ -65,14 +63,11 @@ class TEMLightningModule(pl.LightningModule):
     def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single validation step."""
         chunk, visited = batch
-        i = self.global_step
 
-        # Keep eval deterministic by matching runtime hparams to current global_step.
-        eta_new, hebbian_decay_new, p2g_scale_offset, _, _ = self._compute_schedule(i)
-        self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
-
-        loss_weights = self.schedule_settings.loss_weights_base
-        loss_output, accuracies = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=False, update_prev_iter=False)
+        # Runtime hyperparams set by on_validation_batch_start hook
+        # Use base loss weights (no annealing during validation)
+        loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
+        loss_output, accuracies = self.loss(chunk, visited, loss_weights, use_prev_iter=False, update_prev_iter=False)
         self._log_step_metrics(prefix="val/", loss_output=loss_output)
         self._log_accuracy_metrics(prefix="val/", accuracies=accuracies)
         return loss_output.total
@@ -80,17 +75,37 @@ class TEMLightningModule(pl.LightningModule):
     def test_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Single test step."""
         chunk, visited = batch
-        i = self.global_step
 
-        # Keep eval deterministic by matching runtime hparams to current global_step.
-        eta_new, hebbian_decay_new, p2g_scale_offset, _, _ = self._compute_schedule(i)
-        self.tem.set_runtime_hyperparams(eta_new, hebbian_decay_new, p2g_scale_offset)
-
-        loss_weights = self.schedule_settings.loss_weights_base
-        loss_output, accuracies = self.loss(chunk, visited, loss_weights.to(self.device), use_prev_iter=False, update_prev_iter=False)
+        # Runtime hyperparams set by on_test_batch_start hook
+        # Use base loss weights (no annealing during testing)
+        loss_weights = self.schedule_settings.loss_weights_base.to(self.device)
+        loss_output, accuracies = self.loss(chunk, visited, loss_weights, use_prev_iter=False, update_prev_iter=False)
         self._log_step_metrics(prefix="test/", loss_output=loss_output)
         self._log_accuracy_metrics(prefix="test/", accuracies=accuracies)
         return loss_output.total
+
+    def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
+        """Update schedules before training step (Lightning hook)."""
+        eta, hebbian_decay, p2g_scale_offset, walk_center, loss_weights = self._compute_schedule(self.global_step)
+        self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
+        self._maybe_set_walk_length_center(walk_center)
+        self._loss_weights = loss_weights.to(self.device)
+
+    def on_validation_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
+        """Update runtime hyperparams before validation step (Lightning hook)."""
+        eta, hebbian_decay, p2g_scale_offset, _, _ = self._compute_schedule(self.global_step)
+        self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
+
+    def on_test_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
+        """Update runtime hyperparams before test step (Lightning hook)."""
+        eta, hebbian_decay, p2g_scale_offset, _, _ = self._compute_schedule(self.global_step)
+        self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
+
+    def on_before_optimizer_step(self, optimizer) -> None:
+        """Update learning rate before optimizer step (Lightning hook)."""
+        lr = self._compute_lr(self.global_step)
+        for group in optimizer.param_groups:
+            group["lr"] = lr
 
     def _maybe_set_walk_length_center(self, walk_length_center: float) -> None:
         """Update datamodule curriculum control surface if present."""
@@ -225,21 +240,11 @@ class TEMLightningModule(pl.LightningModule):
         return accum, final_acc
 
     def configure_optimizers(self):
-        """Configure optimizer with dynamic learning rate."""
-        optimizer = Adam(self.tem.parameters(), lr=self.schedule_settings.lr_max)
+        """Configure optimizer.
 
-        # Lightning will call optimizer_step where we can update lr dynamically
-        return optimizer
-
-    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
-        """Custom optimizer step to update learning rate dynamically."""
-        # Update learning rate based on current iteration
-        lr = self._compute_lr(self.global_step)
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
-
-        # Call the default optimizer step
-        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
+        Note: Learning rate is updated dynamically via on_before_optimizer_step hook.
+        """
+        return Adam(self.tem.parameters(), lr=self.schedule_settings.lr_max)
 
     def _compute_lr(self, iteration: int) -> float:
         """Compute learning rate for given iteration."""

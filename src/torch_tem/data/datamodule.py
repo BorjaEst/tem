@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, IterableDataset
 from torch_tem import data, settings
 
 
-class DataSettings(BaseModel):
+class DataConfig(BaseModel):
     """Data/environment generation settings (Lightning datamodule + dataset).
 
     Composed of leaf settings for environment generation, rollout chunking,
@@ -52,7 +52,7 @@ class DataSettings(BaseModel):
 class TEMDataModule(pl.LightningDataModule):
     """Lightning DataModule for TEM training."""
 
-    def __init__(self, data_settings: DataSettings):
+    def __init__(self, data_settings: DataConfig):
         super().__init__()
         self.data_settings = data_settings
         self.dataset: Optional[TEMDataset] = None
@@ -161,7 +161,7 @@ class TEMDataset(IterableDataset):
 
     def __init__(
         self,
-        data_settings: DataSettings,
+        data_settings: DataConfig,
         walk_it_min: int,
         walk_it_max: int,
         walk_it_window: float,

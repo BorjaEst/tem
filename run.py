@@ -37,9 +37,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import core, data, losses, settings, training
 from torch_tem.core import Parameters
-from torch_tem.data.datamodule import DataSettings
+from torch_tem.data.datamodule import DataConfig
 from torch_tem.settings import CheckpointSettings, LoggerSettings
-from torch_tem.training import TrainerSettings
+from torch_tem.training import TrainerConfig
 
 # Configure PyTorch for better performance on modern GPUs
 torch.set_float32_matmul_precision("medium")
@@ -57,7 +57,7 @@ class RunArguments(BaseSettings):
 
     The settings use deep composition:
     - Leaf settings (env, rollout, schedule, etc.) live in settings.py
-    - Complex aggregate settings (DataSettings, TrainerSettings) live with their components
+    - Complex aggregate settings (DataConfig, TrainerConfig) live with their components
     - RunArguments composes everything and ensures single source of truth for shared settings
     """
 
@@ -159,13 +159,13 @@ class RunArguments(BaseSettings):
     # Aggregate settings (compose leaf settings for modules)
     # =========================================================================
     @property
-    def data(self) -> DataSettings:
-        """Compose DataSettings from leaf settings.
+    def data(self) -> DataConfig:
+        """Compose DataConfig from leaf settings.
 
         Creates the aggregate data configuration consumed by TEMDataModule.
         The walk settings are shared with trainer to maintain single source of truth.
         """
-        return DataSettings(
+        return DataConfig(
             env=self.env,
             rollout=self.rollout,
             eval=self.eval,
@@ -175,13 +175,13 @@ class RunArguments(BaseSettings):
         )
 
     @property
-    def trainer(self) -> TrainerSettings:
-        """Compose TrainerSettings from leaf settings and Lightning kwargs.
+    def trainer(self) -> TrainerConfig:
+        """Compose TrainerConfig from leaf settings and Lightning kwargs.
 
         Creates the aggregate training configuration consumed by TEMLightningModule.
         The walk settings are shared with data to maintain single source of truth.
         """
-        return TrainerSettings(
+        return TrainerConfig(
             max_steps=self.max_steps,
             log_every_n_steps=self.log_every_n_steps,
             enable_progress_bar=self.enable_progress_bar,

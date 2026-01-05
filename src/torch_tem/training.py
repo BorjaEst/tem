@@ -44,12 +44,12 @@ from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX
 from torch_tem.metrics import AccuracyCounts, AccuracyX
 
 
-class TrainerSettings(BaseModel):
+class TrainerConfig(BaseModel):
     """Trainer settings including Lightning Tracker kwargs and training schedules.
 
     Combines Lightning infrastructure settings with schedule configuration for
     loss weights, learning rate, Hebbian plasticity, and p2g variance offset.
-    Also includes walk curriculum bounds (from DataSettings) for walk annealing schedule.
+    Also includes walk curriculum bounds (from DataConfig) for walk annealing schedule.
     """
 
     model_config = ConfigDict(extra="allow")  # Allow extra Lightning kwargs
@@ -77,10 +77,10 @@ class TrainerSettings(BaseModel):
         description="Place-to-grid variance offset schedule settings.",
     )
 
-    # Walk curriculum bounds (referenced from DataSettings for annealing schedule)
+    # Walk curriculum bounds (referenced from DataConfig for annealing schedule)
     walk: settings.WalkCurriculumSettings = Field(
         default_factory=settings.WalkCurriculumSettings,
-        description="Walk length curriculum settings (shared with DataSettings).",
+        description="Walk length curriculum settings (shared with DataConfig).",
     )
 
 
@@ -106,7 +106,7 @@ class TEMLightningModule(pl.LightningModule):
         trainer_settings: Combined trainer and schedule configuration.
     """
 
-    def __init__(self, model: TEMModel, training: TrainerSettings):
+    def __init__(self, model: TEMModel, training: TrainerConfig):
         """Initialize the Lightning module.
 
         Args:

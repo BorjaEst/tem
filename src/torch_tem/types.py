@@ -5,6 +5,14 @@ grounded in the theoretical framework of the Tolman-Eichenbaum Machine.
 These types abstract implementation details and provide clear semantics for
 multi-scale spatial representations, Hebbian memory, and belief propagation.
 
+Architecture Note
+-----------------
+This module is **dependency-free** within torch_tem:
+    - No imports from other torch_tem modules
+    - No Pydantic models (those live in settings.py)
+    - Pure type definitions using only standard library, torch, and dataclasses
+    - Provides foundation for settings.py and other modules
+
 Type Hierarchy
 --------------
 Mathematical Primitives:

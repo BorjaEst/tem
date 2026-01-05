@@ -49,16 +49,32 @@ torch.set_float32_matmul_precision("medium")
 # Settings Model
 # ============================================================================
 class RunArguments(BaseSettings):
-    """Settings for a TEM training run.
+    """Entry-point settings for a TEM training run.
 
     This settings model is designed to be used as a CLI interface via Pydantic Settings.
-    It supports nested overrides via dot-notation flags (e.g., `--data.env.randomise_observations false`).
+    It supports nested overrides via dot-notation flags (e.g., `--env.randomise_observations false`).
     All settings have sensible defaults and can be overridden via CLI arguments.
 
-    The settings use deep composition:
-    - Leaf settings (env, rollout, schedule, etc.) live in settings.py
-    - Complex aggregate settings (DataConfig, TrainerConfig) live with their components
-    - RunArguments composes everything and ensures single source of truth for shared settings
+    Settings Architecture:
+        This class demonstrates the settings composition pattern used throughout torch_tem:
+
+        1. **Low-level settings** (from settings.py) are exposed as individual fields
+        2. **Composite configs** (DataConfig, TrainerConfig) are built from these fields
+        3. **Single source of truth**: Shared settings (e.g., walk curriculum) are defined
+           once and referenced by multiple components, preventing parameter duplication
+
+    Benefits:
+        - No parameter duplication: walk_it_min, walk_it_max defined once, used by both
+          data generation (DataConfig) and training (TrainerConfig)
+        - Type safety: Pydantic validation at both settings and config levels
+        - CLI composability: Override any nested setting via dot notation
+        - Clear dependency: settings.py → module configs → run.py
+
+    Example:
+        Override walk curriculum and learning rate from CLI:
+        ```bash
+        python run.py --walk.walk_it_min 30 --walk.walk_it_max 250 --lr.lr_max 0.001
+        ```
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="run")

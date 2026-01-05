@@ -1,4 +1,50 @@
-"""Settings for TEM training and data generation."""
+"""Low-level settings for TEM training and data generation.
+
+This module contains Pydantic BaseModel settings classes that define configuration
+for individual components of TEM training, data generation, and scheduling.
+
+Architecture Note
+-----------------
+Settings hierarchy in torch_tem:
+
+    1. **types.py**: Pure types with no dependencies from torch_tem
+    2. **settings.py** (this module): Low-level '*Settings' Pydantic models
+       - Depend only on types.py (for type hints like Reduction, Scalar)
+       - Define leaf-level configuration for individual components
+       - Shared across multiple higher-level modules
+    3. **Module configs**: '*Config' classes in datamodule.py, training.py, etc.
+       - Compose multiple '*Settings' from this module
+       - Prevent parameter duplication across components
+    4. **Entry points**: run.py, etc.
+       - Use '*Settings' as sub-arguments to construct module '*Config' objects
+       - Ensures single source of truth for shared parameters
+
+Settings Classes
+----------------
+Environment & Data:
+    - EnvironmentSettings: Environment JSON files and observation randomization
+    - RolloutSettings: Batch size and rollout chunking
+    - EvalSettings: Validation and test dataset configuration
+    - ExplorationSettings: World exploration behavior
+    - ShinySettings: Shiny environment generation
+    - WalkCurriculumSettings: Walk length curriculum bounds
+
+Training Schedules:
+    - LRScheduleSettings: Learning rate schedule
+    - HebbianScheduleSettings: Hebbian memory plasticity schedule
+    - P2GOffsetScheduleSettings: Place-to-grid variance offset schedule
+
+Loss Configuration:
+    - SensoryReconstructionSettings: Sensory loss (L_x) settings
+    - AbstractLocationSettings: Abstract location loss (L_g) settings
+    - GroundedLocationSettings: Grounded location loss (L_p) settings
+    - RegularizationSettings: Regularization penalties
+    - LossSettings: Composes all loss component settings
+
+Infrastructure:
+    - LoggerSettings: TensorBoard logging configuration
+    - CheckpointSettings: Model checkpointing configuration
+"""
 
 from __future__ import annotations
 

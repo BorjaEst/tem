@@ -9,8 +9,13 @@ This module provides the complete loss framework for TEM training:
 2. **Loss computation modules**: ``torch.nn.Module`` implementations that compute
    individual loss components from TEM states.
 
-3. **Configuration system**: Pydantic models for type-safe loss hyperparameter
-   management.
+3. **Configuration**: Uses low-level '*Settings' classes from settings.py for
+   type-safe loss hyperparameter management (SensoryReconstructionSettings,
+   AbstractLocationSettings, GroundedLocationSettings, RegularizationSettings).
+
+Architecture Note:
+    Loss modules consume '*Settings' from settings.py, not Config classes.
+    Settings are composed into LossSettings, then used by TEMLoss module.
 
 Default Configuration:
     The default ``reduction="none"`` produces per-environment losses (shape ``(B,)``)

@@ -21,6 +21,13 @@ Key Features:
         Learning rate, Hebbian parameters, and walk length are scheduled
         dynamically during training.
 
+Architecture Note
+-----------------
+Settings composition:
+    - TrainerConfig composes low-level '*Settings' from settings.py
+    - Prevents duplication of parameters like walk curriculum bounds
+    - Instantiated in run.py from individual settings components
+
 See Also:
     :class:`torch_tem.losses.TEMLoss`: Loss computation
     :class:`torch_tem.core.model.TEMModel`: Core TEM model
@@ -45,11 +52,21 @@ from torch_tem.metrics import AccuracyCounts, AccuracyX
 
 
 class TrainerConfig(BaseModel):
-    """Trainer settings including Lightning Tracker kwargs and training schedules.
+    """Composite configuration for TEM training (Lightning trainer + schedules).
 
-    Combines Lightning infrastructure settings with schedule configuration for
-    loss weights, learning rate, Hebbian plasticity, and p2g variance offset.
-    Also includes walk curriculum bounds (from DataConfig) for walk annealing schedule.
+    This Config class composes low-level '*Settings' from settings.py to provide
+    complete configuration for TEMLightningModule and Lightning Trainer. It aggregates
+    Lightning infrastructure settings with schedule configuration for loss weights,
+    learning rate, Hebbian plasticity, and p2g variance offset.
+
+    Architecture:
+        - Composes settings.LossSettings, settings.LRScheduleSettings, etc.
+        - Used by TEMLightningModule
+        - Instantiated from RunArguments in run.py (prevents parameter duplication)
+
+    Note:
+        Walk curriculum settings (walk) are shared with DataConfig to coordinate
+        walk length annealing between data generation and training loop.
     """
 
     model_config = ConfigDict(extra="allow")  # Allow extra Lightning kwargs
@@ -59,11 +76,19 @@ class TrainerConfig(BaseModel):
     log_every_n_steps: int = Field(default=10, description="Log metrics every N steps.")
     enable_progress_bar: bool = Field(default=True, description="Show progress bar during training.")
 
-    # Training schedules (leaf settings)
+    # Loss settings (leaf settings)
     loss: settings.LossSettings = Field(
         default_factory=settings.LossSettings,
         description="Loss settings including weights for each component.",
     )
+
+    # Walk curriculum bounds (referenced from DataConfig for annealing schedule)
+    walk: settings.WalkCurriculumSettings = Field(
+        default_factory=settings.WalkCurriculumSettings,
+        description="Walk length curriculum settings (shared with DataConfig).",
+    )
+
+    # Training schedules (leaf settings)
     lr: settings.LRScheduleSettings = Field(
         default_factory=settings.LRScheduleSettings,
         description="Learning rate schedule settings.",
@@ -75,12 +100,6 @@ class TrainerConfig(BaseModel):
     p2g_offset: settings.P2GOffsetScheduleSettings = Field(
         default_factory=settings.P2GOffsetScheduleSettings,
         description="Place-to-grid variance offset schedule settings.",
-    )
-
-    # Walk curriculum bounds (referenced from DataConfig for annealing schedule)
-    walk: settings.WalkCurriculumSettings = Field(
-        default_factory=settings.WalkCurriculumSettings,
-        description="Walk length curriculum settings (shared with DataConfig).",
     )
 
 

@@ -1,4 +1,15 @@
-""" """
+"""PyTorch Lightning DataModule for TEM training data generation.
+
+This module provides TEMDataModule and TEMDataset for streaming on-the-fly
+batch generation during TEM training.
+
+Architecture Note
+-----------------
+Settings composition:
+    - DataConfig composes low-level '*Settings' from settings.py
+    - Prevents duplication of parameters like walk curriculum bounds
+    - Instantiated in run.py from individual settings components
+"""
 
 from __future__ import annotations
 
@@ -14,11 +25,21 @@ from torch_tem import data, settings
 
 
 class DataConfig(BaseModel):
-    """Data/environment generation settings (Lightning datamodule + dataset).
+    """Composite configuration for TEM data generation (Lightning datamodule + dataset).
 
-    Composed of leaf settings for environment generation, rollout chunking,
-    evaluation protocols, exploration behavior, shiny environment sampling,
-    and walk length curriculum.
+    This Config class composes low-level '*Settings' from settings.py to provide
+    complete configuration for TEMDataModule and TEMDataset. It aggregates settings
+    for environment generation, rollout chunking, evaluation protocols, exploration
+    behavior, shiny environment sampling, and walk length curriculum.
+
+    Architecture:
+        - Composes settings.EnvironmentSettings, settings.RolloutSettings, etc.
+        - Used by TEMDataModule and TEMDataset
+        - Instantiated from RunArguments in run.py (prevents parameter duplication)
+
+    Note:
+        Walk curriculum settings (walk) are shared with TrainerConfig to coordinate
+        walk length annealing between data generation and training loop.
     """
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)

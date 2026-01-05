@@ -21,10 +21,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlia
 # Standard modules
 import numpy as np
 import torch
-from pydantic import AliasChoices, BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from scipy.special import comb
 from scipy.stats import truncnorm
-from torch import Tensor
+from torch import Tensor, nn
 
 from torch_tem import utils
 from torch_tem.modules import MLP

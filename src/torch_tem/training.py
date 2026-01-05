@@ -60,9 +60,9 @@ class TrainerSettings(BaseModel):
     enable_progress_bar: bool = Field(default=True, description="Show progress bar during training.")
 
     # Training schedules (leaf settings)
-    loss: losses.LossConfig = Field(
-        default_factory=losses.LossConfig,
-        description="Loss configuration.",
+    loss: settings.LossSettings = Field(
+        default_factory=settings.LossSettings,
+        description="Loss settings including weights for each component.",
     )
     lr: settings.LRScheduleSettings = Field(
         default_factory=settings.LRScheduleSettings,

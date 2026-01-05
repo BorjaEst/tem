@@ -5,7 +5,7 @@ Tolman-Eichenbaum Machine (TEM) implementation in this repository.
 
 It wires together:
 
-- Settings parsing via Pydantic Settings (`RunSettings`).
+- Settings parsing via Pydantic Settings (`RunArguments`).
 - Model construction (`torch_tem.core.model.TEMModel`).
 - Lightning `Trainer`, logger, and checkpoint callback.
 - Training loop defined in `torch_tem.training`.
@@ -48,7 +48,7 @@ torch.set_float32_matmul_precision("medium")
 # ============================================================================
 # Settings Model
 # ============================================================================
-class RunSettings(BaseSettings):
+class RunArguments(BaseSettings):
     """Settings for a TEM training run.
 
     This settings model is designed to be used as a CLI interface via Pydantic Settings.
@@ -58,7 +58,7 @@ class RunSettings(BaseSettings):
     The settings use deep composition:
     - Leaf settings (env, rollout, schedule, etc.) live in settings.py
     - Complex aggregate settings (DataSettings, TrainerSettings) live with their components
-    - RunSettings composes everything and ensures single source of truth for shared settings
+    - RunArguments composes everything and ensures single source of truth for shared settings
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="run")
@@ -102,9 +102,9 @@ class RunSettings(BaseSettings):
     # =========================================================================
     # Leaf settings (training schedules)
     # =========================================================================
-    loss: losses.LossConfig = Field(
-        default_factory=losses.LossConfig,
-        description="Loss configuration.",
+    loss: settings.LossSettings = Field(
+        default_factory=settings.LossSettings,
+        description="Loss settings including weights for each component.",
     )
     lr: settings.LRScheduleSettings = Field(
         default_factory=settings.LRScheduleSettings,
@@ -216,27 +216,27 @@ if __name__ == "__main__":
     """
     # Step 1: Parse all settings from CLI and environment
     # Pydantic Settings will automatically parse sys.argv when cli_parse_args=True
-    config = RunSettings()
+    args = RunArguments()
 
     # Step 2: Seed all RNGs for deterministic training
     # workers=True ensures DataLoader workers are also seeded
-    seed_everything(config.seed, workers=True)
+    seed_everything(args.seed, workers=True)
 
     # Step 3: Construct the TEM model from architecture parameters
     # model_dump() converts the Pydantic Parameters model to a plain dict
-    tem_model = core.TEMModel(config.model_params.model_dump())
+    tem_model = core.TEMModel(args.model_params.model_dump())
 
     # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control
     trainer = Trainer(
         # TensorBoard logger for metrics and hyperparameters
-        logger=TensorBoardLogger(**config.logger.model_dump()),
+        logger=TensorBoardLogger(**args.logger.model_dump()),
         # Checkpoint callback to save model state periodically
-        callbacks=[ModelCheckpoint(**config.checkpoint.model_dump())],
+        callbacks=[ModelCheckpoint(**args.checkpoint.model_dump())],
         # Lightning Trainer kwargs (extracted from config)
-        max_steps=config.max_steps,
-        log_every_n_steps=config.log_every_n_steps,
-        enable_progress_bar=config.enable_progress_bar,
+        max_steps=args.max_steps,
+        log_every_n_steps=args.log_every_n_steps,
+        enable_progress_bar=args.enable_progress_bar,
     )
 
     # Step 5: Start training
@@ -244,9 +244,9 @@ if __name__ == "__main__":
     # The DataModule generates batches of walk data on-the-fly
     trainer.fit(
         # Lightning module: training step, optimizer, schedule computation
-        training.TEMLightningModule(tem_model, config.trainer),
+        training.TEMLightningModule(tem_model, args.trainer),
         # Data module: generates environment walks and batches
-        datamodule=data.TEMDataModule(config.data),
+        datamodule=data.TEMDataModule(args.data),
         # Optional: resume from checkpoint
-        ckpt_path=str(config.ckpt_path) if config.ckpt_path else None,
+        ckpt_path=str(args.ckpt_path) if args.ckpt_path else None,
     )

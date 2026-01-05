@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Literal, Optional, Tuple
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from torch_tem import types
-from torch_tem.losses import LossConfig
-
-# =============================================================================
-# Leaf Settings Models (reusable components)
-# =============================================================================
+from torch_tem.types import Reduction, Scalar
 
 
 class EnvironmentSettings(BaseModel):
@@ -249,4 +244,107 @@ class CheckpointSettings(BaseModel):
     save_last: bool = Field(
         default=True,
         description="Whether to always save the last checkpoint.",
+    )
+
+
+class SensoryReconstructionSettings(BaseModel):
+    """Settings for sensory reconstruction loss ($L_x$)."""
+
+    model_config = ConfigDict(extra="forbid", strict=False, arbitrary_types_allowed=True)
+
+    reduction: Reduction = Field(
+        default="none",
+        description="Reduction for sensory reconstruction loss.",
+    )
+    weight: float = Field(
+        default=1.0,
+        ge=0,
+        description="Weight multiplier for all L_x components.",
+    )
+
+
+class AbstractLocationSettings(BaseModel):
+    """Settings for abstract location transition loss ($L_g$)."""
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    mode: Literal["mse", "kl"] = Field(
+        default="mse",
+        description="Loss mode: 'mse' (legacy surrogate), 'kl' (with uncertainty).",
+    )
+    reduction: Reduction = Field(
+        default="none",
+        description="Reduction for abstract location loss.",
+    )
+    weight: float = Field(
+        default=1.0,
+        ge=0,
+        description="Weight multiplier for L_g.transition.",
+    )
+
+
+class GroundedLocationSettings(BaseModel):
+    """Settings for grounded location consistency loss ($L_p$)."""
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    reduction: Reduction = Field(
+        default="none",
+        description="Reduction for grounded location loss.",
+    )
+    weight: float = Field(
+        default=1.0,
+        ge=0,
+        description="Weight multiplier for all L_p components.",
+    )
+
+
+class RegularizationSettings(BaseModel):
+    """Settings for regularization penalties."""
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    reduction: Reduction = Field(
+        default="none",
+        description="Reduction for regularization losses.",
+    )
+    weight_g_l2: float = Field(
+        default=0.01,
+        ge=0,
+        description="Weight for abstract location L2 penalty.",
+    )
+    weight_p_l1: float = Field(
+        default=0.02,
+        ge=0,
+        description="Weight for grounded location L1 penalty.",
+    )
+
+
+class LossSettings(BaseModel):
+    """Complete settings tree for TEM loss computation.
+
+    Attributes:
+        x: Settings for sensory reconstruction losses.
+        g: Settings for abstract location transition losses.
+        p: Settings for grounded location consistency losses.
+        reg: Settings for regularization penalties.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    x: SensoryReconstructionSettings = Field(
+        default_factory=SensoryReconstructionSettings,
+        description="Sensory reconstruction loss settings.",
+    )
+    g: AbstractLocationSettings = Field(
+        default_factory=AbstractLocationSettings,
+        description="Abstract location loss settings.",
+    )
+    p: GroundedLocationSettings = Field(
+        default_factory=GroundedLocationSettings,
+        description="Grounded location loss settings.",
+    )
+    reg: RegularizationSettings = Field(
+        default_factory=RegularizationSettings,
+        description="Regularization loss settings.",
     )

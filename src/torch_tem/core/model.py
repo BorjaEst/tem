@@ -21,13 +21,99 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlia
 # Standard modules
 import numpy as np
 import torch
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 from scipy.special import comb
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
 from torch_tem import utils
 from torch_tem.modules import MLP
+
+
+class WorldParameters(BaseModel):
+    """World + action-space parameters (input semantics)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    has_static_action: bool = Field(
+        default=True,
+        description="Does this world include the standing still action?",
+    )
+    n_actions: int = Field(
+        default=4,
+        description="Number of available actions, excluding the stand still action",
+    )
+
+
+class LECParameters(BaseModel):
+    """LEC parameters: observation -> feature cell representation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    n_x: int = Field(default=45, description="Neurons for sensory observation x")
+    n_x_c: int = Field(default=10, description="Neurons for compressed sensory experience x_c")
+
+
+class MECParameters(BaseModel):
+    """MEC parameters: abstract location (grid/ovc) structure and dynamics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    do_sample: bool = Field(
+        default=False,
+        description="Whether to sample, or assume no noise and simply take mean of all distributions",
+    )
+    separate_ovc: bool = Field(
+        default=False,
+        description="Whether to use separate grid modules that receive shiny information for object vector cells",
+    )
+    g_init_std: float = Field(
+        default=0.5,
+        description="Standard deviation for initial g (which will then be learned)",
+    )
+    g_mem_std: float = Field(
+        default=0.1,
+        description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location",
+    )
+    d_hidden_dim: int = Field(
+        default=20,
+        description="Hidden layer size of MLP for abstract location transitions",
+    )
+
+    n_g_subsampled_base: list[int] = Field(
+        default=[10, 10, 8, 6, 6],
+        description="Base neurons for subsampled entorhinal abstract location f_g(g) for each frequency module",
+    )
+    n_ovc_base: list[int] | None = Field(
+        default=None,
+        description="Neurons for object vector cells",
+    )
+
+    f_initial_base: list[float] = Field(
+        default=[0.99, 0.3, 0.09, 0.03, 0.01],
+        description="Initial frequencies of each module",
+    )
+
+
+class HPCParameters(BaseModel):
+    """HPC parameters: grounded location, inference toggles, and memory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    use_p_inf: bool = Field(
+        default=True,
+        description="Whether to use inferred ground location while inferring new abstract location",
+    )
+    p2g_sig_val: float = Field(
+        default=10000.0,
+        description="Additional value to offset standard deviation of inferred grounded location",
+    )
+
+    common_memory: bool = Field(
+        default=False,
+        description="Use common memory for generative and inference network",
+    )
+    kappa: float = Field(default=0.8, description="Hebbian retrieval decay term")
 
 
 class Parameters(BaseModel):
@@ -38,24 +124,143 @@ class Parameters(BaseModel):
     Training schedules and data generation settings are in torch_tem.settings.
     """
 
-    # -- World/action parameters
-    has_static_action: bool = Field(default=True, description="Does this world include the standing still action?")
-    n_actions: int = Field(default=4, description="Number of available actions, excluding the stand still action")
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        extra="forbid",
+    )
 
-    # -- Inference parameters
-    p2g_sig_val: float = Field(default=10000.0, description="Additional value to offset standard deviation of inferred grounded location")
+    world: WorldParameters = Field(
+        default_factory=WorldParameters,
+        description="World/action parameters.",
+    )
+    lec: LECParameters = Field(
+        default_factory=LECParameters,
+        description="LEC parameters (observation -> feature cells).",
+    )
+    mec: MECParameters = Field(
+        default_factory=MECParameters,
+        description="MEC parameters (grid/ovc abstract location).",
+    )
+    hpc: HPCParameters = Field(
+        default_factory=HPCParameters,
+        description="HPC parameters (memory + grounded location).",
+    )
 
-    # -- Model parameters
-    do_sample: bool = Field(default=False, description="Whether to sample, or assume no noise and simply take mean of all distributions")
-    use_p_inf: bool = Field(default=True, description="Whether to use inferred ground location while inferring new abstract location")
-    separate_ovc: bool = Field(default=False, description="Whether to use separate grid modules that receive shiny information for object vector cells")
-    g_init_std: float = Field(default=0.5, description="Standard deviation for initial g (which will then be learned)")
-    g_mem_std: float = Field(default=0.1, description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location")
-    d_hidden_dim: int = Field(default=20, description="Hidden layer size of MLP for abstract location transitions")
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_flat_to_nested(cls, data: Any) -> Any:
+        """Accept both legacy flat keys and new nested groups."""
+        if not isinstance(data, dict):
+            return data
 
-    # ---- Neuron and module parameters
-    n_g_subsampled_base: list[int] = Field(default=[10, 10, 8, 6, 6], description="Base neurons for subsampled entorhinal abstract location f_g(g) for each frequency module")
-    n_ovc_base: list[int] | None = Field(default=None, description="Neurons for object vector cells")
+        data = dict(data)
+
+        world = dict(data.get("world") or {})
+        lec = dict(data.get("lec") or {})
+        mec = dict(data.get("mec") or {})
+        hpc = dict(data.get("hpc") or {})
+
+        def pop_into(key: str, target: dict) -> None:
+            if key in data:
+                target.setdefault(key, data.pop(key))
+
+        for key in ("has_static_action", "n_actions"):
+            pop_into(key, world)
+
+        for key in ("n_x", "n_x_c"):
+            pop_into(key, lec)
+
+        for key in (
+            "do_sample",
+            "separate_ovc",
+            "g_init_std",
+            "g_mem_std",
+            "d_hidden_dim",
+            "n_g_subsampled_base",
+            "n_ovc_base",
+            "f_initial_base",
+        ):
+            pop_into(key, mec)
+
+        for key in ("use_p_inf", "p2g_sig_val", "common_memory", "kappa"):
+            pop_into(key, hpc)
+
+        if world:
+            data["world"] = world
+        if lec:
+            data["lec"] = lec
+        if mec:
+            data["mec"] = mec
+        if hpc:
+            data["hpc"] = hpc
+
+        return data
+
+    # --- Backward-compatible flat attribute accessors (used by computed fields)
+    @property
+    def has_static_action(self) -> bool:
+        return self.world.has_static_action
+
+    @property
+    def n_actions(self) -> int:
+        return self.world.n_actions
+
+    @property
+    def n_x(self) -> int:
+        return self.lec.n_x
+
+    @property
+    def n_x_c(self) -> int:
+        return self.lec.n_x_c
+
+    @property
+    def do_sample(self) -> bool:
+        return self.mec.do_sample
+
+    @property
+    def separate_ovc(self) -> bool:
+        return self.mec.separate_ovc
+
+    @property
+    def g_init_std(self) -> float:
+        return self.mec.g_init_std
+
+    @property
+    def g_mem_std(self) -> float:
+        return self.mec.g_mem_std
+
+    @property
+    def d_hidden_dim(self) -> int:
+        return self.mec.d_hidden_dim
+
+    @property
+    def n_g_subsampled_base(self) -> list[int]:
+        return self.mec.n_g_subsampled_base
+
+    @property
+    def n_ovc_base(self) -> list[int] | None:
+        return self.mec.n_ovc_base
+
+    @property
+    def f_initial_base(self) -> list[float]:
+        return self.mec.f_initial_base
+
+    @property
+    def use_p_inf(self) -> bool:
+        return self.hpc.use_p_inf
+
+    @property
+    def p2g_sig_val(self) -> float:
+        return self.hpc.p2g_sig_val
+
+    @property
+    def common_memory(self) -> bool:
+        return self.hpc.common_memory
+
+    @property
+    def kappa(self) -> float:
+        return self.hpc.kappa
 
     @computed_field
     @property
@@ -101,9 +306,6 @@ class Parameters(BaseModel):
         """Number of neurons of entorhinal abstract location g for each frequency."""
         return [3 * g for g in self.n_g_subsampled]
 
-    n_x: int = Field(default=45, description="Neurons for sensory observation x")
-    n_x_c: int = Field(default=10, description="Neurons for compressed sensory experience x_c")
-
     @computed_field
     @property
     def n_x_f(self) -> list[int]:
@@ -116,17 +318,11 @@ class Parameters(BaseModel):
         """Neurons for hippocampal grounded location p for each frequency."""
         return [g * x for g, x in zip(self.n_g_subsampled, self.n_x_f)]
 
-    f_initial_base: list[float] = Field(default=[0.99, 0.3, 0.09, 0.03, 0.01], description="Initial frequencies of each module")
-
     @computed_field
     @property
     def f_initial(self) -> list[float]:
         """Initial frequencies of each module, including object vector cell modules."""
         return self.f_initial_base + self.f_initial_base[0 : self.n_f_ovc]
-
-    # ---- Memory parameters
-    common_memory: bool = Field(default=False, description="Use common memory for generative and inference network")
-    kappa: float = Field(default=0.8, description="Hebbian retrieval decay term")
 
     @computed_field
     @property
@@ -265,7 +461,57 @@ class Parameters(BaseModel):
             for dim_in, dim_out in zip(self.n_g, self.n_g_subsampled)
         ]
 
-    model_config = {"populate_by_name": True, "arbitrary_types_allowed": True}
+    def to_legacy_dict(self) -> dict[str, Any]:
+        """Flatten nested Parameters to the legacy dict consumed by TEMModel."""
+        base: dict[str, Any] = {
+            # World
+            "has_static_action": self.has_static_action,
+            "n_actions": self.n_actions,
+            # LEC
+            "n_x": self.n_x,
+            "n_x_c": self.n_x_c,
+            # MEC
+            "do_sample": self.do_sample,
+            "separate_ovc": self.separate_ovc,
+            "g_init_std": self.g_init_std,
+            "g_mem_std": self.g_mem_std,
+            "d_hidden_dim": self.d_hidden_dim,
+            "n_g_subsampled_base": self.n_g_subsampled_base,
+            "n_ovc_base": self.n_ovc_base,
+            "f_initial_base": self.f_initial_base,
+            # HPC
+            "use_p_inf": self.use_p_inf,
+            "p2g_sig_val": self.p2g_sig_val,
+            "common_memory": self.common_memory,
+            "kappa": self.kappa,
+        }
+
+        derived: dict[str, Any] = {
+            # sizes / derived scalars
+            "n_ovc": self.n_ovc,
+            "n_g_subsampled": self.n_g_subsampled,
+            "n_f_ovc": self.n_f_ovc,
+            "n_f_g": self.n_f_g,
+            "n_f": self.n_f,
+            "n_g": self.n_g,
+            "n_x_f": self.n_x_f,
+            "n_p": self.n_p,
+            "f_initial": self.f_initial,
+            "i_attractor": self.i_attractor,
+            "i_attractor_max_freq_inf": self.i_attractor_max_freq_inf,
+            "i_attractor_max_freq_gen": self.i_attractor_max_freq_gen,
+            # masks / matrices
+            "p_update_mask": self.p_update_mask,
+            "p_retrieve_mask_inf": self.p_retrieve_mask_inf,
+            "p_retrieve_mask_gen": self.p_retrieve_mask_gen,
+            "g_connections": self.g_connections,
+            "W_repeat": self.W_repeat,
+            "W_tile": self.W_tile,
+            "two_hot_table": self.two_hot_table,
+            "g_downsample": self.g_downsample,
+        }
+
+        return {**base, **derived}
 
 
 @dataclass

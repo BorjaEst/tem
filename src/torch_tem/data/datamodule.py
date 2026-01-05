@@ -7,19 +7,54 @@ from typing import Any, Optional
 import lightning.pytorch as pl
 import numpy as np
 import torch
+from pydantic import BaseModel, ConfigDict, Field
 from torch.utils.data import DataLoader, IterableDataset
 
-from torch_tem import data
-from torch_tem.settings import DataSettings, ScheduleSettings
+from torch_tem import data, settings
+
+
+class DataSettings(BaseModel):
+    """Data/environment generation settings (Lightning datamodule + dataset).
+
+    Composed of leaf settings for environment generation, rollout chunking,
+    evaluation protocols, exploration behavior, shiny environment sampling,
+    and walk length curriculum.
+    """
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    env: settings.EnvironmentSettings = Field(
+        default_factory=settings.EnvironmentSettings,
+        description="Environment generation settings.",
+    )
+    rollout: settings.RolloutSettings = Field(
+        default_factory=settings.RolloutSettings,
+        description="Batch and rollout chunking settings.",
+    )
+    eval: settings.EvalSettings = Field(
+        default_factory=settings.EvalSettings,
+        description="Validation and test dataset settings.",
+    )
+    exploration: settings.ExplorationSettings = Field(
+        default_factory=settings.ExplorationSettings,
+        description="World exploration behavior settings.",
+    )
+    shiny: settings.ShinySettings = Field(
+        default_factory=settings.ShinySettings,
+        description="Shiny environment generation settings.",
+    )
+    walk: settings.WalkCurriculumSettings = Field(
+        default_factory=settings.WalkCurriculumSettings,
+        description="Walk length curriculum settings.",
+    )
 
 
 class TEMDataModule(pl.LightningDataModule):
     """Lightning DataModule for TEM training."""
 
-    def __init__(self, data_settings: DataSettings, schedule_settings: ScheduleSettings):
+    def __init__(self, data_settings: DataSettings):
         super().__init__()
         self.data_settings = data_settings
-        self.schedule_settings = schedule_settings
         self.dataset: Optional[TEMDataset] = None
         self.val_dataset: Optional[TEMDataset] = None
         self.test_dataset: Optional[TEMDataset] = None
@@ -33,31 +68,31 @@ class TEMDataModule(pl.LightningDataModule):
         if stage in (None, "fit") and self.dataset is None:
             self.dataset = TEMDataset(
                 self.data_settings,
-                walk_it_min=self.schedule_settings.walk_it_min,
-                walk_it_max=self.schedule_settings.walk_it_max,
-                walk_it_window=self.schedule_settings.walk_it_window,
+                walk_it_min=self.data_settings.walk.walk_it_min,
+                walk_it_max=self.data_settings.walk.walk_it_max,
+                walk_it_window=self.data_settings.walk.walk_it_window,
             )
 
         # Create validation dataset (finite, deterministic)
-        if stage in (None, "fit", "validate") and self.data_settings.enable_validation and self.val_dataset is None:
+        if stage in (None, "fit", "validate") and self.data_settings.eval.enable_validation and self.val_dataset is None:
             self.val_dataset = TEMDataset(
                 self.data_settings,
-                walk_it_min=self.schedule_settings.walk_it_min,
-                walk_it_max=self.schedule_settings.walk_it_max,
-                walk_it_window=self.schedule_settings.walk_it_window,
-                max_batches=self.data_settings.val_batches,
-                seed=self.data_settings.val_seed,
+                walk_it_min=self.data_settings.walk.walk_it_min,
+                walk_it_max=self.data_settings.walk.walk_it_max,
+                walk_it_window=self.data_settings.walk.walk_it_window,
+                max_batches=self.data_settings.eval.val_batches,
+                seed=self.data_settings.eval.val_seed,
             )
 
         # Create test dataset (finite, deterministic)
-        if stage in (None, "test") and self.data_settings.enable_test and self.test_dataset is None:
+        if stage in (None, "test") and self.data_settings.eval.enable_test and self.test_dataset is None:
             self.test_dataset = TEMDataset(
                 self.data_settings,
-                walk_it_min=self.schedule_settings.walk_it_min,
-                walk_it_max=self.schedule_settings.walk_it_max,
-                walk_it_window=self.schedule_settings.walk_it_window,
-                max_batches=self.data_settings.test_batches,
-                seed=self.data_settings.test_seed,
+                walk_it_min=self.data_settings.walk.walk_it_min,
+                walk_it_max=self.data_settings.walk.walk_it_max,
+                walk_it_window=self.data_settings.walk.walk_it_window,
+                max_batches=self.data_settings.eval.test_batches,
+                seed=self.data_settings.eval.test_seed,
             )
 
     def train_dataloader(self):
@@ -83,7 +118,7 @@ class TEMDataModule(pl.LightningDataModule):
 
         Returns empty list if validation is disabled (Lightning requires iterable, not None).
         """
-        if not self.data_settings.enable_validation:
+        if not self.data_settings.eval.enable_validation:
             return []
 
         return DataLoader(
@@ -97,7 +132,7 @@ class TEMDataModule(pl.LightningDataModule):
 
         Returns empty list if test is disabled (Lightning requires iterable, not None).
         """
-        if not self.data_settings.enable_test:
+        if not self.data_settings.eval.enable_test:
             return []
 
         return DataLoader(
@@ -135,9 +170,9 @@ class TEMDataset(IterableDataset):
     ):
         super().__init__()
         self.data_settings = data_settings
-        self.env_paths = [str(p) for p in data_settings.envs]
+        self.env_paths = [str(p) for p in data_settings.env.envs]
 
-        # Walk curriculum bounds (owned by schedule, injected here)
+        # Walk curriculum bounds (data-owned, training-controlled via set_walk_length_center)
         self.walk_it_min = walk_it_min
         self.walk_it_max = walk_it_max
         self.walk_it_window = walk_it_window
@@ -168,17 +203,17 @@ class TEMDataset(IterableDataset):
         environments = [
             data.World(
                 graph,
-                randomise_observations=self.data_settings.randomise_observations,
-                shiny=(self.data_settings.shiny if rng.random() < self.data_settings.shiny_rate else None),
+                randomise_observations=self.data_settings.env.randomise_observations,
+                shiny=(self.data_settings.shiny.shiny_dict if rng.random() < self.data_settings.shiny.shiny_rate else None),
             )
-            for graph in rng.choice(self.env_paths, self.data_settings.batch_size)
+            for graph in rng.choice(self.env_paths, self.data_settings.rollout.batch_size)
         ]
 
         visited = [[False for _ in range(env.n_locations)] for env in environments]
 
         walks = [
             env.generate_walks(
-                self.data_settings.n_rollout * rng.integers(self.walk_it_min, self.walk_it_max),
+                self.data_settings.rollout.n_rollout * rng.integers(self.walk_it_min, self.walk_it_max),
                 1,
             )[0]
             for env in environments
@@ -219,22 +254,22 @@ class TEMDataset(IterableDataset):
         # Build batch chunk
         chunk: list[list[list[Any]]] = []
         for env_i, walk in enumerate(self.walks):
-            if len(walk) < self.data_settings.n_rollout:
+            if len(walk) < self.data_settings.rollout.n_rollout:
                 # Generate new environment and walk
                 self.environments[env_i] = data.World(
                     self.env_paths[rng.integers(len(self.env_paths))],
-                    randomise_observations=self.data_settings.randomise_observations,
-                    shiny=(self.data_settings.shiny if rng.random() < self.data_settings.shiny_rate else None),
+                    randomise_observations=self.data_settings.env.randomise_observations,
+                    shiny=(self.data_settings.shiny.shiny_dict if rng.random() < self.data_settings.shiny.shiny_rate else None),
                 )
                 self.visited[env_i] = [False for _ in range(self.environments[env_i].n_locations)]
                 walk = self.environments[env_i].generate_walks(
-                    self.data_settings.n_rollout * rng.integers(low, high),
+                    self.data_settings.rollout.n_rollout * rng.integers(low, high),
                     1,
                 )[0]
                 self.walks[env_i] = walk
 
-            for step in range(self.data_settings.n_rollout):
-                if len(chunk) < self.data_settings.n_rollout:
+            for step in range(self.data_settings.rollout.n_rollout):
+                if len(chunk) < self.data_settings.rollout.n_rollout:
                     chunk.append([[comp] for comp in walk.pop(0)])
                 else:
                     for comp_i, comp in enumerate(walk.pop(0)):

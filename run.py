@@ -16,11 +16,11 @@ configuration can be overridden with dot-notation arguments.
 Examples:
     Run a short training session:
 
-        python run.py --trainer.max_steps 20
+        python run.py --max_steps 20
 
     Override schedule values:
 
-        python run.py --schedule.eta 0.6 --schedule.lr_max 0.0015
+        python run.py --hebbian.eta 0.6 --lr.lr_max 0.0015
 """
 
 from __future__ import annotations
@@ -35,9 +35,11 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import core, data, training
+from torch_tem import core, data, losses, settings, training
 from torch_tem.core import Parameters
-from torch_tem.settings import CheckpointSettings, DataSettings, LoggerSettings, ScheduleSettings, TrainerSettings
+from torch_tem.data.datamodule import DataSettings
+from torch_tem.settings import CheckpointSettings, LoggerSettings
+from torch_tem.training import TrainerSettings
 
 # Configure PyTorch for better performance on modern GPUs
 torch.set_float32_matmul_precision("medium")
@@ -50,27 +52,145 @@ class RunSettings(BaseSettings):
     """Settings for a TEM training run.
 
     This settings model is designed to be used as a CLI interface via Pydantic Settings.
-    It supports nested overrides via dot-notation flags (e.g., `--trainer.max_steps 1000`).
-    All settings have sensible defaults and can be overridden via CLI arguments or
-    environment variables prefixed with the setting path.
+    It supports nested overrides via dot-notation flags (e.g., `--data.env.randomise_observations false`).
+    All settings have sensible defaults and can be overridden via CLI arguments.
+
+    The settings use deep composition:
+    - Leaf settings (env, rollout, schedule, etc.) live in settings.py
+    - Complex aggregate settings (DataSettings, TrainerSettings) live with their components
+    - RunSettings composes everything and ensures single source of truth for shared settings
     """
 
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="run")
 
-    # Model, data and environment settings
-    model_params: Parameters = Field(default_factory=Parameters, description="Model parameters (Pydantic TEM Parameters).")
-    data: DataSettings = Field(default_factory=DataSettings, description="Data generation and environment settings.")
-    seed: int = Field(default=0, description="Random seed.")
+    # =========================================================================
+    # Core settings
+    # =========================================================================
+    model_params: Parameters = Field(
+        default_factory=Parameters,
+        description="Model architecture parameters.",
+    )
+    seed: int = Field(
+        default=0,
+        description="Random seed for reproducibility.",
+    )
 
-    # Trainer config
-    trainer: TrainerSettings = Field(default_factory=TrainerSettings, description="PyTorch Lightning Trainer kwargs.")
-    schedule: ScheduleSettings = Field(default_factory=ScheduleSettings, description="Training schedules (loss weights, LR, etc).")
-    logger: LoggerSettings = Field(default_factory=LoggerSettings, description="Logger settings for TensorBoard logger.")
+    # =========================================================================
+    # Leaf settings (data generation)
+    # =========================================================================
+    env: settings.EnvironmentSettings = Field(
+        default_factory=settings.EnvironmentSettings,
+        description="Environment generation settings.",
+    )
+    rollout: settings.RolloutSettings = Field(
+        default_factory=settings.RolloutSettings,
+        description="Batch and rollout chunking settings.",
+    )
+    eval: settings.EvalSettings = Field(
+        default_factory=settings.EvalSettings,
+        description="Validation and test dataset settings.",
+    )
+    exploration: settings.ExplorationSettings = Field(
+        default_factory=settings.ExplorationSettings,
+        description="World exploration behavior settings.",
+    )
+    shiny: settings.ShinySettings = Field(
+        default_factory=settings.ShinySettings,
+        description="Shiny environment generation settings.",
+    )
 
-    # Checkpoint and path settings
-    checkpoint: CheckpointSettings = Field(default_factory=CheckpointSettings, description="PyTorch Lightning ModelCheckpoint kwargs.")
-    root_dir: Path = Field(default=Path("./logs"), description="Root directory for Lightning outputs (default: ./lightning_logs).")
-    ckpt_path: Optional[Path] = Field(default=None, description="Path to checkpoint file to resume from.")
+    # =========================================================================
+    # Leaf settings (training schedules)
+    # =========================================================================
+    loss: losses.LossConfig = Field(
+        default_factory=losses.LossConfig,
+        description="Loss configuration.",
+    )
+    lr: settings.LRScheduleSettings = Field(
+        default_factory=settings.LRScheduleSettings,
+        description="Learning rate schedule settings.",
+    )
+    hebbian: settings.HebbianScheduleSettings = Field(
+        default_factory=settings.HebbianScheduleSettings,
+        description="Hebbian memory plasticity schedule settings.",
+    )
+    p2g_offset: settings.P2GOffsetScheduleSettings = Field(
+        default_factory=settings.P2GOffsetScheduleSettings,
+        description="Place-to-grid variance offset schedule settings.",
+    )
+
+    # =========================================================================
+    # Shared settings (consumed by both data and training)
+    # =========================================================================
+    walk: settings.WalkCurriculumSettings = Field(
+        default_factory=settings.WalkCurriculumSettings,
+        description="Walk length curriculum settings (shared by data and training).",
+    )
+
+    # =========================================================================
+    # Lightning infrastructure
+    # =========================================================================
+    max_steps: int = Field(
+        default=20000,
+        description="Maximum training steps.",
+    )
+    log_every_n_steps: int = Field(
+        default=10,
+        description="Log metrics every N steps.",
+    )
+    enable_progress_bar: bool = Field(
+        default=True,
+        description="Show progress bar during training.",
+    )
+    logger: LoggerSettings = Field(
+        default_factory=LoggerSettings,
+        description="TensorBoard logger settings.",
+    )
+    checkpoint: CheckpointSettings = Field(
+        default_factory=CheckpointSettings,
+        description="Model checkpoint settings.",
+    )
+    ckpt_path: Optional[Path] = Field(
+        default=None,
+        description="Path to checkpoint file to resume from.",
+    )
+
+    # =========================================================================
+    # Aggregate settings (compose leaf settings for modules)
+    # =========================================================================
+    @property
+    def data(self) -> DataSettings:
+        """Compose DataSettings from leaf settings.
+
+        Creates the aggregate data configuration consumed by TEMDataModule.
+        The walk settings are shared with trainer to maintain single source of truth.
+        """
+        return DataSettings(
+            env=self.env,
+            rollout=self.rollout,
+            eval=self.eval,
+            exploration=self.exploration,
+            shiny=self.shiny,
+            walk=self.walk,  # Shared reference
+        )
+
+    @property
+    def trainer(self) -> TrainerSettings:
+        """Compose TrainerSettings from leaf settings and Lightning kwargs.
+
+        Creates the aggregate training configuration consumed by TEMLightningModule.
+        The walk settings are shared with data to maintain single source of truth.
+        """
+        return TrainerSettings(
+            max_steps=self.max_steps,
+            log_every_n_steps=self.log_every_n_steps,
+            enable_progress_bar=self.enable_progress_bar,
+            loss=self.loss,
+            lr=self.lr,
+            hebbian=self.hebbian,
+            p2g_offset=self.p2g_offset,
+            walk=self.walk,  # Shared reference
+        )
 
 
 # ============================================================================
@@ -96,25 +216,27 @@ if __name__ == "__main__":
     """
     # Step 1: Parse all settings from CLI and environment
     # Pydantic Settings will automatically parse sys.argv when cli_parse_args=True
-    settings = RunSettings()
+    config = RunSettings()
 
     # Step 2: Seed all RNGs for deterministic training
     # workers=True ensures DataLoader workers are also seeded
-    seed_everything(settings.seed, workers=True)
+    seed_everything(config.seed, workers=True)
 
     # Step 3: Construct the TEM model from architecture parameters
     # model_dump() converts the Pydantic Parameters model to a plain dict
-    tem_model = core.TEMModel(settings.model_params.model_dump())
+    tem_model = core.TEMModel(config.model_params.model_dump())
 
     # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control
     trainer = Trainer(
         # TensorBoard logger for metrics and hyperparameters
-        logger=TensorBoardLogger(**settings.logger.model_dump()),
+        logger=TensorBoardLogger(**config.logger.model_dump()),
         # Checkpoint callback to save model state periodically
-        callbacks=[ModelCheckpoint(**settings.checkpoint.model_dump())],
-        # Trainer settings (max_steps, log_every_n_steps, etc.)
-        **settings.trainer.model_dump(),
+        callbacks=[ModelCheckpoint(**config.checkpoint.model_dump())],
+        # Lightning Trainer kwargs (extracted from config)
+        max_steps=config.max_steps,
+        log_every_n_steps=config.log_every_n_steps,
+        enable_progress_bar=config.enable_progress_bar,
     )
 
     # Step 5: Start training
@@ -122,9 +244,9 @@ if __name__ == "__main__":
     # The DataModule generates batches of walk data on-the-fly
     trainer.fit(
         # Lightning module: training step, optimizer, schedule computation
-        training.TEMLightningModule(tem_model, settings.schedule, settings.trainer),
+        training.TEMLightningModule(tem_model, config.trainer),
         # Data module: generates environment walks and batches
-        datamodule=data.TEMDataModule(settings.data, settings.schedule),
+        datamodule=data.TEMDataModule(config.data),
         # Optional: resume from checkpoint
-        ckpt_path=str(settings.ckpt_path) if settings.ckpt_path else None,
+        ckpt_path=str(config.ckpt_path) if config.ckpt_path else None,
     )

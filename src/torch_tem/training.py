@@ -34,14 +34,54 @@ from typing import Any, Optional
 import lightning.pytorch as pl
 import numpy as np
 import torch
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 from torch.optim import Adam
 
-from torch_tem import losses, metrics
+from torch_tem import losses, metrics, settings
 from torch_tem.core.model import Rollout, TEMModel, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.metrics import AccuracyCounts, AccuracyX
-from torch_tem.settings import ScheduleSettings, TrainerSettings
+
+
+class TrainerSettings(BaseModel):
+    """Trainer settings including Lightning Tracker kwargs and training schedules.
+
+    Combines Lightning infrastructure settings with schedule configuration for
+    loss weights, learning rate, Hebbian plasticity, and p2g variance offset.
+    Also includes walk curriculum bounds (from DataSettings) for walk annealing schedule.
+    """
+
+    model_config = ConfigDict(extra="allow")  # Allow extra Lightning kwargs
+
+    # Core Lightning Trainer kwargs
+    max_steps: int = Field(default=20000, description="Maximum training steps.")
+    log_every_n_steps: int = Field(default=10, description="Log metrics every N steps.")
+    enable_progress_bar: bool = Field(default=True, description="Show progress bar during training.")
+
+    # Training schedules (leaf settings)
+    loss: losses.LossConfig = Field(
+        default_factory=losses.LossConfig,
+        description="Loss configuration.",
+    )
+    lr: settings.LRScheduleSettings = Field(
+        default_factory=settings.LRScheduleSettings,
+        description="Learning rate schedule settings.",
+    )
+    hebbian: settings.HebbianScheduleSettings = Field(
+        default_factory=settings.HebbianScheduleSettings,
+        description="Hebbian memory plasticity schedule settings.",
+    )
+    p2g_offset: settings.P2GOffsetScheduleSettings = Field(
+        default_factory=settings.P2GOffsetScheduleSettings,
+        description="Place-to-grid variance offset schedule settings.",
+    )
+
+    # Walk curriculum bounds (referenced from DataSettings for annealing schedule)
+    walk: settings.WalkCurriculumSettings = Field(
+        default_factory=settings.WalkCurriculumSettings,
+        description="Walk length curriculum settings (shared with DataSettings).",
+    )
 
 
 class TEMLightningModule(pl.LightningModule):
@@ -63,30 +103,27 @@ class TEMLightningModule(pl.LightningModule):
         loss_fn: Loss computation module.
         acc_x_fn: Sensory accuracy metric.
         prev_state: Previous batch's final state (detached).
-        schedule_settings: Hyperparameter schedule configuration.
-        trainer_settings: Training curriculum configuration.
+        trainer_settings: Combined trainer and schedule configuration.
     """
 
-    def __init__(self, model: TEMModel, scheduling: ScheduleSettings, training: TrainerSettings):
+    def __init__(self, model: TEMModel, training: TrainerSettings):
         """Initialize the Lightning module.
 
         Args:
             model: TEM model to wrap.
-            scheduling: Schedule settings used for runtime hyperparameters and
-                learning rate.
-            training: Trainer settings (used for curriculum parameters).
+            training: Trainer settings including schedules for runtime hyperparameters
+                and learning rate, plus walk curriculum bounds for annealing.
         """
         super().__init__()
-        self.schedule_settings = scheduling
         self.trainer_settings = training
 
-        params = {"schedule": scheduling.model_dump(), "trainer": training.model_dump()}
+        params = {"trainer": training.model_dump()}
         self.save_hyperparameters(params)
 
         self.tem: TEMModel = model
         self.prev_state: Optional[TEMState] = None
 
-        self.loss_fn = losses.TEMLoss(scheduling.loss)
+        self.loss_fn = losses.TEMLoss(training.loss)
         self.acc_x_fn = metrics.SensoryAccuracy(reduction="none")
 
     def forward(self, batch: Any, prev_state: Optional[TEMState] = None) -> tuple[LossOutput, AccuracyX, TEMState]:
@@ -363,7 +400,7 @@ class TEMLightningModule(pl.LightningModule):
             Learning rate is updated dynamically in :meth:`on_before_optimizer_step`
             according to the exponential decay schedule.
         """
-        return Adam(self.tem.parameters(), lr=self.schedule_settings.lr_max)
+        return Adam(self.tem.parameters(), lr=self.trainer_settings.lr.lr_max)
 
     def _compute_lr(self, iteration: int) -> float:
         """Compute learning rate using exponential decay schedule.
@@ -374,10 +411,10 @@ class TEMLightningModule(pl.LightningModule):
         Returns:
             Learning rate (clamped to lr_min).
         """
-        s = self.schedule_settings
+        lr = self.trainer_settings.lr
         return max(
-            s.lr_min + (s.lr_max - s.lr_min) * (s.lr_decay_rate ** (iteration / s.lr_decay_steps)),
-            s.lr_min,
+            lr.lr_min + (lr.lr_max - lr.lr_min) * (lr.lr_decay_rate ** (iteration / lr.lr_decay_steps)),
+            lr.lr_min,
         )
 
     def _compute_schedule(self, iteration: int) -> tuple[float, float, float, float]:
@@ -393,19 +430,20 @@ class TEMLightningModule(pl.LightningModule):
                 p2g_scale_offset: Place-to-grid transition variance offset.
                 walk_length_center: Target mean walk length for curriculum.
         """
-        s = self.schedule_settings
-        t = self.trainer_settings
+        walk = self.trainer_settings.walk
+        hebbian = self.trainer_settings.hebbian
+        p2g = self.trainer_settings.p2g_offset
 
         # Hebbian memory parameters
-        eta = min((iteration + 1) / s.eta_it, 1) * s.eta
-        lamb = min((iteration + 1) / s.lambda_it, 1) * s.hebbian_decay
+        eta = min((iteration + 1) / hebbian.eta_it, 1) * hebbian.eta
+        lamb = min((iteration + 1) / hebbian.lambda_it, 1) * hebbian.hebbian_decay
 
         # p->g variance offset schedule
-        p2g_scale_offset = 1 / (1 + np.exp((iteration - s.p2g_sig_half_it) / s.p2g_sig_scale_it))
+        p2g_scale_offset = 1 / (1 + np.exp((iteration - p2g.p2g_sig_half_it) / p2g.p2g_sig_scale_it))
 
         # Walk length center (annealing from max to min over training)
-        max_steps = max(int(t.max_steps), 1)
-        walk_length_center = s.walk_it_max - s.walk_it_window * 0.5 - min((iteration + 1) / max_steps, 1) * (s.walk_it_max - s.walk_it_min - s.walk_it_window)
+        max_steps = max(int(self.trainer_settings.max_steps), 1)
+        walk_length_center = walk.walk_it_max - walk.walk_it_window * 0.5 - min((iteration + 1) / max_steps, 1) * (walk.walk_it_max - walk.walk_it_min - walk.walk_it_window)
 
         return eta, lamb, p2g_scale_offset, walk_length_center
 

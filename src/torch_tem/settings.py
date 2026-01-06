@@ -394,3 +394,48 @@ class LossSettings(BaseModel):
         default_factory=RegularizationSettings,
         description="Regularization loss settings.",
     )
+
+
+class AutoencoderSettings(BaseModel):
+    """Settings for autoencoder modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    encode_mode: Literal["two_hot"] = Field(
+        "two_hot",
+        description="Compression mode for observations (e.g., 'two_hot')",
+    )
+    decode_mode: Literal["mlp"] = Field(
+        "mlp",
+        description="Decompression mode for observations (e.g., 'nnet')",
+    )
+
+
+class ProjectionSettings(BaseModel):
+    """Settings for projection modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    projection_mode: Literal["tile"] = Field(
+        "tile",
+        description="Projection mode (e.g., 'tile')",
+    )
+    learnable: bool = Field(
+        False,
+        description="Whether projection weights are learnable",
+    )
+
+
+class LECSettings(BaseModel):
+    """Settings for LEC modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    frequencies_init: Literal["linear"] = Field(
+        "linear",
+        description="Initialization method for feature weights",
+    )
+    scale_factor: Literal["laplace"] = Field(
+        "laplace",
+        description="Scaling factor method for frequency modules",
+    )

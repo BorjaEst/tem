@@ -25,7 +25,7 @@ Multi-Scale Representations:
     - GroundedLocation: Grounded place cell code (p) from memory retrieval
 
 Sensory Input:
-    - Observation: Ground-truth sensory observation (x) as single tensor
+    - Observation: Ground-truth sensory observation (o) as single tensor
 
 Memory Structures:
     - HebbianMemory: Attractor network connection weights
@@ -40,7 +40,7 @@ Data Flow:
 Theory References
 -----------------
 The type system follows the TEM architecture:
-    1. Sensory observations (x) → Sensory inference
+    1. Sensory observations (o) → Sensory inference
     2. Abstract locations (g) → Multi-scale grid codes
     3. Grounded locations (p) → Place cell activations
     4. Hebbian memory (M) → Attractor dynamics
@@ -144,7 +144,7 @@ Theory:
 """
 
 Observation = Tensor
-"""Ground-truth sensory observation (x) from the environment.
+"""Ground-truth sensory observation (o) from the environment.
 
 The sensory observation represents the actual sensory input received
 at a given timestep, distinct from model-generated sensory predictions.
@@ -181,7 +181,7 @@ Recommended dtype:
 Theory:
     In TEM, actions are used by the transition model to predict the next
     abstract location (g) via path integration. They are conceptually distinct
-    from observations (x), which provide sensory evidence for inference.
+    from observations (o), which provide sensory evidence for inference.
 """
 
 Location = Tensor
@@ -218,7 +218,7 @@ Structure:
     
 Where:
     - M_gen: Generative memory (g → p pathway for generation)
-    - M_inf: Inference memory (x → p pathway for inference, optional)
+    - M_inf: Inference memory (o → p pathway for inference, optional)
 
 Shape:
     Each matrix: [batch_size, sum(n_p), sum(n_p)]
@@ -287,7 +287,7 @@ class StepInput:
     """Input data for a single TEM iteration.
 
     Attributes:
-        observation: Sensory observation (x) for the current timestep
+        observation: Sensory observation (o) for the current timestep
         action: Action taken at the previous timestep (or None for initial step)
         location_info: Environment metadata (e.g., shiny object locations)
 

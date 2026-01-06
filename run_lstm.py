@@ -32,7 +32,7 @@ grid = data.World("./graphs/5x5.json", 45)
 params = parameters.parameters(grid)
 
 # Create lstm, to see if that learns well
-lstm = LSTM(params["n_x"] + params["n_actions"], 100, params["n_x"], n_a=params["n_actions"])
+lstm = LSTM(params["n_o"] + params["n_actions"], 100, params["n_o"], n_a=params["n_actions"])
 
 # Create set of training worlds, as many as there are batches
 environments = [data.World("./graphs/5x5.json", 45) for batch in range(params["n_batches"])]
@@ -78,7 +78,7 @@ for i, walk in enumerate(batches):
         # Forward-pass this data through the network
         predictions, prev_hidden = lstm(data, prev_hidden)
         # Calculate loss from forward pass: difference between predicted and real observation at each step
-        loss = torch.nn.BCELoss()(predictions[:, :-1, :], data[:, 1:, : params["n_x"]])
+        loss = torch.nn.BCELoss()(predictions[:, :-1, :], data[:, 1:, : params["n_o"]])
         # Reset gradients
         adam.zero_grad()
         # Do backward pass to calculate gradients with respect to total loss of this chunk
@@ -88,7 +88,7 @@ for i, walk in enumerate(batches):
         # And detach previous hidden state to prevent gradients going back forever
         prev_hidden = tuple([hidden.detach() for hidden in prev_hidden])
         # Calculate accuracy: how often was the best guess from the predictions correct?
-        accuracy = torch.mean((torch.argmax(data[:, 1:, : params["n_x"]], dim=-1) == torch.argmax(predictions[:, :-1, :], dim=-1)).type(torch.float)).numpy()
+        accuracy = torch.mean((torch.argmax(data[:, 1:, : params["n_o"]], dim=-1) == torch.argmax(predictions[:, :-1, :], dim=-1)).type(torch.float)).numpy()
         # Show progress
         if j % 10 == 0:
             print(

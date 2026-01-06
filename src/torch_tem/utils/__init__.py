@@ -1,14 +1,16 @@
 import datetime
 import logging
 import os
+from itertools import combinations
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from scipy.special import comb
 from torch import Tensor
 
-from torch_tem.types import Reduction
+from torch_tem.types import BatchedMemory, GroundedLocation, Matrix, MultiScaleCode, Reduction, Vector
 
 
 def inv_var_weight(mus, sigmas):
@@ -29,38 +31,38 @@ def inv_var_weight(mus, sigmas):
     return inv_var_avg, inv_var_sigma
 
 
-def softmax(x):
+def softmax(o):
     """
     Applies softmax to tensors of inputs, using torch softmax funcion
-    Assumes x is a 1D vector, or batches of row vectors with the batches along dim 0
+    Assumes o is a 1D vector, or batches of row vectors with the batches along dim 0
     """
     # Return torch softmax
-    return torch.nn.Softmax(dim=-1)(x)
+    return torch.nn.Softmax(dim=-1)(o)
 
 
-def normalise(x):
+def normalise(o):
     """
     Normalises vector of input to unit norm, using torch normalise funcion
-    Assumes x is a 1D vector, or batches of row vectors with the batches along dim 0
+    Assumes o is a 1D vector, or batches of row vectors with the batches along dim 0
     """
     # Return torch normalise with p=2 for L2 norm
-    return torch.nn.functional.normalize(x, p=2, dim=-1)
+    return torch.nn.functional.normalize(o, p=2, dim=-1)
 
 
-def relu(x):
+def relu(o):
     """
     Applies rectified linear activation unit to tensors of inputs, using torch relu funcion
     """
     # Return torch relu
-    return torch.nn.functional.relu(x)
+    return torch.nn.functional.relu(o)
 
 
-def leaky_relu(x):
+def leaky_relu(o):
     """
     Applies leaky (meaning small negative slope instead of zeros) rectified linear activation unit to tensors of inputs, using torch leaky relu funcion
     """
-    # Return torch leaky relu [torch.nn.functional.leaky_relu(val) for val in x] if type(x) is list else
-    return torch.nn.functional.leaky_relu(x)
+    # Return torch leaky relu [torch.nn.functional.leaky_relu(val) for val in o] if type(o) is list else
+    return torch.nn.functional.leaky_relu(o)
 
 
 def squared_error(value, target):
@@ -93,7 +95,7 @@ def cross_entropy(value, target):
 def downsample(value, target_dim):
     """
     Does downsampling by taking the an input vector, then averaging chunks to make it of requested dimension
-    Assumes x is a 1D vector, or batches of row vectors with the batches along dim 0
+    Assumes o is a 1D vector, or batches of row vectors with the batches along dim 0
     """
     # Get input dimension
     value_dim = value.size()[-1]
@@ -229,3 +231,195 @@ def reduce_per_env(loss_per_env: Tensor, reduction: Reduction) -> Tensor:
     if reduction == "none":
         return loss_per_env
     raise ValueError(f"Unknown reduction: {reduction}")
+
+
+def create_downsample_matrix(n: List[int], n_subsampled: List[int]) -> List[Matrix]:
+    """Create downsampling matrices.
+
+    Downsampling matrix to go from cells to compressed cells for
+    indexing memories by simply taking only the first n_subsampled cells.
+
+    Args:
+        n: Full input dimensions per frequency
+        n_subsampled: Subsampled output dimensions per frequency
+
+    Returns:
+        List of downsampling matrices, one per frequency module
+    """
+    # Matrix shape: [n_in, n_out] where we select first n_out columns
+    # For input o: [B, n_in], result is o @ W_down = [B, n_out]
+    return [torch.cat([torch.eye(dim_out, dtype=torch.float), torch.zeros((dim_in - dim_out, dim_out), dtype=torch.float)]) for dim_in, dim_out in zip(n, n_subsampled)]
+
+
+def create_repeat_matrices(n_subsampled: List[int], n: List[int]) -> List[Matrix]:
+    """Create repeat matrices.
+
+    Matrix for repeating cells information using elementwise product
+    after matrix multiplication.
+
+    Args:
+        n_subsampled: Subsampled input dimensions per frequency
+        n: Full output dimensions per frequency
+
+    Returns:
+        List of repeat matrices, one per frequency module
+    """
+    # Matrix shape: [n_subsampled, n_p] where each row is repeated
+    # For input g: [B, n_subsampled], result is g @ W_repeat = [B, n_p]
+    # Uses Kronecker product: eye(n_subsampled) ⊗ ones(1, n_p/n_subsampled)
+    return [torch.tensor(np.kron(np.eye(dim_in), np.ones((1, dim_out // dim_in))), dtype=torch.float) for dim_in, dim_out in zip(n_subsampled, n)]
+
+
+def create_tiling_matrices(n_in: List[int], n_out: List[int]) -> List[Matrix]:
+    """Create tile matrices.
+
+    Tiling matrix to project from one cortical region to another by repeating
+    the input representation multiple times.
+
+    Args:
+        n_in: Input dimensions per frequency module
+        n_out: Output dimensions per frequency module
+
+    Returns:
+        List of tile matrices, one per frequency module.
+    """
+    # Matrix shape: [n_in, n_out] where each input is tiled
+    # For input o_c: [B, n_in], result is o_c @ W_tile = [B, n_out]
+    # Uses Kronecker product: ones(1, n_tiles) ⊗ eye(n_in)
+    # where n_tiles = n_out / n_in
+
+    # Validate divisibility
+    if any(out % inp != 0 for out, inp in zip(n_out, n_in)):
+        raise ValueError(f"n_out must be divisible by n_in. Got n_out={n_out}, n_in={n_in}")
+
+    return [torch.tensor(np.kron(np.ones((1, out // inp)), np.eye(inp)), dtype=torch.float) for inp, out in zip(n_in, n_out)]
+
+
+def create_random_projection(n_in: List[int], n_out: List[int], sparsity: float = 1.0, seed: Optional[int] = None) -> List[Matrix]:
+    """Create random fixed projection matrices.
+
+    Biologically-inspired alternative to downsampling + W_repeat expansion.
+    Models the random connectivity from EC (grid cells) to HPC (place cells)
+    as observed in experimental data and used in CAN models (Chandra et al. 2025).
+
+    This replaces the two-step structured transformation:
+        g → downsample → g_ → W_repeat expansion → hippocampal space
+    With a single direct random projection:
+        g → W_random → hippocampal space
+
+    The random projection is fixed (non-learnable) and can be sparse to match
+    biological connectivity patterns (~10-20% in real circuits).
+
+    Args:
+        n_in: Input dimensions per frequency module
+        n_out: Output dimensions per frequency module
+        sparsity: Connection probability (1.0 = fully connected, 0.1 = 10% connectivity)
+        seed: Random seed for reproducibility (optional)
+
+    Returns:
+        List of random projection matrices [n_g[f], n_p[f]], one per frequency module
+
+    Example:
+        >>> n_g = [36, 30, 24]  # Grid cell dimensions
+        >>> n_p = [96, 80, 64]  # Place cell dimensions
+        >>> W_random = create_random_projection(n_g, n_p, sparsity=0.15)
+        >>> # Use in projection head:
+        >>> g_ = [g[f] @ W_random[f] for f in range(n_f)]
+
+    References:
+        Chandra et al. (2025). "Episodic and associative memory from spatial
+        scaffolds in the hippocampus." CAN model architecture.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    matrices = []
+    for g_dim, p_dim in zip(n_in, n_out):
+        # Random Gaussian initialization scaled by input dimension
+        # This ensures variance is maintained across the projection
+        W = torch.randn(g_dim, p_dim, dtype=torch.float) / np.sqrt(g_dim)
+
+        # Apply sparsity mask if requested
+        if sparsity < 1.0:
+            mask = torch.rand(g_dim, p_dim) < sparsity
+            W = W * mask.float()
+            # Rescale to maintain expected magnitude after sparsification
+            W = W / np.sqrt(sparsity)
+
+        matrices.append(W)
+
+    return matrices
+
+
+def create_encoding_table(n_in: int, n_out: int, n_hot: int = 2) -> List[Vector]:
+    """Create n-hot encoding lookup table.
+
+    Generates a lookup table for converting one-hot observations to n-hot
+    compressed representations. Each observation is encoded using exactly
+    `n_hot` active units from `n_out` dimensions.
+
+    Args:
+        n_in: Number of possible observations (must be <= C(n_out, n_hot))
+        n_out: Compressed sensory dimension
+        n_hot: Number of active units per code (1, 2, 3, etc.)
+            - n_hot=1: One-hot (identity, no compression unless n_in > n_out)
+            - n_hot=2: Two-hot (default, typically 45 → 10)
+            - n_hot=3: Three-hot (more distributed, e.g., 220 → 12)
+
+    Returns:
+        List of n-hot code tensors, one per possible observation [n_in, n_out]
+
+    Raises:
+        ValueError: If n_in > C(n_out, n_hot) (too many observations for compression)
+
+    Example:
+        >>> # Two-hot encoding: 45 observations → 10 dimensions
+        >>> table = create_encoding_table(n_in=45, n_out=10, n_hot=2)
+        >>> len(table)
+        45
+        >>> table[0].sum()
+        2.0
+
+        >>> # Three-hot encoding: 220 observations → 12 dimensions
+        >>> table = create_encoding_table(n_in=220, n_out=12, n_hot=3)
+        >>> len(table)
+        220
+        >>> table[0].sum()
+        3.0
+    """
+
+    # Validate: number of observations must not exceed possible n-hot codes
+    max_codes = int(comb(n_out, n_hot))
+    if n_in > max_codes:
+        raise ValueError(f"Cannot encode {n_in} observations with {n_hot}-hot codes in {n_out} dimensions. " f"Maximum possible codes: C({n_out}, {n_hot}) = {max_codes}")
+
+    # Generate all possible n-hot codes using combinations
+    # combinations(range(n_out), n_hot) gives all ways to choose n_hot positions
+    encoding_table = []
+    for active_positions in combinations(range(n_out), n_hot):
+        # Create zero vector
+        code = [0] * n_out
+        # Activate n_hot positions
+        for pos in active_positions:
+            code[pos] = 1
+        # Add to table
+        encoding_table.append(torch.tensor(code, dtype=torch.float))
+
+        # Stop when we have enough codes for all observations
+        if len(encoding_table) >= n_in:
+            break
+
+    return torch.stack(encoding_table, dim=0)
+
+
+def uncat_to_list(x: Tensor, dims: List[int]) -> List[Tensor]:
+    """Split a concatenated tensor into a list of tensors with given last-dim sizes.
+
+    Args:
+        x: Tensor shaped (B, sum(dims)).
+        dims: List of segment sizes.
+
+    Returns:
+        List of tensors [x0, x1, ...] where xi.shape == (B, dims[i]).
+    """
+    return list(torch.split(x, dims, dim=1))

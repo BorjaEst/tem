@@ -239,9 +239,8 @@ if __name__ == "__main__":
     seed_everything(args.seed, workers=True)
 
     # Step 3: Construct the TEM model from architecture parameters
-    # TEMModel currently consumes a legacy flat dict; to_legacy_dict() flattens
-    # the nested Parameters structure while Parameters evolves into subgroups.
-    tem_model = core.TEMModel(args.model_params.to_legacy_dict())
+    # TEMModel now accepts Parameters object directly (backwards compatible with legacy dict)
+    tem_model = core.TEMModel(args.model_params)
 
     # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control

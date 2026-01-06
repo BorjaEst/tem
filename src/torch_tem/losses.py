@@ -692,7 +692,7 @@ class TEMLoss(nn.Module):
             LossOutput where each component is already multiplied by settings weights.
         """
         # Raw (possibly per-env) losses
-        lx: LossX = self.loss_x_fn(step.x_logits, step.x)
+        lx: LossX = self.loss_x_fn(step.x_logits, step.o)
         lp: LossP = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_p_inf)
         lg: LossG = self.loss_g_fn(step.g_inf, step.g_gen)
         lreg: LossReg = self.loss_reg_fn(step.g_inf, step.p_inf)

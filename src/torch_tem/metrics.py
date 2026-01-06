@@ -131,13 +131,13 @@ class SensoryAccuracy(nn.Module):
         super().__init__()
         self.reduction = reduction
 
-    def forward(self, x_logits: list[Tensor], x: Tensor) -> AccuracyX:
+    def forward(self, x_logits: list[Tensor], o: Tensor) -> AccuracyX:
         """Compute `AccuracyX` from logits and ground-truth observations.
 
         Args:
             x_logits: Three logit tensors `[infer, retrieved, ancestral]`, each
                 shaped `(B, n_classes)`.
-            x: Ground-truth observation. Accepts either:
+            o: Ground-truth observation. Accepts either:
                 - one-hot: `(B, n_classes)`
                 - class indices: `(B,)` or `(B, 1)`
 
@@ -150,11 +150,11 @@ class SensoryAccuracy(nn.Module):
         if len(x_logits) != 3:
             raise ValueError(f"Expected 3 logit tensors, got {len(x_logits)}")
 
-        # Convert x to class indices if one-hot
-        if x.dim() == 2 and x.shape[1] > 1:
-            labels = torch.argmax(x, dim=1)
+        # Convert o to class indices if one-hot
+        if o.dim() == 2 and o.shape[1] > 1:
+            labels = torch.argmax(o, dim=1)
         else:
-            labels = x.squeeze(-1) if x.dim() == 2 else x
+            labels = o.squeeze(-1) if o.dim() == 2 else o
 
         # Compute predictions for each pathway
         pred_p = torch.argmax(x_logits[0], dim=1)  # infer pathway

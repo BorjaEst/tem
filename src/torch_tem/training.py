@@ -244,7 +244,7 @@ class TEMLightningModule(pl.LightningModule):
         """
         use_p_inf = self.tem.hyper["use_p_inf"]
         step_losses = self.loss_fn(step, use_p_inf)
-        step_acc = self.acc_x_fn(step.x_logits, step.x)
+        step_acc = self.acc_x_fn(step.x_logits, step.o)
 
         losses_per_env: list[StepLoss] = []
         acc_total = AccuracyCounts.zero(device=self.device)

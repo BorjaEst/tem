@@ -26,8 +26,11 @@ from scipy.special import comb
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
+from torch_tem import settings as tem_settings
 from torch_tem import utils
-from torch_tem.modules import MLP
+from torch_tem.core.lec import LECModel, LECState
+from torch_tem.modules import MLP, autoencoder, projection
+from torch_tem.settings import AutoencoderSettings, LECSettings, ProjectionSettings
 
 
 class WorldParameters(BaseModel):
@@ -50,8 +53,8 @@ class LECParameters(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    n_x: int = Field(default=45, description="Neurons for sensory observation x")
-    n_x_c: int = Field(default=10, description="Neurons for compressed sensory experience x_c")
+    n_o: int = Field(default=45, description="Neurons for sensory observation o")
+    n_c: int = Field(default=10, description="Neurons for compressed sensory experience c")
 
 
 class MECParameters(BaseModel):
@@ -147,6 +150,20 @@ class Parameters(BaseModel):
         description="HPC parameters (memory + grounded location).",
     )
 
+    # Module settings
+    autoencoder: AutoencoderSettings = Field(
+        default_factory=AutoencoderSettings,
+        description="Autoencoder settings.",
+    )
+    lec_projection: ProjectionSettings = Field(
+        default_factory=ProjectionSettings,
+        description="LEC projection settings.",
+    )
+    lec_settings: LECSettings = Field(
+        default_factory=LECSettings,
+        description="LEC module settings.",
+    )
+
     @model_validator(mode="before")
     @classmethod
     def _upgrade_flat_to_nested(cls, data: Any) -> Any:
@@ -168,7 +185,7 @@ class Parameters(BaseModel):
         for key in ("has_static_action", "n_actions"):
             pop_into(key, world)
 
-        for key in ("n_x", "n_x_c"):
+        for key in ("n_o", "n_c"):
             pop_into(key, lec)
 
         for key in (
@@ -207,12 +224,12 @@ class Parameters(BaseModel):
         return self.world.n_actions
 
     @property
-    def n_x(self) -> int:
-        return self.lec.n_x
+    def n_o(self) -> int:
+        return self.lec.n_o
 
     @property
-    def n_x_c(self) -> int:
-        return self.lec.n_x_c
+    def n_c(self) -> int:
+        return self.lec.n_c
 
     @property
     def do_sample(self) -> bool:
@@ -308,15 +325,15 @@ class Parameters(BaseModel):
 
     @computed_field
     @property
-    def n_x_f(self) -> list[int]:
+    def n_x(self) -> list[int]:
         """Neurons for temporally filtered sensory experience x for each frequency."""
-        return [self.n_x_c for _ in range(self.n_f)]
+        return [self.n_c for _ in range(self.n_f)]
 
     @computed_field
     @property
     def n_p(self) -> list[int]:
         """Neurons for hippocampal grounded location p for each frequency."""
-        return [g * x for g, x in zip(self.n_g_subsampled, self.n_x_f)]
+        return [g * x for g, x in zip(self.n_g_subsampled, self.n_x)]
 
     @computed_field
     @property
@@ -422,22 +439,22 @@ class Parameters(BaseModel):
     @property
     def W_repeat(self) -> list[torch.Tensor]:
         """Matrix for repeating abstract location g to do outer product with sensory information x."""
-        return [torch.tensor(np.kron(np.eye(self.n_g_subsampled[f]), np.ones((1, self.n_x_f[f]))), dtype=torch.float) for f in range(self.n_f)]
+        return [torch.tensor(np.kron(np.eye(self.n_g_subsampled[f]), np.ones((1, self.n_x[f]))), dtype=torch.float) for f in range(self.n_f)]
 
     @computed_field
     @property
     def W_tile(self) -> list[torch.Tensor]:
         """Matrix for tiling sensory observation x to do outer product with abstract location g."""
-        return [torch.tensor(np.kron(np.ones((1, self.n_g_subsampled[f])), np.eye(self.n_x_f[f])), dtype=torch.float) for f in range(self.n_f)]
+        return [torch.tensor(np.kron(np.ones((1, self.n_g_subsampled[f])), np.eye(self.n_x[f])), dtype=torch.float) for f in range(self.n_f)]
 
     @computed_field
     @property
     def two_hot_table(self) -> list[torch.Tensor]:
         """Table for converting one-hot to two-hot compressed representation."""
-        table = [[0] * (self.n_x_c - 2) + [1] * 2]
+        table = [[0] * (self.n_c - 2) + [1] * 2]
 
         # Generate compressed codes for each possible observation
-        for i in range(1, min(int(comb(self.n_x_c, 2)), self.n_x)):
+        for i in range(1, min(int(comb(self.n_c, 2)), self.n_o)):
             code = table[-1].copy()
             # Find latest occurrence of [0 1] in that code
             swap = [index for index in range(len(code) - 1, -1, -1) if code[index : index + 2] == [0, 1]][0]
@@ -468,8 +485,8 @@ class Parameters(BaseModel):
             "has_static_action": self.has_static_action,
             "n_actions": self.n_actions,
             # LEC
-            "n_x": self.n_x,
-            "n_x_c": self.n_x_c,
+            "n_o": self.n_o,
+            "n_c": self.n_c,
             # MEC
             "do_sample": self.do_sample,
             "separate_ovc": self.separate_ovc,
@@ -494,7 +511,7 @@ class Parameters(BaseModel):
             "n_f_g": self.n_f_g,
             "n_f": self.n_f,
             "n_g": self.n_g,
-            "n_x_f": self.n_x_f,
+            "n_x": self.n_x,
             "n_p": self.n_p,
             "f_initial": self.f_initial,
             "i_attractor": self.i_attractor,
@@ -558,16 +575,102 @@ def parameter_iteration(iteration, params):
     return eta, lamb, p2g_scale_offset, lr, walk_length_center, loss_weights
 
 
+@dataclass
+class TEMState:
+    """Outputs from a single timestep TEM iteration."""
+
+    lec: Optional[Any] = None
+    g: Any = None
+    o: Optional[Tensor] = None
+    a: Any = None
+
+    M: Optional[List[Tensor]] = None
+
+    g_gen: Optional[List[Tensor]] = None
+    p_gen: Optional[List[Tensor]] = None
+
+    x_gen: Optional[Sequence[Tensor]] = None
+    x_logits: Optional[Sequence[Tensor]] = None
+
+    lec_state: Optional[LECState] = None
+    g_inf: Optional[List[Tensor]] = None
+    p_inf: Optional[List[Tensor]] = None
+    p_inf_x: Optional[List[Tensor]] = None  # Grounded location from sensory input (for loss computation)
+
+    def correct(self) -> List[np.ndarray]:
+        """Return per-prediction correctness arrays for the current timestep."""
+        if self.o is None or self.x_gen is None:
+            return []
+
+        observation = self.o.detach().cpu().numpy()
+        predictions = [tensor.detach().cpu().numpy() for tensor in self.x_gen]
+        return [np.argmax(pred, axis=-1) == np.argmax(observation, axis=-1) for pred in predictions]
+
+    def detach(self) -> "TEMState":
+        """Return a detached copy suitable for storing as `prev_iter`."""
+
+        def _detach(obj: Any) -> Any:
+            if obj is None:
+                return None
+            if isinstance(obj, LECState):
+                # Detach LECState components
+                return LECState(c=_detach(obj.c), x=_detach(obj.x), x_filtered=_detach(obj.x_filtered))
+            if torch.is_tensor(obj):
+                return obj.detach()
+            if isinstance(obj, list):
+                return [_detach(v) for v in obj]
+            if isinstance(obj, tuple):
+                return tuple(_detach(v) for v in obj)
+            if isinstance(obj, dict):
+                return {k: _detach(v) for k, v in obj.items()}
+            return obj
+
+        return TEMState(
+            g=self.g,
+            o=_detach(self.o),
+            a=self.a,
+            M=_detach(self.M),
+            g_gen=_detach(self.g_gen),
+            p_gen=_detach(self.p_gen),
+            x_gen=_detach(self.x_gen),
+            x_logits=_detach(self.x_logits),
+            lec_state=_detach(self.lec_state),
+            g_inf=_detach(self.g_inf),
+            p_inf=_detach(self.p_inf),
+            p_inf_x=_detach(self.p_inf_x),
+        )
+
+
 class TEMModel(torch.nn.Module):
-    def __init__(self, params):
+    def __init__(self, params: Parameters):
         # First call super class init function to set up torch.nn.Module style model and inherit it's functionality
         super(TEMModel, self).__init__()
-        # Copy hyperparameters (e.g. network sizes) from parameter dict, usually generated from parameters() in parameters.py
-        self.hyper = copy.deepcopy(params)
+
+        # Accept either Parameters object or legacy dict
+        self._params = params
+        self.hyper = params.to_legacy_dict()
 
         # Initialize runtime hyperparameters with safe defaults
         # These will be updated by training before each forward pass
         self.runtime = RuntimeHyperparameters()
+
+        # Initialize LEC (Lateral Entorhinal Cortex) component
+        self.autoencoder = autoencoder.Autoencoder(
+            n_o=self.hyper["n_o"],
+            n_c=self.hyper["n_c"],
+            settings=params.autoencoder,
+        )
+        self.lec_projection = projection.ProjectionModule(
+            n_z=self.hyper["n_x"],
+            n_p=self.hyper["n_p"],
+            settings=params.lec_projection,
+        )
+        self.lec = LECModel(
+            n_c=self.hyper["n_c"],
+            n_x=self.hyper["n_x"],
+            settings=params.lec_settings,
+            f_init=self.hyper["f_initial"],  # In future I want to use different param for x and g
+        )
 
         # Create trainable parameters
         self.init_trainable()
@@ -602,11 +705,11 @@ class TEMModel(torch.nn.Module):
             return tuple(self._apply_to_nested_tensors(v, fn) for v in obj)
         return obj
 
-    def forward(self, x, locations, a_prev, M_prev, x_prev, g_prev):
+    def forward(self, o, locations, a_prev, M_prev, lec_state, g_prev):
         # First, do the transition step, as it will be necessary for both the inference and generative part of the model
         gt_gen, gt_inf = self.gen_g(a_prev, g_prev, locations)
         # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_inf_x
-        x_inf, g_inf, p_inf_x, p_inf = self.inference(x, locations, M_prev, x_prev, gt_inf)
+        lec_state, g_inf, p_inf_x, p_inf = self.inference(o, locations, M_prev, gt_inf, lec_state)
         # Run generative model: since generative model is only used for training purposes, it will generate from *inferred* variables instead of *generated* variables (as it would when used for generation)
         x_gen, x_logits, p_gen = self.generative(M_prev, p_inf, g_inf, gt_gen)
         # Update generative memory with generated and inferred grounded location.
@@ -616,25 +719,26 @@ class TEMModel(torch.nn.Module):
             # Inference memory is identical to generative memory if using common memory, and updated separatedly if not
             M.append(M[0] if self.hyper["common_memory"] else self.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
         # Return all iteration values (loss now computed in Lightning module)
-        return M, gt_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf, p_inf_x
+        return M, gt_gen, p_gen, x_gen, x_logits, lec_state, g_inf, p_inf, p_inf_x
 
-    def inference(self, x, locations, M_prev, x_prev, g_gen):
-        # Compress sensory observation from one-hot to two-hot (or alternatively, whatever an MLP makes of it)
-        x_c = self.f_c(x)
-        # Temporally filter sensory observation by mixing it with previous experience
-        x_f = self.x_prev2x(x_prev, x_c)
-        # Prepare sensory experience for input to memory by normalisation and weighting
-        x_ = self.x2x_(x_f)
+    def inference(self, o, locations, M_prev, g_gen, lec_state: LECState):
+        # Delegate sensory processing to modular components:
+        # 1. Autoencoder: o -> c (compression)
+        # 2. LEC: c, x_prev -> x (temporal filtering)
+        # 3. Projection: x -> x_ (normalization + tiling for memory)
+        c = self.autoencoder.encode(o)
+        lec_state: LECState = self.lec(c, lec_state)
+        x_ = self.lec_projection(lec_state.x)  # Project to memory format
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
         p_x = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
-        g = self.inf_g(p_x, g_gen, x, locations)
+        g = self.inf_g(p_x, g_gen, o, locations)
         # Prepare abstract location for input to memory by downsampling and weighting
         g_ = self.g2g_(g)
         # Infer grounded location from sensory experience and inferred abstract location
         p = self.inf_p(x_, g_)
-        # Return variables in order that they were created
-        return x_f, g, p_x, p
+        # Return LECState (for next step) and inferred variables
+        return lec_state, g, p_x, p
 
     def generative(self, M_prev, p_inf, g_inf, g_gen):
         # Generate observation from inferred grounded location, using only the highest frequency. Also keep non-softmaxed logits which are used in the loss later
@@ -651,16 +755,12 @@ class TEMModel(torch.nn.Module):
         return (x_p, x_g, x_gt), (x_p_logits, x_g_logits, x_gt_logits), p_g_inf
 
     def init_trainable(self):
-        # Scale factor in Laplacian transform for each frequency module. High frequency comes first, low frequency comes last. Learn inverse sigmoid instead of scale factor directly, so domain of alpha is -inf, inf
-        self.alpha = torch.nn.ParameterList(
-            [torch.nn.Parameter(torch.tensor(np.log(self.hyper["f_initial"][f] / (1 - self.hyper["f_initial"][f])), dtype=torch.float)) for f in range(self.hyper["n_f"])]
-        )
-        # Entorhinal preference weights
-        self.w_x = torch.nn.Parameter(torch.tensor(1.0))
-        # Entorhinal preference bias
-        self.b_x = torch.nn.Parameter(torch.zeros(self.hyper["n_x_c"]))
-        # Frequency module specific scaling of sensory experience before input to hippocampus
-        self.w_p = torch.nn.ParameterList([torch.nn.Parameter(torch.tensor(1.0)) for f in range(self.hyper["n_f"])])
+        # Initialize LEC (Lateral Entorhinal Cortex) component parameters with proper initial values
+        # Use LEC's init_alpha method to set temporal filtering factors
+        # self.autoencoder.init_trainable() already inits in Autoencoder.__init__
+        # self.lec.init_trainable(self.hyper["f_initial"]) already inits in LECModel __init__
+        # self.lec_projection.init_trainable() already inits in ProjectionModule __init__
+
         # Initial activity of abstract location cells when entering a new environment, like a prior on g. Initialise with truncated normal
         self.g_init = torch.nn.ParameterList(
             [
@@ -726,30 +826,31 @@ class TEMModel(torch.nn.Module):
             hidden_dim=[2 * n_g for n_g in self.hyper["n_g"][(self.hyper["n_f_g"] if self.hyper["separate_ovc"] else 0) :]],
             activation=[torch.tanh, torch.exp],
         )
-        # MLP for decompressing highest frequency sensory experience to sensory observation
-        self.MLP_c_star = MLP(self.hyper["n_x_f"][0], self.hyper["n_x"], hidden_dim=20 * self.hyper["n_x_c"])
 
-    def init_iteration(self, g, x, a, M):
+    def init_iteration(self, g, o, a, M):
         # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
-        self.hyper["batch_size"] = x.shape[0]
+        self.hyper["batch_size"] = o.shape[0]
         # Initalise hebbian memory connectivity matrix [M_gen, M_inf] if it wasn't initialised yet
         if M is None:
             # Create new empty memory dict for generative network: zero connectivity matrix M_0, then empty list of the memory vectors a and b for each iteration for efficient hebbian memory computation
-            M = [torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=x.device)]
+            M = [torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=o.device)]
             # Append inference memory only if memory is used in grounded location inference
             if self.hyper["use_p_inf"]:
                 # If inference and generative network share common memory: reuse same connectivity, and same memory vectors. Else, create a new empty memory list for inference network
                 M.append(
                     M[0]
                     if self.hyper["common_memory"]
-                    else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=x.device)
+                    else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=o.device)
                 )
         # Initialise previous abstract location by stacking abstract location prior
         g_inf = [torch.stack([self.g_init[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
         # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
-        x_inf = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x_f"][f]), device=x.device) for f in range(self.hyper["n_f"])]
-        # And construct new iteration for that g, x, a, and M
-        return TEMState(g=g, x=x, a=a, M=M, x_inf=x_inf, g_inf=g_inf)
+        x_filtered = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x"][f]), device=o.device) for f in range(self.hyper["n_f"])]
+        # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
+        c_init = self.autoencoder.encode(o)
+        lec_state = LECState(c=c_init, x=x_filtered, x_filtered=x_filtered)
+        # And construct new iteration for that g, o, a, and M
+        return TEMState(g=g, o=o, a=a, M=M, lec_state=lec_state, g_inf=g_inf)
 
     def gen_g(self, a_prev, g_prev, locations):
         # Transition from previous abstract location to new abstract location using weights specific to action taken for each frequency module
@@ -781,15 +882,15 @@ class TEMModel(torch.nn.Module):
         # Sampling would be the correct way to do this, since observations are discrete, and it's also what the TEM paper says
         # However, it looks like you could also get away with using categorical distribution directly as an approximation of the one-hot observations
         if self.hyper["do_sample"]:
-            x, logits = self.f_x(
+            o, logits = self.f_x(
                 p
             )  # This is a placeholder! Should be done using reparameterisation trick (like https://blog.evjang.com/2016/11/tutorial-categorical-variational.html)
         else:
-            x, logits = self.f_x(p)
+            o, logits = self.f_x(p)
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
-        return x, logits
+        return o, logits
 
-    def inf_g(self, p_x, g_gen, x, locations):
+    def inf_g(self, p_x, g_gen, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_p_inf"]:
             # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
@@ -799,9 +900,9 @@ class TEMModel(torch.nn.Module):
             # Not in paper, but this greatly improves zero-shot inference: provide the uncertainty function of the inferred abstract location with measures of memory quality
             with torch.no_grad():
                 # For the first measure, use the grounded location inferred from memory to generate an observation
-                x_hat, x_hat_logits = self.gen_x(p_x[0])
+                o_hat, x_hat_logits = self.gen_x(p_x[0])
                 # Then calculate the error between the generated observation and the actual observation: if the memory is working well, this error should be small
-                err = utils.squared_error(x, x_hat)
+                err = utils.squared_error(o, o_hat)
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
             sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err, dim=1)), dim=1) for g in mu_g_mem]
             # Not in paper, but recommended by James for stability: get final mean of inferred abstract location by clamping activations between -1 and 1
@@ -854,7 +955,7 @@ class TEMModel(torch.nn.Module):
         # Use the same transformation for each frequency module: leaky relu for sparsity
         for f in range(self.hyper["n_f"]):
             mu_p = self.f_p(g_[f] * x_[f])  # This is element-wise multiplication
-            sigma_p = 0  # Unclear from paper (typo?). Some undefined function f that takes two arguments: f(f_n(x),g)
+            sigma_p = 0  # Unclear from paper (typo?). Some undefined function f that takes two arguments: f(f_n(o),g)
             # Either sample inferred grounded location or just take mean
             if self.hyper["do_sample"]:
                 p.append(mu_p + sigma_p * np.random.randn())
@@ -862,21 +963,6 @@ class TEMModel(torch.nn.Module):
                 p.append(mu_p)
         # Return new memory constructed from sensory experience and inferred abstract location
         return p
-
-    def x_prev2x(self, x_prev, x_c):
-        # Calculate factor for filtering from sigmoid of learned parameter
-        alpha = [torch.nn.Sigmoid()(self.alpha[f]) for f in range(self.hyper["n_f"])]
-        # Do exponential temporal filtering for each frequency modulemod
-        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * x_c for f in range(self.hyper["n_f"])]
-        return x
-
-    def x2x_(self, x):
-        # Prepare sensory input for input to memory by weighting and normalisation for each frequency module
-        # Get normalised sensory input for each frequency module
-        normalised = self.f_n(x)
-        # Then reshape and reweight (use sigmoid to keep weight between 0 and 1) each frequency module separately: matrix multiplication by W_tile prepares x for outer product with g by element-wise multiplication
-        x_ = [torch.nn.Sigmoid()(self.w_p[f]) * torch.matmul(normalised[f], self.hyper["W_tile"][f]) for f in range(self.hyper["n_f"])]
-        return x_
 
     def g2g_(self, g):
         # Prepares abstract location for input to memory by reshaping and down-sampling for each frequency module
@@ -967,31 +1053,30 @@ class TEMModel(torch.nn.Module):
         # Multi layer perceptron to generate standard deviation of grounded location retrieval
         return self.MLP_sigma_p(p)
 
-    def f_x(self, p):
+    def f_x(self, p: Tensor):
         # Calculate categorical probability distribution over observations for a given ground location
-        # p has dimensions n_p[0]. We'll need to transform those to temporally filtered sensory experience, before we can decompress
-        # p is the flattened (by concatenating rows - like reading sentences) outer product of g and x (p = g^T * x).
-        # Therefore to get the sensory experience x for a grounded location p, sum over all abstract locations g for each component of x
-        # That's what the paper means when it says "sum over entorhinal preferences". It can be done with the transpose of W_tile
-        x = self.w_x * torch.matmul(p, torch.t(self.hyper["W_tile"][0])) + self.b_x
-        # Then we need to decompress the temporally filtered sensory experience into a single current experience prediction
-        logits = self.f_c_star(x)
-        # We'll keep both the logits (domain -inf, inf) and probabilities (domain 0, 1) because both are needed later on
+        # Legacy behavior: p is only the highest-frequency module with shape (B, n_p[0])
+        # p is the outer product of g and x for the highest frequency (p = g^T * x)
+        # To get x from p, sum over abstract locations g (transpose of tiling matrix)
+
+        # Project highest-frequency grounded location back to all frequency modules
+        # using the inverse tiling operation for each frequency
+        p_list = [p]  # generative() is still calling gen_x(p_inf[0]) so p is only highest frequency module
+        x = self.lec_projection.inverse(p_list)
+
+        # Reconstruct compressed features from filtered features (affine transform)
+        c = self.lec.reconstruct(x)
+
+        # Decompress c to observation logits using decoder
+        logits = self.autoencoder.decode(c)
+
+        # Keep both logits and probabilities
         probability = utils.softmax(logits)
         return probability, logits
 
-    def f_c_star(self, compressed):
-        # Multi layer perceptron to decompress sensory experience at highest frequency
-        return self.MLP_c_star(compressed)
-
-    def f_c(self, decompressed):
-        # Compress sensory observation from one-hot provided by world to two-hot for ease of computation
-        return torch.stack([self.hyper["two_hot_table"][i] for i in torch.argmax(decompressed, dim=1)], dim=0)
-
-    def f_n(self, x):
-        # Normalise sensory observation for each frequency module
-        normalised = [utils.normalise(utils.relu(x[f] - torch.mean(x[f]))) for f in range(self.hyper["n_f"])]
-        return normalised
+    def f_c_star(self, c):
+        """Decompress sensory experience. Delegates to Autoencoder."""
+        return self.autoencoder.decode(c)
 
     def f_g(self, g):
         # Downsample abstract location for each frequency module
@@ -1041,69 +1126,7 @@ class TEMModel(torch.nn.Module):
         return M
 
 
-@dataclass
-class TEMState:
-    """Outputs from a single timestep TEM iteration."""
-
-    g: Any = None
-    x: Optional[Tensor] = None
-    a: Any = None
-
-    M: Optional[List[Tensor]] = None
-
-    g_gen: Optional[List[Tensor]] = None
-    p_gen: Optional[List[Tensor]] = None
-
-    x_gen: Optional[Sequence[Tensor]] = None
-    x_logits: Optional[Sequence[Tensor]] = None
-
-    x_inf: Optional[List[Tensor]] = None
-    g_inf: Optional[List[Tensor]] = None
-    p_inf: Optional[List[Tensor]] = None
-    p_inf_x: Optional[List[Tensor]] = None  # Grounded location from sensory input (for loss computation)
-
-    def correct(self) -> List[np.ndarray]:
-        """Return per-prediction correctness arrays for the current timestep."""
-        if self.x is None or self.x_gen is None:
-            return []
-
-        observation = self.x.detach().cpu().numpy()
-        predictions = [tensor.detach().cpu().numpy() for tensor in self.x_gen]
-        return [np.argmax(pred, axis=-1) == np.argmax(observation, axis=-1) for pred in predictions]
-
-    def detach(self) -> "TEMState":
-        """Return a detached copy suitable for storing as `prev_iter`."""
-
-        def _detach(obj: Any) -> Any:
-            if obj is None:
-                return None
-            if torch.is_tensor(obj):
-                return obj.detach()
-            if isinstance(obj, list):
-                return [_detach(v) for v in obj]
-            if isinstance(obj, tuple):
-                return tuple(_detach(v) for v in obj)
-            if isinstance(obj, dict):
-                return {k: _detach(v) for k, v in obj.items()}
-            return obj
-
-        return TEMState(
-            g=self.g,
-            x=_detach(self.x),
-            a=self.a,
-            M=_detach(self.M),
-            g_gen=_detach(self.g_gen),
-            p_gen=_detach(self.p_gen),
-            x_gen=_detach(self.x_gen),
-            x_logits=_detach(self.x_logits),
-            x_inf=_detach(self.x_inf),
-            g_inf=_detach(self.g_inf),
-            p_inf=_detach(self.p_inf),
-            p_inf_x=_detach(self.p_inf_x),
-        )
-
-
-Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, x, a)
+Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)
 
 
 class Rollout(Iterator[TEMState]):
@@ -1133,7 +1156,7 @@ class Rollout(Iterator[TEMState]):
         # Initialize prev-values for first forward pass
         self._a_prev = prev_state.a
         self._M_prev = prev_state.M
-        self._x_prev = prev_state.x_inf
+        self._lec_state = prev_state.lec_state
         self._g_prev = prev_state.g_inf
 
         # Track current position in walk
@@ -1156,23 +1179,23 @@ class Rollout(Iterator[TEMState]):
             raise StopIteration
 
         # Get current timestep
-        locations, x, a = self.walk[self._idx]
+        locations, o, a = self.walk[self._idx]
         self._idx += 1
 
         # Run model forward
-        M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf, p_inf_x = self.model(x, locations, self._a_prev, self._M_prev, self._x_prev, self._g_prev)
+        M, g_gen, p_gen, x_gen, x_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._M_prev, self._lec_state, self._g_prev)
 
         # Build state
         state = TEMState(
             g=locations,
-            x=x,
+            o=o,
             a=a,
             M=M,
             g_gen=g_gen,
             p_gen=p_gen,
             x_gen=x_gen,
             x_logits=x_logits,
-            x_inf=x_inf,
+            lec_state=lec_state,
             g_inf=g_inf,
             p_inf=p_inf,
             p_inf_x=p_inf_x,
@@ -1181,7 +1204,7 @@ class Rollout(Iterator[TEMState]):
         # Update prev-values for next iteration
         self._a_prev = a
         self._M_prev = M
-        self._x_prev = x_inf
+        self._lec_state = lec_state
         self._g_prev = g_inf
 
         return state

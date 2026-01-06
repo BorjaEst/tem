@@ -58,7 +58,23 @@ class TileModule(nn.Module):
         return [torch.matmul(p[f], self.w[f].T) for f in range(len(p))]
 
 
+class LowRankModule(nn.Module):
+
+    def __init__(self, n_z: list[int], n_p: list[int], settings: ProjectionSettings):
+        super(LowRankModule, self).__init__()
+        self.settings = settings
+        # raise NotImplementedError("LowRankModule not yet implemented.")
+
+    def forward(self, z: List[Tensor]) -> List[Tensor]:
+        raise NotImplementedError("LowRankModule forward pass not yet implemented.")
+
+    def inverse(self, p: List[Tensor]) -> List[Tensor]:
+        raise NotImplementedError("LowRankModule inverse pass not yet implemented.")
+
+
 def _select_projection_module(settings: ProjectionSettings, n_z: int, n_p: int) -> nn.Module:
-    if settings.projection_mode == "tile":
+    if settings.mode == "tiling":
         return TileModule(n_z, n_p, settings)
+    if settings.mode == "low_rank":
+        return LowRankModule(n_z, n_p, settings)
     raise ValueError(f"Unknown projection mode: {settings.projection_mode}")

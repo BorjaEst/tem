@@ -153,6 +153,10 @@ class Parameters(BaseModel):
         default_factory=settings.MECProjectionSettings,
         description="MEC projection settings.",
     )
+    mec_settings: settings.MECSettings = Field(
+        default_factory=settings.MECSettings,
+        description="MEC module settings.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -659,6 +663,17 @@ class TEMModel(torch.nn.Module):
             n_c=self.hyper["n_c"],
             n_x=self.hyper["n_x"],
             settings=params.lec_settings,
+            f_init=self.hyper["f_initial"],  # In future I want to use different param for x and g
+        )
+        self.mec_projection = projection.ProjectionModule(
+            n_z=self.hyper["n_g"],
+            n_p=self.hyper["n_p"],
+            settings=params.mec_projection,
+        )
+        self.inf_g = MECModel(
+            n_a=self.hyper["n_actions"] + (1 if self.hyper["has_static_action"] else 0),
+            n_g=self.hyper["n_g"],
+            settings=params.mec_settings,
             f_init=self.hyper["f_initial"],  # In future I want to use different param for x and g
         )
 

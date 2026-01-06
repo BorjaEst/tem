@@ -49,12 +49,16 @@ Infrastructure:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from torch_tem.types import Reduction, Scalar
+
+Activation = Literal["sigmoid", "none"]
+ProjectionMode = Literal["identity", "tiling", "low_rank", "random"]
+InitStrategy = Literal["identity", "random"]
 
 
 class EnvironmentSettings(BaseModel):
@@ -416,22 +420,34 @@ class ProjectionSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    projection_mode: Literal["tile"] = Field(
-        "tile",
-        description="Projection mode (e.g., 'tile')",
+    mode: ProjectionMode = Field(
+        ...,
+        description="Projection mode strategy",
+    )
+    init: InitStrategy = Field(
+        default="identity",
+        description="Initialization strategy: 'identity' (structured) or 'random'",
     )
     learnable: bool = Field(
-        False,
-        description="Whether projection weights are learnable",
+        default=False,
+        description="If True, projection matrices are learnable",
+    )
+    rank: Optional[int] = Field(
+        default=None,
+        description="Low_rank rank for low_rank mode (auto-derived via GCD if None)",
     )
 
 
 class LECProjectionSettings(ProjectionSettings):
     """Settings for LEC projection modules."""
 
-    projection_mode: Literal["tile"] = Field(
-        "tile",
-        description="Projection mode (e.g., 'tile')",
+    mode: ProjectionMode = Field(
+        default="tiling",
+        description="LEC default: tiling",
+    )
+    activation: Activation = Field(
+        default="sigmoid",
+        description="LEC default: sigmoid",
     )
 
 
@@ -449,9 +465,17 @@ class LECSettings(BaseModel):
 class MECProjectionSettings(ProjectionSettings):
     """Settings for MEC projection modules."""
 
-    projection_mode: Literal["tile"] = Field(
-        "low_rank",
-        description="Projection mode (e.g., 'tile')",
+    mode: ProjectionMode = Field(
+        default="low_rank",
+        description="MEC default: low_rank",
+    )
+    init: InitStrategy = Field(
+        default="identity",
+        description="MEC default: structured (downsample+repeat)",
+    )
+    rank: Optional[List[int]] = Field(
+        default=None,
+        description="Low_rank rank for low_rank mode (auto-derived via GCD if None)",
     )
 
 

@@ -426,6 +426,15 @@ class ProjectionSettings(BaseModel):
     )
 
 
+class LECProjectionSettings(ProjectionSettings):
+    """Settings for LEC projection modules."""
+
+    projection_mode: Literal["tile"] = Field(
+        "tile",
+        description="Projection mode (e.g., 'tile')",
+    )
+
+
 class LECSettings(BaseModel):
     """Settings for LEC modules."""
 
@@ -433,9 +442,25 @@ class LECSettings(BaseModel):
 
     frequencies_init: Literal["linear"] = Field(
         "linear",
-        description="Initialization method for feature weights",
+        description="Initialization method for feature frequencies",
     )
-    scale_factor: Literal["laplace"] = Field(
-        "laplace",
-        description="Scaling factor method for frequency modules",
+
+
+class MECProjectionSettings(ProjectionSettings):
+    """Settings for MEC projection modules."""
+
+    projection_mode: Literal["tile"] = Field(
+        "low_rank",
+        description="Projection mode (e.g., 'tile')",
+    )
+
+
+class MECSettings(BaseModel):
+    """Settings for MEC modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    frequencies_init: Literal["linear"] = Field(
+        "linear",
+        description="Initialization method for grid frequencies",
     )

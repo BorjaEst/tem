@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Feb 11 14:26:32 2020
-
-This is a pytorch implementation of the Tolman-Eichenbaum Machine,
-written by Jacob Bakermans after the original by James Whittington.
-The referenced paper is the bioRxiv publication at https://www.biorxiv.org/content/10.1101/770495v2
-
-Release v1.0.0: Fully functional pytorch model, without any extensions
-
-@author: jacobb
-"""
 from __future__ import annotations
 
 import copy
@@ -26,11 +13,10 @@ from scipy.special import comb
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
-from torch_tem import settings as tem_settings
-from torch_tem import utils
+from torch_tem import settings, utils
 from torch_tem.core.lec import LECModel, LECState
+from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules import MLP, autoencoder, projection
-from torch_tem.settings import AutoencoderSettings, LECSettings, ProjectionSettings
 
 
 class WorldParameters(BaseModel):
@@ -151,17 +137,21 @@ class Parameters(BaseModel):
     )
 
     # Module settings
-    autoencoder: AutoencoderSettings = Field(
-        default_factory=AutoencoderSettings,
+    autoencoder: settings.AutoencoderSettings = Field(
+        default_factory=settings.AutoencoderSettings,
         description="Autoencoder settings.",
     )
-    lec_projection: ProjectionSettings = Field(
-        default_factory=ProjectionSettings,
+    lec_projection: settings.ProjectionSettings = Field(
+        default_factory=settings.LECProjectionSettings,
         description="LEC projection settings.",
     )
-    lec_settings: LECSettings = Field(
-        default_factory=LECSettings,
+    lec_settings: settings.LECSettings = Field(
+        default_factory=settings.LECSettings,
         description="LEC module settings.",
+    )
+    mec_projection: settings.ProjectionSettings = Field(
+        default_factory=settings.MECProjectionSettings,
+        description="MEC projection settings.",
     )
 
     @model_validator(mode="before")

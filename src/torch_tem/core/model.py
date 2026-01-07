@@ -736,7 +736,15 @@ class TEMModel(torch.nn.Module):
 
     def forward(self, o, locations, a_prev, M_prev, lec_state, mec_state):
         # First, do the transition step, as it will be necessary for both the inference and generative part of the model
-        mec_state: MECState = self.mec(a_prev, mec_state, locations)
+        # Convert actions to one-hot format expected by MEC
+        do_step = torch.tensor([a is not None for a in a_prev], dtype=torch.bool, device=o.device)
+        if self.hyper["has_static_action"]:
+            a = utils.one_hot_with_zero(a_prev, self.hyper["n_actions"], device=o.device)
+        else:
+            a_idx = torch.tensor([int(a) if a is not None else 0 for a in a_prev], dtype=torch.long, device=o.device)
+            a = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
+            a = a * do_step.unsqueeze(-1)
+        mec_state: MECState = self.mec(a, do_step, mec_state, locations)
         # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_inf_x
         lec_state, g_inf, p_inf_x, p_inf = self.inference(o, locations, M_prev, lec_state, mec_state)
         # Update mec_state.g to inferred g for next transition (legacy parity)

@@ -7,6 +7,7 @@ from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from scipy.special import comb
 from torch import Tensor
 
@@ -423,3 +424,20 @@ def uncat_to_list(x: Tensor, dims: List[int]) -> List[Tensor]:
         List of tensors [x0, x1, ...] where xi.shape == (B, dims[i]).
     """
     return list(torch.split(x, dims, dim=1))
+
+
+def one_hot_with_zero(action: list[int | None], num_actions: int, device: torch.device | None = None) -> torch.Tensor:
+    """
+    Convert actions to one-hot encoding where action 0/None = all-zeros (static action).
+
+    action: list of int or None
+        0|None = static / no-op -> all zeros
+        1..num_actions = discrete actions -> one-hot at index (action - 1)
+    returns: FloatTensor, shape (len(action), num_actions)
+    """
+    action_t = torch.tensor([a if a is not None else 0 for a in action], dtype=torch.long, device=device)
+    mask = action_t > 0
+    out = torch.zeros((len(action), num_actions), dtype=torch.float32, device=device)
+    if mask.any():
+        out[mask] = F.one_hot(action_t[mask] - 1, num_classes=num_actions).float()
+    return out

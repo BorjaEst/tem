@@ -685,9 +685,7 @@ class TEMModel(torch.nn.Module):
             settings=params.mec_projection,
         )
         self.mec = MECModel(
-            n_p=self.hyper["n_p"],
             n_g=self.hyper["n_g"],
-            n_g_subsampled=self.hyper["n_g_subsampled"],
             n_f=self.hyper["n_f"],
             n_f_g=self.hyper["n_f_g"],
             n_f_ovc=self.hyper["n_f_ovc"],
@@ -695,7 +693,6 @@ class TEMModel(torch.nn.Module):
             d_hidden=self.hyper["d_hidden_dim"],
             g_conn=self.hyper["g_connections"],
             g_init_std=self.hyper["g_init_std"],
-            g_mem_std=self.hyper["g_mem_std"],
             separate_ovc=self.hyper["separate_ovc"],
             do_sample=self.hyper["do_sample"],
         )
@@ -809,8 +806,19 @@ class TEMModel(torch.nn.Module):
         # Use MEC's init_f method to set frequencies
         # self.mec.init_trainable(self.hyper["f_initial"]) already inits in MECModel __init__
         # self.mec_projection.init_trainable() already inits in ProjectionModule __init__
+        n_p = self.hyper["n_p"]
+        n_g = self.hyper["n_g"]
+        n_g_subsampled = self.hyper["n_g_subsampled"]
+        g_mem_std = self.hyper["g_mem_std"]
+        n_f = self.hyper["n_f"]
 
         pass  # We can remove this method if there's nothing to init here
+        self.MLP_sigma_p = MLP(n_p, n_p, activation=[torch.tanh, torch.exp])
+        self.MLP_mu_g_mem = MLP(n_g_subsampled, n_g, hidden_dim=[2 * g for g in n_g])
+        self.MLP_mu_g_mem.set_weights(
+            -1, [torch.tensor(truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=g_mem_std), dtype=torch.float32) for f in range(n_f)]
+        )
+        self.MLP_sigma_g_mem = MLP([2 for _ in n_g_subsampled], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
     def init_iteration(self, g, o, a, M):
         # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
@@ -880,7 +888,7 @@ class TEMModel(torch.nn.Module):
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
             sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err, dim=1)), dim=1) for g in mu_g_mem]
             # Not in paper, but recommended by James for stability: get final mean of inferred abstract location by clamping activations between -1 and 1
-            mu_g_mem = self.mec.f_g_clamp(mu_g_mem)
+            mu_g_mem = self.mec.g_clamp(mu_g_mem)
             # And get standard deviation/uncertainty of inferred abstract location by providing uncertainty function with memory quality measures
             sigma_g_mem = self.f_sigma_g_mem(sigma_g_input)
         # ... and [previous abstract location and action (path integration)]
@@ -948,11 +956,11 @@ class TEMModel(torch.nn.Module):
 
     def f_mu_g_mem(self, g_downsampled):
         # Multi layer perceptron to generate mean of abstract location from down-sampled abstract location, obtained by summing over sensory dimension of grounded location
-        return self.mec.MLP_mu_g_mem(g_downsampled)
+        return self.MLP_mu_g_mem(g_downsampled)
 
     def f_sigma_g_mem(self, g_downsampled):
         # Multi layer perceptron to generate standard deviation of abstract location from down-sampled abstract location, obtained by summing over sensory dimension of grounded location
-        sigma = self.mec.MLP_sigma_g_mem(g_downsampled)
+        sigma = self.MLP_sigma_g_mem(g_downsampled)
         # Not in paper, but also offset this sigma over training, so you can reduce influence of inferred p early on (from runtime, not hyper)
         return [sigma[f] + self.runtime.p2g_scale_offset * self.hyper["p2g_sig_val"] for f in range(self.hyper["n_f"])]
 
@@ -971,7 +979,7 @@ class TEMModel(torch.nn.Module):
 
     def f_sigma_p(self, p):
         # Multi layer perceptron to generate standard deviation of grounded location retrieval
-        return self.mec.MLP_sigma_p(p)
+        return self.MLP_sigma_p(p)
 
     def f_x(self, p: Tensor):
         # Calculate categorical probability distribution over observations for a given ground location
@@ -1053,20 +1061,16 @@ class Rollout(Iterator[TEMState]):
             raise ValueError("Rollout requires at least 1 timestep in walk")
 
         # Extract first step to determine batch size and initialize state
-        locations_0, x_0, a_0 = self.walk[0]
+        locations_0, o_0, _ = self.walk[0]
 
         # Determine initial state
         if initial is not None:
             state = initial
         else:
-            # Create fresh initial state (init_iteration will create memory)
-            try:
-                batch_size = len(a_0)
-            except TypeError:
-                # a_0 might not have len() if it's a scalar or tensor
-                batch_size = int(x_0.shape[0]) if x_0.ndim > 1 else 1
-
-            state = model.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], None)
+            # Create fresh initial state: derive batch size from observation tensor
+            batch_size = int(o_0.shape[0]) if o_0.ndim > 1 else 1
+            # Initialize with no previous action (reset boundary)
+            state = model.init_iteration(locations_0, o_0, [None] * batch_size, None)
 
         # Initialize prev-values for first forward pass
         self._a_prev = state.a

@@ -52,11 +52,11 @@ class Model(torch.nn.Module):
 
     def iteration(self, x, locations, a_prev, M_prev, x_prev, g_prev):
         # First, do the transition step, as it will be necessary for both the inference and generative part of the model
-        gt_gen, gt_inf = self.gen_g(a_prev, g_prev, locations)
+        g_gen, g_path = self.gen_g(a_prev, g_prev, locations)
         # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_inf_x
-        x_inf, g_inf, p_inf_x, p_inf = self.inference(x, locations, M_prev, x_prev, gt_inf)
+        x_inf, g_inf, p_inf_x, p_inf = self.inference(x, locations, M_prev, x_prev, g_path)
         # Run generative model: since generative model is only used for training purposes, it will generate from *inferred* variables instead of *generated* variables (as it would when used for generation)
-        x_gen, x_logits, p_gen = self.generative(M_prev, p_inf, g_inf, gt_gen)
+        x_gen, x_logits, p_gen = self.generative(M_prev, p_inf, g_inf, g_gen)
         # Update generative memory with generated and inferred grounded location.
         M = [self.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
         # If using memory for grounded location inference: append inference memory
@@ -64,9 +64,9 @@ class Model(torch.nn.Module):
             # Inference memory is identical to generative memory if using common memory, and updated separatedly if not
             M.append(M[0] if self.hyper["common_memory"] else self.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
         # Calculate loss of this step
-        L = self.loss(gt_gen, p_gen, x_logits, x, g_inf, p_inf, p_inf_x, M_prev)
+        L = self.loss(g_gen, p_gen, x_logits, x, g_inf, p_inf, p_inf_x, M_prev)
         # Return all iteration values
-        return L, M, gt_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf
+        return L, M, g_gen, p_gen, x_gen, x_logits, x_inf, g_inf, p_inf
 
     def inference(self, x, locations, M_prev, x_prev, g_gen):
         # Compress sensory observation from one-hot to two-hot (or alternatively, whatever an MLP makes of it)
@@ -250,7 +250,7 @@ class Model(torch.nn.Module):
         shiny_envs = [location["shiny"] is not None for location in locations]
         # If there are any shiny environments, the abstract locations for the generative model will need to be re-calculated without providing actions for those
         g_gen = self.f_mu_g_path(a_prev, g_prev, no_direc=shiny_envs) if any(shiny_envs) else g
-        # Return generated abstract location after transition
+        # Return: (1) ancestral prediction g_gen for generative pathway, (2) path integration prior g_path (mean, sigma) for inference
         return g_gen, (g, sigma_g)
 
     def gen_p(self, g, M_prev):
@@ -278,7 +278,7 @@ class Model(torch.nn.Module):
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return x, logits
 
-    def inf_g(self, p_x, g_gen, x, locations):
+    def inf_g(self, p_x, g_path, x, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_p_inf"]:
             # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
@@ -298,8 +298,8 @@ class Model(torch.nn.Module):
             # And get standard deviation/uncertainty of inferred abstract location by providing uncertainty function with memory quality measures
             sigma_g_mem = self.f_sigma_g_mem(sigma_g_input)
         # ... and [previous abstract location and action (path integration)]
-        mu_g_path = g_gen[0]
-        sigma_g_path = g_gen[1]
+        mu_g_path = g_path[0]
+        sigma_g_path = g_path[1]
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         mu_g, sigma_g = [], []
         for f in range(self.hyper["n_f"]):

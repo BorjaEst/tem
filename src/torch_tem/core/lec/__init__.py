@@ -35,7 +35,7 @@ class LECModel(nn.Module):
     """
 
     def __init__(self, n_c: int, n_x: List[int], settings: LECSettings, f_init: Optional[List[float]] = None):
-        super(LECModel, self).__init__()
+        super().__init__()
 
         # Store hyperparameters
         self._n_c = n_c
@@ -56,11 +56,6 @@ class LECModel(nn.Module):
         self.b_x = torch.nn.Parameter(torch.zeros(self._n_c))  # Bias for reconstructing c from x
 
     @property
-    def n_f(self) -> int:
-        """Number of frequency modules."""
-        return len(self.alpha)
-
-    @property
     def n_in(self) -> int:
         """Dimensionality of compressed features."""
         return self._n_c
@@ -72,19 +67,19 @@ class LECModel(nn.Module):
 
     def x_prev2x(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
         # Calculate factor for filtering from sigmoid of learned parameter
-        alpha = [torch.sigmoid(self.alpha[f]) for f in range(self.n_f)]
+        alpha = [torch.sigmoid(self.alpha[f]) for f, _ in enumerate(self.n_out)]
         # Do exponential temporal filtering for each frequency module
-        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * c for f in range(self.n_f)]
+        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * c for f, _ in enumerate(self.n_out)]
         return x
 
     def f_n(self, x: List[Tensor]) -> List[Tensor]:
         # Normalize using global mean across entire batch (legacy behavior)
-        normalised = [utils.normalise(utils.relu(x[f] - torch.mean(x[f]))) for f in range(self.n_f)]
+        normalised = [utils.normalise(utils.relu(x[f] - torch.mean(x[f]))) for f, _ in enumerate(self.n_out)]
         return normalised
 
     def f_w(self, x: List[Tensor]) -> List[Tensor]:
         # Apply sigmoid-constrained scaling like legacy
-        weighted = [torch.sigmoid(self.w_f[f]) * x[f] for f in range(self.n_f)]
+        weighted = [torch.sigmoid(self.w_f[f]) * x[f] for f, _ in enumerate(self.n_out)]
         return weighted
 
     def forward(self, c: Tensor, state: LECState) -> LECState:

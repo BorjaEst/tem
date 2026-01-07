@@ -488,3 +488,31 @@ class MECSettings(BaseModel):
         "linear",
         description="Initialization method for grid frequencies",
     )
+    do_sample: bool = Field(
+        default=False,
+        description="Whether to sample from distributions or use deterministic means",
+    )
+    g_init_std: float = Field(
+        default=0.5,
+        description="Standard deviation for initial abstract location (truncated normal)",
+    )
+    g_mem_std: float = Field(
+        default=0.1,
+        description="Standard deviation for MLP hidden→output layer in memory-based inference",
+    )
+    d_hidden_dim: int = Field(
+        default=20,
+        description="Hidden layer size of MLP for action-driven transitions",
+    )
+    use_p_inf: bool = Field(
+        default=True,
+        description="Use memory-based inference (p→g pathway) alongside path integration",
+    )
+    n_ovc: List[int] = Field(
+        default_factory=list,
+        description="Dimensions for object vector cell modules (empty = no OVC)",
+    )
+    f_ovc: List[float] = Field(
+        default_factory=list,
+        description="Frequencies for OVC modules (empty = merge into tail of n_g)",
+    )

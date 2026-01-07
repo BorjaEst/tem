@@ -17,6 +17,7 @@ from torch_tem import settings, utils
 from torch_tem.core.lec import LECModel, LECState
 from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules import MLP, autoencoder, projection
+from torch_tem.types import Transition
 
 
 class WorldParameters(BaseModel):
@@ -580,7 +581,7 @@ class TEMState:
 
     M: Optional[List[Tensor]] = None
 
-    g_gen: Optional[List[Tensor]] = None
+    mec_state: Optional[MECState] = None
     p_gen: Optional[List[Tensor]] = None
 
     x_gen: Optional[Sequence[Tensor]] = None
@@ -590,6 +591,13 @@ class TEMState:
     g_inf: Optional[List[Tensor]] = None
     p_inf: Optional[List[Tensor]] = None
     p_inf_x: Optional[List[Tensor]] = None  # Grounded location from sensory input (for loss computation)
+
+    @property
+    def g_gen(self) -> Optional[List[Tensor]]:
+        """Return per-frequency generated abstract location g for the current timestep."""
+        if self.mec_state is None:
+            return None
+        return self.mec_state.g_gen
 
     def correct(self) -> List[np.ndarray]:
         """Return per-prediction correctness arrays for the current timestep."""
@@ -609,6 +617,12 @@ class TEMState:
             if isinstance(obj, LECState):
                 # Detach LECState components
                 return LECState(c=_detach(obj.c), x=_detach(obj.x), x_filtered=_detach(obj.x_filtered))
+            if isinstance(obj, MECState):
+                # Detach MECState components
+                return MECState(
+                    g_gen=_detach(obj.g_gen),
+                    g_path=Transition(mean=_detach(obj.g_path.mean), uncertainty=_detach(obj.g_path.uncertainty)),
+                )
             if torch.is_tensor(obj):
                 return obj.detach()
             if isinstance(obj, list):
@@ -624,7 +638,7 @@ class TEMState:
             o=_detach(self.o),
             a=self.a,
             M=_detach(self.M),
-            g_gen=_detach(self.g_gen),
+            mec_state=_detach(self.mec_state),
             p_gen=_detach(self.p_gen),
             x_gen=_detach(self.x_gen),
             x_logits=_detach(self.x_logits),
@@ -670,11 +684,21 @@ class TEMModel(torch.nn.Module):
             n_p=self.hyper["n_p"],
             settings=params.mec_projection,
         )
-        self.inf_g = MECModel(
-            n_a=self.hyper["n_actions"] + (1 if self.hyper["has_static_action"] else 0),
+        self.mec = MECModel(
+            n_p=self.hyper["n_p"],
             n_g=self.hyper["n_g"],
-            settings=params.mec_settings,
-            f_init=self.hyper["f_initial"],  # In future I want to use different param for x and g
+            n_g_subsampled=self.hyper["n_g_subsampled"],
+            n_f=self.hyper["n_f"],
+            n_f_g=self.hyper["n_f_g"],
+            n_f_ovc=self.hyper["n_f_ovc"],
+            n_a=self.hyper["n_actions"],
+            d_hidden=self.hyper["d_hidden_dim"],
+            g_conn=self.hyper["g_connections"],
+            g_init_std=self.hyper["g_init_std"],
+            g_mem_std=self.hyper["g_mem_std"],
+            separate_ovc=self.hyper["separate_ovc"],
+            do_sample=self.hyper["do_sample"],
+            has_static_action=self.hyper["has_static_action"],
         )
 
         # Create trainable parameters
@@ -710,13 +734,15 @@ class TEMModel(torch.nn.Module):
             return tuple(self._apply_to_nested_tensors(v, fn) for v in obj)
         return obj
 
-    def forward(self, o, locations, a_prev, M_prev, lec_state, g_prev):
+    def forward(self, o, locations, a_prev, M_prev, lec_state, mec_state):
         # First, do the transition step, as it will be necessary for both the inference and generative part of the model
-        gt_gen, gt_inf = self.gen_g(a_prev, g_prev, locations)
+        mec_state: MECState = self.mec(a_prev, mec_state, locations)
         # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_inf_x
-        lec_state, g_inf, p_inf_x, p_inf = self.inference(o, locations, M_prev, gt_inf, lec_state)
+        lec_state, g_inf, p_inf_x, p_inf = self.inference(o, locations, M_prev, lec_state, mec_state)
+        # Update mec_state.g to inferred g for next transition (legacy parity)
+        mec_state.g = g_inf
         # Run generative model: since generative model is only used for training purposes, it will generate from *inferred* variables instead of *generated* variables (as it would when used for generation)
-        x_gen, x_logits, p_gen = self.generative(M_prev, p_inf, g_inf, gt_gen)
+        x_gen, x_logits, p_gen = self.generative(M_prev, p_inf, g_inf, mec_state.g_gen)
         # Update generative memory with generated and inferred grounded location.
         M = [self.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
         # If using memory for grounded location inference: append inference memory
@@ -724,9 +750,9 @@ class TEMModel(torch.nn.Module):
             # Inference memory is identical to generative memory if using common memory, and updated separatedly if not
             M.append(M[0] if self.hyper["common_memory"] else self.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
         # Return all iteration values (loss now computed in Lightning module)
-        return M, gt_gen, p_gen, x_gen, x_logits, lec_state, g_inf, p_inf, p_inf_x
+        return M, mec_state, p_gen, x_gen, x_logits, lec_state, g_inf, p_inf, p_inf_x
 
-    def inference(self, o, locations, M_prev, g_gen, lec_state: LECState):
+    def inference(self, o, locations, M_prev, lec_state: LECState, mec_state: MECState):
         # Delegate sensory processing to modular components:
         # 1. Autoencoder: o -> c (compression)
         # 2. LEC: c, x_prev -> x (temporal filtering)
@@ -737,7 +763,7 @@ class TEMModel(torch.nn.Module):
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
         p_x = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
-        g = self.inf_g(p_x, g_gen, o, locations)
+        g = self.inf_g(p_x, mec_state.g_path, o, locations)
         # Prepare abstract location for input to memory by downsampling and weighting
         g_ = self.g2g_(g)
         # Infer grounded location from sensory experience and inferred abstract location
@@ -766,71 +792,12 @@ class TEMModel(torch.nn.Module):
         # self.lec.init_trainable(self.hyper["f_initial"]) already inits in LECModel __init__
         # self.lec_projection.init_trainable() already inits in ProjectionModule __init__
 
-        # Initial activity of abstract location cells when entering a new environment, like a prior on g. Initialise with truncated normal
-        self.g_init = torch.nn.ParameterList(
-            [
-                torch.nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=self.hyper["n_g"][f], loc=0, scale=self.hyper["g_init_std"]), dtype=torch.float))
-                for f in range(self.hyper["n_f"])
-            ]
-        )
-        # Log of standard deviation of abstract location cells when entering a new environment; standard deviation of the prior on g. Initialise with truncated normal
-        self.logsig_g_init = torch.nn.ParameterList(
-            [
-                torch.nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=self.hyper["n_g"][f], loc=0, scale=self.hyper["g_init_std"]), dtype=torch.float))
-                for f in range(self.hyper["n_f"])
-            ]
-        )
-        # MLP for transition weights (not in paper, but recommended by James so you can learn about similarities between actions). Size is given by grid connections
-        self.MLP_D_a = MLP(
-            [self.hyper["n_actions"] for _ in range(self.hyper["n_f"])],
-            [
-                sum([self.hyper["n_g"][f_from] for f_from in range(self.hyper["n_f"]) if self.hyper["g_connections"][f_to][f_from]]) * self.hyper["n_g"][f_to]
-                for f_to in range(self.hyper["n_f"])
-            ],
-            activation=[torch.tanh, None],
-            hidden_dim=[self.hyper["d_hidden_dim"] for _ in range(self.hyper["n_f"])],
-            bias=[True, False],
-        )
-        # Initialise the hidden to output weights as zero, so initially you simply keep the current abstract location to predict the next abstract location
-        self.MLP_D_a.set_weights(1, 0.0)
-        # Transition weights without specifying an action for use in generative model with shiny objects
-        self.D_no_a = torch.nn.ParameterList(
-            [
-                torch.nn.Parameter(
-                    torch.zeros(sum([self.hyper["n_g"][f_from] for f_from in range(self.hyper["n_f"]) if self.hyper["g_connections"][f_to][f_from]]) * self.hyper["n_g"][f_to])
-                )
-                for f_to in range(self.hyper["n_f"])
-            ]
-        )
-        # MLP for standard deviation of transition sample
-        self.MLP_sigma_g_path = MLP(self.hyper["n_g"], self.hyper["n_g"], activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in self.hyper["n_g"]])
-        # MLP for standard devation of grounded location from retrieved memory sample
-        self.MLP_sigma_p = MLP(self.hyper["n_p"], self.hyper["n_p"], activation=[torch.tanh, torch.exp])
-        # MLP to generate mean of abstract location from downsampled abstract location, obtained by summing grounded location over sensory preferences in inference model
-        self.MLP_mu_g_mem = MLP(self.hyper["n_g_subsampled"], self.hyper["n_g"], hidden_dim=[2 * g for g in self.hyper["n_g"]])
-        # Initialise weights in last layer of MLP_mu_g_mem as truncated normal for each frequency module
-        self.MLP_mu_g_mem.set_weights(
-            -1,
-            [
-                torch.tensor(truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self.hyper["g_mem_std"]), dtype=torch.float)
-                for f in range(self.hyper["n_f"])
-            ],
-        )
-        # MLP to generate standard deviation of abstract location from two measures (generated observation error and inferred abstract location vector norm) of memory quality
-        self.MLP_sigma_g_mem = MLP([2 for _ in self.hyper["n_g_subsampled"]], self.hyper["n_g"], activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in self.hyper["n_g"]])
-        # MLP to generate mean of abstract location directly from shiny object presence. Outputs to object vector cell modules if they're separated, else to all abstract location modules
-        self.MLP_mu_g_shiny = MLP(
-            [1 for _ in range(self.hyper["n_f_ovc"] if self.hyper["separate_ovc"] else self.hyper["n_f"])],
-            [n_g for n_g in self.hyper["n_g"][(self.hyper["n_f_g"] if self.hyper["separate_ovc"] else 0) :]],
-            hidden_dim=[2 * n_g for n_g in self.hyper["n_g"][(self.hyper["n_f_g"] if self.hyper["separate_ovc"] else 0) :]],
-        )
-        # MLP to generate standard deviation of abstract location directly from shiny object presence. Outputs to object vector cell modules if they're separated, else to all abstract location modules
-        self.MLP_sigma_g_shiny = MLP(
-            [1 for _ in range(self.hyper["n_f_ovc"] if self.hyper["separate_ovc"] else self.hyper["n_f"])],
-            [n_g for n_g in self.hyper["n_g"][(self.hyper["n_f_g"] if self.hyper["separate_ovc"] else 0) :]],
-            hidden_dim=[2 * n_g for n_g in self.hyper["n_g"][(self.hyper["n_f_g"] if self.hyper["separate_ovc"] else 0) :]],
-            activation=[torch.tanh, torch.exp],
-        )
+        # Initialize MEC (Medial Entorhinal Cortex) component parameters with proper initial values
+        # Use MEC's init_f method to set frequencies
+        # self.mec.init_trainable(self.hyper["f_initial"]) already inits in MECModel __init__
+        # self.mec_projection.init_trainable() already inits in ProjectionModule __init__
+
+        pass  # We can remove this method if there's nothing to init here
 
     def init_iteration(self, g, o, a, M):
         # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
@@ -848,27 +815,16 @@ class TEMModel(torch.nn.Module):
                     else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=o.device)
                 )
         # Initialise previous abstract location by stacking abstract location prior
-        g_inf = [torch.stack([self.g_init[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
+        g_inf = [torch.stack([self.mec.g_init[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
         # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
         x_filtered = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x"][f]), device=o.device) for f in range(self.hyper["n_f"])]
         # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
         c_init = self.autoencoder.encode(o)
         lec_state = LECState(c=c_init, x=x_filtered, x_filtered=x_filtered)
+        # Create initial MEC state (g_gen starts as g_inf since no movement yet, g_path.mean is g_inf with zero uncertainty)
+        mec_state = MECState(g_gen=g_inf, g_path=Transition(mean=g_inf, uncertainty=[torch.zeros_like(g) for g in g_inf]))
         # And construct new iteration for that g, o, a, and M
-        return TEMState(g=g, o=o, a=a, M=M, lec_state=lec_state, g_inf=g_inf)
-
-    def gen_g(self, a_prev, g_prev, locations):
-        # Transition from previous abstract location to new abstract location using weights specific to action taken for each frequency module
-        mu_g = self.f_mu_g_path(a_prev, g_prev)
-        sigma_g = self.f_sigma_g_path(a_prev, g_prev)
-        # Either sample new abstract location g or simply take the mean of distribution in noiseless case.
-        g = [mu_g[f] + sigma_g[f] * np.random.randn() if self.hyper["do_sample"] else mu_g[f] for f in range(self.hyper["n_f"])]
-        # But for environments with shiny objects, the transition to the new abstract location shouldn't have access to the action direction in the generative model
-        shiny_envs = [location["shiny"] is not None for location in locations]
-        # If there are any shiny environments, the abstract locations for the generative model will need to be re-calculated without providing actions for those
-        g_gen = self.f_mu_g_path(a_prev, g_prev, no_direc=shiny_envs) if any(shiny_envs) else g
-        # Return generated abstract location after transition
-        return g_gen, (g, sigma_g)
+        return TEMState(g=g, o=o, a=a, M=M, lec_state=lec_state, mec_state=mec_state)
 
     def gen_p(self, g, M_prev):
         # We want to use g as an index for memory retrieval, but it doesn't have the right dimensions (these are grid cells, we need place cells). We need g_ instead
@@ -895,7 +851,7 @@ class TEMModel(torch.nn.Module):
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return o, logits
 
-    def inf_g(self, p_x, g_gen, o, locations):
+    def inf_g(self, p_x, g_path: Transition, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_p_inf"]:
             # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
@@ -911,12 +867,12 @@ class TEMModel(torch.nn.Module):
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
             sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err, dim=1)), dim=1) for g in mu_g_mem]
             # Not in paper, but recommended by James for stability: get final mean of inferred abstract location by clamping activations between -1 and 1
-            mu_g_mem = self.f_g_clamp(mu_g_mem)
+            mu_g_mem = self.mec.f_g_clamp(mu_g_mem)
             # And get standard deviation/uncertainty of inferred abstract location by providing uncertainty function with memory quality measures
             sigma_g_mem = self.f_sigma_g_mem(sigma_g_input)
         # ... and [previous abstract location and action (path integration)]
-        mu_g_path = g_gen[0]
-        sigma_g_path = g_gen[1]
+        mu_g_path = g_path.mean
+        sigma_g_path = g_path.uncertainty
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         mu_g, sigma_g = [], []
         for f in range(self.hyper["n_f"]):
@@ -977,73 +933,19 @@ class TEMModel(torch.nn.Module):
         g_ = [torch.matmul(downsampled[f], self.hyper["W_repeat"][f]) for f in range(self.hyper["n_f"])]
         return g_
 
-    def f_mu_g_path(self, a_prev, g_prev, no_direc=None):
-        # If there are no environments where the transition direction needs to be omitted (e.g. no shiny objects, or in inference model: set to all false
-        no_direc = [False for _ in a_prev] if no_direc is None else no_direc
-        # Remove all Nones from a_prev: these are walks where there was no previous action, so no step needs to be calculated for those
-        a_prev_step = [a if a is not None else 0 for a in a_prev]
-        # And also keep track of which walks these valid step actions are for
-        a_do_step = [a != None for a in a_prev]
-        # Get device from g_prev
-        device = g_prev[0].device
-        # Transform list of actions into batch of one-hot row vectors.
-        if self.hyper["has_static_action"]:
-            # If this world has static actions: whenever action 0 (standing still) appears, the action vector should be all zeros. All other actions should have a 1 in the label-1 entry
-            a = torch.zeros((len(a_prev_step), self.hyper["n_actions"]), device=device).scatter_(
-                1, torch.clamp(torch.tensor(a_prev_step, device=device).unsqueeze(1) - 1, min=0), 1.0 * (torch.tensor(a_prev_step, device=device).unsqueeze(1) > 0)
-            )
-        else:
-            # Without static actions: each action label should become a one-hot vector for that label
-            a = torch.zeros((len(a_prev_step), self.hyper["n_actions"]), device=device).scatter_(1, torch.tensor(a_prev_step, device=device).unsqueeze(1), 1.0)
-        # Get vector of transition weights by feeding actions into MLP
-        D_a = self.MLP_D_a([a for _ in range(self.hyper["n_f"])])
-        # Replace transition weights by non-directional transition weights in environments where transition direction needs to be omitted (can set only if any no_direc)
-        for f in range(self.hyper["n_f"]):
-            D_a[f][no_direc, :] = self.D_no_a[f]
-        # Reshape transition weight vector into transition matrix. The number of rows in the transition matrix is given by the incoming abstract location connections for each frequency module
-        D_a = [
-            torch.reshape(
-                D_a[f_to], (-1, sum([self.hyper["n_g"][f_from] for f_from in range(self.hyper["n_f"]) if self.hyper["g_connections"][f_to][f_from]]), self.hyper["n_g"][f_to])
-            )
-            for f_to in range(self.hyper["n_f"])
-        ]
-        # Select the frequency modules of the previous abstract location that are connected to each frequency module, to
-        g_in = [
-            torch.unsqueeze(torch.cat([g_prev[f_from] for f_from in range(self.hyper["n_f"]) if self.hyper["g_connections"][f_to][f_from]], dim=1), 1)
-            for f_to in range(self.hyper["n_f"])
-        ]
-        # Reshape transition weight vector into transition matrix. The number of rows in the transition matrix is given by the incoming abstract location connections for each frequency module
-        delta = [torch.squeeze(torch.matmul(g, T)) for g, T in zip(g_in, D_a)]
-        # Not in the paper, but recommended by James for stability: use inferred code as *difference* in abstract location. Calculate new abstract location from previous abstract location and difference
-        g_step = [g + d if g.dim() > 1 else torch.unsqueeze(g + d, 0) for g, d in zip(g_prev, delta)]
-        # Not in paper, but recommended by James for stability: clamp activations between -1 and 1
-        g_step = self.f_g_clamp(g_step)
-        # Build new abstract location from result of transition if there was one, or from prior on abstract location if there wasn't
-        return [torch.stack([g_step[f][batch_i, :] if do_step else self.g_init[f] for batch_i, do_step in enumerate(a_do_step)]) for f in range(self.hyper["n_f"])]
-
-    def f_sigma_g_path(self, a_prev, g_prev):
-        # Keep track of which walks these valid step actions are for
-        a_do_step = [a != None for a in a_prev]
-        # Multi layer perceptron to generate standard deviation from all previous abstract locations, including those that were just initialised and not real previous locations
-        from_g = self.MLP_sigma_g_path(g_prev)
-        # And take exponent to get prior sigma for the walks that didn't have a previous location
-        from_prior = [torch.exp(logsig) for logsig in self.logsig_g_init]
-        # Now select the standard deviation generated from the previous abstract location if there was one, and the prior standard deviation on abstract location otherwise
-        return [torch.stack([from_g[f][batch_i, :] if do_step else from_prior[f] for batch_i, do_step in enumerate(a_do_step)]) for f in range(self.hyper["n_f"])]
-
     def f_mu_g_mem(self, g_downsampled):
         # Multi layer perceptron to generate mean of abstract location from down-sampled abstract location, obtained by summing over sensory dimension of grounded location
-        return self.MLP_mu_g_mem(g_downsampled)
+        return self.mec.MLP_mu_g_mem(g_downsampled)
 
     def f_sigma_g_mem(self, g_downsampled):
         # Multi layer perceptron to generate standard deviation of abstract location from down-sampled abstract location, obtained by summing over sensory dimension of grounded location
-        sigma = self.MLP_sigma_g_mem(g_downsampled)
+        sigma = self.mec.MLP_sigma_g_mem(g_downsampled)
         # Not in paper, but also offset this sigma over training, so you can reduce influence of inferred p early on (from runtime, not hyper)
         return [sigma[f] + self.runtime.p2g_scale_offset * self.hyper["p2g_sig_val"] for f in range(self.hyper["n_f"])]
 
     def f_mu_g_shiny(self, shiny):
         # Multi layer perceptron to generate mean of abstract location from boolean location shiny-ness
-        mu_g = self.MLP_mu_g_shiny(shiny)
+        mu_g = self.mec.MLP_mu_g_shiny(shiny)
         # Take absolute because James wants object vector cells to be positive
         mu_g = [torch.abs(mu) for mu in mu_g]
         # Then apply clamp and leaky relu to get object vector module activations, like it's done for ground location activations
@@ -1052,11 +954,11 @@ class TEMModel(torch.nn.Module):
 
     def f_sigma_g_shiny(self, shiny):
         # Multi layer perceptron to generate standard deviation of abstract location from boolean location shiny-ness
-        return self.MLP_sigma_g_shiny(shiny)
+        return self.mec.MLP_sigma_g_shiny(shiny)
 
     def f_sigma_p(self, p):
         # Multi layer perceptron to generate standard deviation of grounded location retrieval
-        return self.MLP_sigma_p(p)
+        return self.mec.MLP_sigma_p(p)
 
     def f_x(self, p: Tensor):
         # Calculate categorical probability distribution over observations for a given ground location
@@ -1087,11 +989,6 @@ class TEMModel(torch.nn.Module):
         # Downsample abstract location for each frequency module
         downsampled = [torch.matmul(g[f], self.hyper["g_downsample"][f]) for f in range(self.hyper["n_f"])]
         return downsampled
-
-    def f_g_clamp(self, g):
-        # Calculate activation for abstract location, thresholding between -1 and 1
-        activation = [torch.clamp(g_f, min=-1, max=1) for g_f in g]
-        return activation
 
     def f_p(self, p):
         # Calculate activation for inferred grounded location, using a leaky relu for sparsity. Either apply to full multi-frequency grounded location or single frequency module
@@ -1162,7 +1059,7 @@ class Rollout(Iterator[TEMState]):
         self._a_prev = prev_state.a
         self._M_prev = prev_state.M
         self._lec_state = prev_state.lec_state
-        self._g_prev = prev_state.g_inf
+        self._mec_state = prev_state.mec_state
 
         # Track current position in walk
         self._idx = 0
@@ -1188,7 +1085,7 @@ class Rollout(Iterator[TEMState]):
         self._idx += 1
 
         # Run model forward
-        M, g_gen, p_gen, x_gen, x_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._M_prev, self._lec_state, self._g_prev)
+        M, mec_state, p_gen, x_gen, x_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._M_prev, self._lec_state, self._mec_state)
 
         # Build state
         state = TEMState(
@@ -1196,7 +1093,7 @@ class Rollout(Iterator[TEMState]):
             o=o,
             a=a,
             M=M,
-            g_gen=g_gen,
+            mec_state=mec_state,
             p_gen=p_gen,
             x_gen=x_gen,
             x_logits=x_logits,
@@ -1210,6 +1107,6 @@ class Rollout(Iterator[TEMState]):
         self._a_prev = a
         self._M_prev = M
         self._lec_state = lec_state
-        self._g_prev = g_inf
+        self._mec_state = mec_state
 
         return state

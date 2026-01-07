@@ -698,7 +698,6 @@ class TEMModel(torch.nn.Module):
             g_mem_std=self.hyper["g_mem_std"],
             separate_ovc=self.hyper["separate_ovc"],
             do_sample=self.hyper["do_sample"],
-            has_static_action=self.hyper["has_static_action"],
         )
 
         # Create trainable parameters
@@ -736,15 +735,21 @@ class TEMModel(torch.nn.Module):
 
     def forward(self, o, locations, a_prev, M_prev, lec_state, mec_state):
         # First, do the transition step, as it will be necessary for both the inference and generative part of the model
-        # Convert actions to one-hot format expected by MEC
-        do_step = torch.tensor([a is not None for a in a_prev], dtype=torch.bool, device=o.device)
+        # Handle reset boundaries: where a_prev is None, reset state to priors before transition
+        reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=o.device)
+        if torch.any(reset_mask):
+            # Reset g to priors for envs with no previous action
+            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.g_init[f].unsqueeze(0), mec_state.g[f]) for f in range(self.hyper["n_f"])]
+            mec_state.g = g_reset
+
+        # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
         if self.hyper["has_static_action"]:
             a = utils.one_hot_with_zero(a_prev, self.hyper["n_actions"], device=o.device)
         else:
             a_idx = torch.tensor([int(a) if a is not None else 0 for a in a_prev], dtype=torch.long, device=o.device)
             a = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
-            a = a * do_step.unsqueeze(-1)
-        mec_state: MECState = self.mec(a, do_step, mec_state, locations)
+
+        mec_state: MECState = self.mec(a, mec_state, locations)
         # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_inf_x
         lec_state, g_inf, p_inf_x, p_inf = self.inference(o, locations, M_prev, lec_state, mec_state)
         # Update mec_state.g to inferred g for next transition (legacy parity)
@@ -1052,7 +1057,7 @@ class Rollout(Iterator[TEMState]):
 
         # Determine initial state
         if initial is not None:
-            prev_state = initial
+            state = initial
         else:
             # Create fresh initial state (init_iteration will create memory)
             try:
@@ -1061,13 +1066,13 @@ class Rollout(Iterator[TEMState]):
                 # a_0 might not have len() if it's a scalar or tensor
                 batch_size = int(x_0.shape[0]) if x_0.ndim > 1 else 1
 
-            prev_state = model.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], None)
+            state = model.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], None)
 
         # Initialize prev-values for first forward pass
-        self._a_prev = prev_state.a
-        self._M_prev = prev_state.M
-        self._lec_state = prev_state.lec_state
-        self._mec_state = prev_state.mec_state
+        self._a_prev = state.a
+        self._M_prev = state.M
+        self._lec_state = state.lec_state
+        self._mec_state = state.mec_state
 
         # Track current position in walk
         self._idx = 0

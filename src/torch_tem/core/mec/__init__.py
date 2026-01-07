@@ -10,7 +10,7 @@ Design goal:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import torch
 from scipy.stats import truncnorm
@@ -27,22 +27,17 @@ class MECState:
     Attributes:
         g_gen: Ancestral prediction for the generative pathway.
         g_path: Path integration prior (mean, uncertainty) for inference.
-            NOTE: For legacy parity, g_path.mean stores the sampled g (or mu if do_sample=False),
-            not the distribution mean.
+        g: Abstract location used as 'previous g' at the next timestep.
     """
 
     g_gen: List[Tensor]
     g_path: Transition
+    g: Optional[List[Tensor]] = None
 
-    @property
-    def g(self) -> List[Tensor]:
-        """Abstract location used as 'previous g' at the next timestep."""
-        return self.g_path.mean
-
-    @g.setter
-    def g(self, value: List[Tensor]) -> None:
-        """Update previous abstract location (for compatibility with model.py)."""
-        self.g_path = Transition(mean=value, uncertainty=self.g_path.uncertainty)
+    def __post_init__(self) -> None:
+        """Initialize g from g_path.mean if not provided (backward compatibility)."""
+        if self.g is None:
+            self.g = list(self.g_path.mean)
 
 
 class MECModel(nn.Module):
@@ -166,41 +161,43 @@ class MECModel(nn.Module):
     # Public API (compatible with model.py)
     # ---------------------------------------------------------------------
 
-    def forward(self, a: Tensor, do_step: Tensor, state: MECState, locations: list[dict]) -> MECState:
-        """Compute next MEC state (legacy gen_g equivalent).
+    def forward(self, a: Tensor, state: MECState, locations: list[dict]) -> MECState:
+        """Compute next MEC state from action-driven transition.
 
         Args:
-            a: One-hot encoded actions (B, n_a), static actions are all-zero vectors
-            do_step: Boolean mask indicating valid steps vs resets (B,)
-            state: Previous MEC state
+            a: One-hot encoded actions (B, n_a). With has_static_action=True,
+               action 0 (stand still) is encoded as all-zeros.
+            state: Current MEC state
             locations: Per-env location dicts (for shiny detection)
+
+        Returns:
+            New MECState with updated g_gen and g_path.
+
+        Note:
+            Caller is responsible for resetting state.g to g_init at episode boundaries.
+            This module always applies transition dynamics from the provided state.
         """
         shiny_envs = self._shiny_envs(locations)
-        trans = self.transition(a, do_step, state, no_direc=None)
-        g = self._sample_g(trans)
+        trans = self.transition(a, state, no_direc=None)
+        g_sample = self._sample_g(trans)
 
-        # legacy: if ANY shiny env exists, recompute g_gen for ALL envs
-        if any(shiny_envs):
-            g_gen = self.estimate_next_g_mean(a, do_step, state, no_direc=shiny_envs)
-        else:
-            g_gen = g
+        # Legacy: if ANY shiny env exists, recompute g_gen for ALL envs with no directional drive
+        g_gen = self._compute_g_gen(a, state, g_sample, shiny_envs)
 
-        g_path = Transition(mean=g, uncertainty=trans.uncertainty)
+        return MECState(g_gen=g_gen, g_path=trans, g=g_sample)
 
-        return MECState(g_gen=g_gen, g_path=g_path)
-
-    def transition(self, a: Tensor, do_step: Tensor, state: MECState, no_direc: list[bool] | None = None) -> Transition:
+    def transition(self, a: Tensor, state: MECState, no_direc: list[bool] | None = None) -> Transition:
         """Return the transition distribution (mu, sigma) before sampling."""
-        mu = self.estimate_next_g_mean(a, do_step, state, no_direc=no_direc)
-        sigma = self.estimate_next_g_uncertainty(do_step, state)
+        mu = self.estimate_next_g_mean(a, state, no_direc=no_direc)
+        sigma = self.estimate_next_g_uncertainty(state)
         return Transition(mean=mu, uncertainty=sigma)
 
     # ---------------------------------------------------------------------
     # Mean / uncertainty (legacy f_mu_g_path / f_sigma_g_path)
     # ---------------------------------------------------------------------
 
-    def estimate_next_g_mean(self, a: Tensor, do_step: Tensor, state: MECState, no_direc: list[bool] | None = None) -> List[Tensor]:
-        """Legacy f_mu_g_path."""
+    def estimate_next_g_mean(self, a: Tensor, state: MECState, no_direc: list[bool] | None = None) -> List[Tensor]:
+        """Compute transition mean: g_next = g + action_delta."""
         device = a.device
         batch_size = a.shape[0]
 
@@ -212,18 +209,14 @@ class MECModel(nn.Module):
         g_in = [torch.cat([state.g[f_from] for f_from in range(self.n_f) if self.g_connections[f_to][f_from]], dim=1).unsqueeze(1) for f_to in range(self.n_f)]
 
         delta = [torch.bmm(g_in_f, mat_f).squeeze(1) for g_in_f, mat_f in zip(g_in, mats)]
-        g_step = [g_prev_f + delta_f for g_prev_f, delta_f in zip(state.g, delta)]
-        g_step = self.f_g_clamp(g_step)
+        g_next = [g_prev_f + delta_f for g_prev_f, delta_f in zip(state.g, delta)]
+        g_next = self.f_g_clamp(g_next)
 
-        # reset rows where do_step is False (was None in legacy)
-        return [torch.where(do_step.unsqueeze(-1), g_step[f], self.g_init[f].unsqueeze(0)) for f in range(self.n_f)]
+        return g_next
 
-    def estimate_next_g_uncertainty(self, do_step: Tensor, state: MECState) -> List[Tensor]:
-        """Legacy f_sigma_g_path."""
-        from_g = self.MLP_sigma_g_path(state.g)
-        from_prior = [torch.exp(logsig).unsqueeze(0) for logsig in self.logsig_g_init]
-
-        return [torch.where(do_step.unsqueeze(-1), from_g[f], from_prior[f]) for f in range(self.n_f)]
+    def estimate_next_g_uncertainty(self, state: MECState) -> List[Tensor]:
+        """Compute transition uncertainty from current state."""
+        return self.MLP_sigma_g_path(state.g)
 
     # ---------------------------------------------------------------------
     # Helper functions (small + explicit)
@@ -238,6 +231,17 @@ class MECModel(nn.Module):
     def _shiny_envs(self, locations: list[dict]) -> list[bool]:
         """Return per-env shiny indicator (tolerates missing keys)."""
         return [loc.get("shiny") is not None for loc in locations]
+
+    def _compute_g_gen(self, a: Tensor, state: MECState, g: List[Tensor], shiny_envs: list[bool]) -> List[Tensor]:
+        """Compute g_gen for generative pathway (legacy shiny behavior).
+
+        Legacy rule: if ANY env has shiny objects, recompute g_gen for ALL envs
+        using non-directional transition weights (per-env mask applied via no_direc).
+        Otherwise, g_gen = g (the sampled/mean path integration result).
+        """
+        if any(shiny_envs):
+            return self.estimate_next_g_mean(a, state, no_direc=shiny_envs)
+        return g
 
     def _transition_matrices(self, action_onehot: Tensor, no_direc: list[bool], device: torch.device) -> List[Tensor]:
         """Compute per-frequency transition matrices, applying no-direction rows."""

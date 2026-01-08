@@ -42,46 +42,45 @@ class MECState:
 
 
 class MECModel(nn.Module):
-    """MEC path integration.
-
-    This module implements the legacy transition model:
-    - compute mu_g via action-conditioned transition
-    - compute sigma_g via MLP_sigma_g_path
-    - sample g if do_sample else take mu_g
-    - for shiny environments, generative branch uses non-directional weights
-      (legacy: if *any* shiny env exists, g_gen is recomputed for *all* envs)
-    """
-
-    def __init__(
-        self,
-        n_a: int,
-        n_g: List[int],
-        n_f_g: int,
-        n_f_ovc: int,
-        settings: Optional[MECSettings] = None,
-        f_init: Optional[List[float]] = None,
-    ):
-        settings = settings or MECSettings()
+    def __init__(self, n_a: int, shape: List[int], f_init: List[float], settings: MECSettings):
         super().__init__()
+        self._settings = settings
 
         # Store for backward compatibility with methods that reference self.n_g
-        self.n_g = n_g
-        self.n_a = n_a
+        self._n_a = n_a
+        self._shape = shape
 
-        # Initialize GridModel
-        self.grid = GridModel(n_a, n_g, settings=settings.grid_cells, f_init=f_init)
+        # Split shape and f_init between grid and OVC modules
+        # Legacy: all modules share same index space, OVC is the "tail"
+        n_f_ovc = settings.ovc_cells.n_freq or 0
+        n_f_g = len(shape) - n_f_ovc
 
-        # Create OVCSettings from MECSettings
-        # Compute OVC output dims outside OVCModel (legacy-equivalent).
-        # - If OVC modules are separate (n_f_ovc > 0), only the OVC modules get shiny outputs.
-        # - Otherwise, all modules get shiny outputs.
-        separate_ovc = n_f_ovc > 0
-        n_ovc = n_g[n_f_g:] if separate_ovc else n_g
-        self.ovc = OVCModel(n_ovc, settings=settings.ovc_cells)
+        shape_grid = shape[:n_f_g]
+        f_init_grid = f_init[:n_f_g]
 
-    # ---------------------------------------------------------------------
-    # Public API (compatible with model.py)
-    # ---------------------------------------------------------------------
+        shape_ovc = shape[n_f_g:] if n_f_ovc > 0 else []
+        f_init_ovc = f_init[n_f_g:] if n_f_ovc > 0 else []
+
+        # Initialize GridModel (path integration for grid modules)
+        self.grid = GridModel(n_a, shape_grid, f_init_grid, settings=settings.grid_cells)
+
+        # Initialize OVCModel (shiny landmark heads for OVC modules)
+        self.ovc = OVCModel(shape_ovc, f_init_ovc, settings=settings.ovc_cells)
+
+    @property
+    def n_in(self) -> int:
+        """Dimensionality of action input."""
+        return self._n_a
+
+    @property
+    def shape(self) -> List[int]:
+        """Shape of grid cell modules."""
+        return self._shape
+
+    @property
+    def n_freq(self) -> int:
+        """Number of grid cell frequency modules."""
+        return len(self.shape)
 
     def forward(self, a: Tensor, state: MECState, locations: list[dict]) -> Tuple[List[Tensor], MECState]:
         """Compute next MEC state from action-driven transition.
@@ -104,3 +103,8 @@ class MECModel(nn.Module):
         g_gen, transition = self.grid(a, state.g, no_direc=no_direc)
 
         return g_gen, MECState(g_gen=g_gen, g_path=transition)
+
+
+def grid_connections(f_grid: list[float]) -> list[list[bool]]:
+    n = len(f_grid)
+    return [[f_grid[f1] <= f_grid[f2] for f1 in range(n)] for f2 in range(n)]

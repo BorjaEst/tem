@@ -26,20 +26,15 @@ from torch_tem.types import Transition
 
 
 class GridModel(nn.Module):
-    """Grid cell path integration module.
-
-    Handles action-driven transition dynamics for grid cells only.
-    Does not include OVC logic or full MEC state management.
-    """
-
-    def __init__(self, n_a: int, n_g: List[int], settings: GridSettings, f_init: Optional[List[float]] = None):
+    def __init__(self, n_a: int, shape: List[int], f_init: List[float], settings: GridSettings):
         super().__init__()
         self._settings = settings  # Protected to avoid modification
-        self.n_f = n_f = len(n_g)  # Number of grid cell frequencies
-        self.n_g = n_g
 
-        alpha_freq = f_init if f_init is not None else _alpha_init(settings, len(n_g))
-        self.g_connections = g_conn = grid_connections(alpha_freq)
+        # Store hyperparameters
+        self._n_a = n_a
+        self._n_g = n_g = shape
+        self.g_connections = g_conn = grid_connections(f_init)
+        n_f = len(shape)
 
         # Prior: learned "default phase" of the grid code at reset
         init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=settings.g_init_std)
@@ -63,14 +58,25 @@ class GridModel(nn.Module):
         # Transition uncertainty model
         self.MLP_sigma_g_path = MLP(n_g, n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
-    # ---------------------------------------------------------------------
-    # Public API (compatible with model.py)
-    # ---------------------------------------------------------------------
+    @property
+    def n_in(self) -> int:
+        """Dimensionality of grid cell activations."""
+        return self._n_a
+
+    @property
+    def shape(self) -> List[int]:
+        """Shape of grid cell modules."""
+        return self._n_g
+
+    @property
+    def n_freq(self) -> int:
+        """Number of grid cell frequency modules."""
+        return len(self.shape)
 
     def g_init(self, batch_size: int, device: torch.device) -> Transition:
         """Return initial grid cell activations as (mean, uncertainty) Transition."""
-        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_f)]
-        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_f)]
+        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
+        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
         return Transition(mean=mean, uncertainty=uncertainty)
 
     def forward(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Tuple[List[Tensor], Transition]:
@@ -105,7 +111,7 @@ class GridModel(nn.Module):
 
         mats = self.transition_matrices(a, no_direc)
 
-        g_in = [torch.cat([g[f_from] for f_from in range(self.n_f) if self.g_connections[f_to][f_from]], dim=1).unsqueeze(1) for f_to in range(self.n_f)]
+        g_in = [torch.cat([g[f_from] for f_from in range(self.n_freq) if self.g_connections[f_to][f_from]], dim=1).unsqueeze(1) for f_to in range(self.n_freq)]
         delta = [torch.bmm(g_in_f, mat_f).squeeze(1) for g_in_f, mat_f in zip(g_in, mats)]
         g_next = [g_f + delta_f for g_f, delta_f in zip(g, delta)]
 
@@ -140,36 +146,25 @@ class GridModel(nn.Module):
 
     def transition_matrices(self, a: Tensor, no_direc: list[bool]) -> List[Tensor]:
         """Compute per-frequency transition matrices, applying no-direction rows."""
-        d_flat = self.MLP_D_a([a for _ in range(self.n_f)])
+        d_flat = self.MLP_D_a([a for _ in range(self.n_freq)])
         if no_direc is None:
             no_direc = [False] * a.shape[0]  # batch_size
 
         no_direc_mask = torch.tensor(no_direc, device=a.device, dtype=torch.bool)
         if torch.any(no_direc_mask):
-            for f in range(self.n_f):
+            for f in range(self.n_freq):
                 d_no_a = self.D_no_a[f].unsqueeze(0).expand_as(d_flat[f])
                 d_flat[f] = torch.where(no_direc_mask.unsqueeze(1), d_no_a, d_flat[f])
 
         mats: List[Tensor] = []
-        for f_to in range(self.n_f):
-            in_dim = sum(self.n_g[f_from] for f_from in range(self.n_f) if self.g_connections[f_to][f_from])
-            mats.append(d_flat[f_to].reshape(-1, in_dim, self.n_g[f_to]))
+        for f_to in range(self.n_freq):
+            in_dim = sum(self.shape[f_from] for f_from in range(self.n_freq) if self.g_connections[f_to][f_from])
+            mats.append(d_flat[f_to].reshape(-1, in_dim, self.shape[f_to]))
         return mats
 
     def g_clamp(self, g: List[Tensor]) -> List[Tensor]:
         """Clamp grid cell activations to [-1, 1] for stability."""
         return [torch.clamp(g_f, min=-1, max=1) for g_f in g]
-
-
-def _alpha_init(settings: GridSettings, n_f: int) -> List[float]:
-    """Initialize temporal filtering factors based on desired time constants.
-
-    Returns frequencies in [0, 1] range (NOT logit-transformed).
-    The calling code will apply the logit transform.
-    """
-    if settings.frequencies_init == "linear":  # Linearly spaced time constants between min and max
-        return np.linspace(0.9, 0.1, n_f).tolist()
-    raise ValueError(f"Unknown frequencies_init method: {settings.frequencies_init}")
 
 
 def grid_connections(f_grid: list[float]) -> list[list[bool]]:

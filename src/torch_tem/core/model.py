@@ -707,12 +707,9 @@ class TEMModel(torch.nn.Module):
         )
         self.mec = MECModel(
             n_a=self.hyper["n_actions"],
-            n_g=self.hyper["n_g"],
-            n_f_g=self.hyper["n_f_g"],
-            n_f_ovc=self.hyper["n_f_ovc"],
-            # n_ovc=self.hyper["n_ovc"],
-            settings=params.mec_settings,
+            shape=self.hyper["n_g"],
             f_init=self.hyper["f_initial"],
+            settings=params.mec_settings,
         )
 
         # self.lec_projection = ProjectionModule(lec, hpc, settings)

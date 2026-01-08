@@ -68,9 +68,9 @@ class Model(torch.nn.Module):
         # Return all iteration values
         return L, M, g_gen, p_gen, x_gen, o_logits, x_inf, g_inf, p_inf
 
-    def inference(self, x, locations, M_prev, x_prev, g_gen):
+    def inference(self, o, locations, M_prev, x_prev, g_gen):
         # Compress sensory observation from one-hot to two-hot (or alternatively, whatever an MLP makes of it)
-        c = self.f_c(x)
+        c = self.f_c(o)
         # Temporally filter sensory observation by mixing it with previous experience
         x = self.x_prev2x(x_prev, c)
         # Prepare sensory experience for input to memory by normalisation and weighting
@@ -78,7 +78,7 @@ class Model(torch.nn.Module):
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
         p_x = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
-        g = self.inf_g(p_x, g_gen, x, locations)
+        g = self.inf_g(p_x, g_gen, o, locations)
         # Prepare abstract location for input to memory by downsampling and weighting
         g_ = self.g2g_(g)
         # Infer grounded location from sensory experience and inferred abstract location
@@ -278,7 +278,7 @@ class Model(torch.nn.Module):
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return x, logits
 
-    def inf_g(self, p_x, g_path, x, locations):
+    def inf_g(self, p_x, g_path, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_p_inf"]:
             # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
@@ -288,9 +288,9 @@ class Model(torch.nn.Module):
             # Not in paper, but this greatly improves zero-shot inference: provide the uncertainty function of the inferred abstract location with measures of memory quality
             with torch.no_grad():
                 # For the first measure, use the grounded location inferred from memory to generate an observation
-                x_hat, x_hat_logits = self.gen_x(p_x[0])
+                o_hat, o_hat_logits = self.gen_x(p_x[0])
                 # Then calculate the error between the generated observation and the actual observation: if the memory is working well, this error should be small
-                err = utils.squared_error(x, x_hat)
+                err = utils.squared_error(o, o_hat)
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
             sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err, dim=1)), dim=1) for g in mu_g_mem]
             # Not in paper, but recommended by James for stability: get final mean of inferred abstract location by clamping activations between -1 and 1

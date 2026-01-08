@@ -13,9 +13,10 @@ from scipy.stats import truncnorm
 from torch import Tensor, nn
 
 from torch_tem import settings, utils
+from torch_tem.core.hpc import HPCModel, HPCState
 from torch_tem.core.lec import LECModel, LECState
 from torch_tem.core.mec import MECModel, MECState
-from torch_tem.modules import MLP, autoencoder, projection
+from torch_tem.modules import MLP
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.types import Transition
@@ -158,6 +159,10 @@ class Parameters(BaseModel):
     mec_settings: settings.MECSettings = Field(
         default_factory=settings.MECSettings,
         description="MEC module settings.",
+    )
+    hpc_settings: settings.HPCSettings = Field(
+        default_factory=settings.HPCSettings,
+        description="HPC module settings.",
     )
 
     @model_validator(mode="before")
@@ -593,6 +598,7 @@ class TEMState:
     - M: Hebbian memory matrices
     - lec_state: LEC temporal filtering state
     - mec_state: MEC grid cell state (contains g, g_gen, g_path)
+    - hpc_state: HPC place cell state (??)
     - g_inf: Inferred abstract location (corrected grid cells)
     - p_inf: Inferred grounded location (corrected place cells)
     - p_inf_x: Place cells from sensory retrieval (for loss computation)
@@ -601,6 +607,7 @@ class TEMState:
     M: Optional[List[Tensor]] = None
     lec_state: Optional[LECState] = None
     mec_state: Optional[MECState] = None
+    hpc_state: Optional[HPCState] = None
 
     g_inf: Optional[List[Tensor]] = None
     p_inf: Optional[List[Tensor]] = None
@@ -672,7 +679,7 @@ class TEMState:
         )
 
 
-class TEMModel(torch.nn.Module):
+class TEMModel(nn.Module):
     def __init__(self, params: Parameters):
         # First call super class init function to set up torch.nn.Module style model and inherit it's functionality
         super(TEMModel, self).__init__()
@@ -696,13 +703,11 @@ class TEMModel(torch.nn.Module):
 
         # Initialize LEC (Lateral Entorhinal Cortex) component
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
-        self.lec_projection = ProjectionModule(n_x, n_p, params.lec_projection)
-        self.lec = LECModel(n_c, n_x, f_init, params.lec_settings)
-        self.mec_projection = ProjectionModule(n_g, n_p, params.mec_projection)
-        self.mec = MECModel(n_a, n_g, f_init, params.mec_settings)
-
-        # self.lec_projection = ProjectionModule(lec, hpc, settings.lec_projection)
-        # self.mec_projection = ProjectionModule(mec, hpc, settings.mec_projection)
+        self.lec = lec = LECModel(n_c, n_x, f_init, params.lec_settings)
+        self.mec = mec = MECModel(n_a, n_g, f_init, params.mec_settings)
+        self.hpc = hpc = HPCModel(n_p, params.hpc_settings)
+        self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
+        self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
 
         # Create trainable parameters
         self.init_trainable()
@@ -768,6 +773,35 @@ class TEMModel(torch.nn.Module):
         # Return all iteration values (loss now computed in Lightning module)
         return M, mec_state, predictions.p_gen, predictions.o_hat, predictions.o_logits, lec_state, g_inf, p_inf, p_inf_x
 
+    def _future_forward(self, o, locations, a_prev, state: TEMState):
+        z = self.autoencoder.encode(o)
+        mec_state = self.mec.generative(a_prev, locations, state.mec_state)  # Path integration
+        lec_state = self.lec.inference(z, state.lec_state)  # Update x fom observation
+
+        # Calculate projected x_ so we can run MEC inference later
+        x_ = self.lec_projection(lec_state.x)
+        p_x = self.hpc.attractor(x_, state.hpc_state)
+
+        # MEC correction
+        mec_state = self.mec.inference(p_x, locations, o, mec_state)
+        g_ = self.mec_projection(mec_state.g)
+        p_g = self.hpc.attractor(g_, state.hpc_state)
+
+        # Inference outputs and memory update
+        hpc_state = self.hpc(g_, x_, state.hpc_state)
+
+        # Predictions from corrected state
+        x = self.lec_projection.inverse(p_x)
+        o_hat, o_logits = self.autoencoder.decode(x)
+
+        return TEMState(
+            predictions=TEMPrediction(o_hat=[o_hat], o_logits=[o_logits], p_gen=[]),
+            lec_state=lec_state,
+            mec_state=mec_state,
+            hpc_state=hpc_state,
+            observation=o,
+        )
+
     def transition(self, mec_state: MECState, a_prev, locations, device) -> MECState:
         """Transition: MEC path integration (action-driven, no observation).
 
@@ -796,7 +830,7 @@ class TEMModel(torch.nn.Module):
             a_idx = torch.tensor([int(a) if a is not None else 0 for a in a_prev], dtype=torch.long, device=device)
             a = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
 
-        g_gen, mec_state = self.mec(a, mec_state, locations)
+        g_gen, mec_state = self.mec.generative(a, locations, mec_state)
         return mec_state
 
     def observe(self, o, locations, M_prev, lec_state: LECState, mec_state: MECState) -> dict:

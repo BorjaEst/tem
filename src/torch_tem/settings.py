@@ -520,3 +520,9 @@ class MECSettings(BaseModel):
         default_factory=OVCSettings,
         description="OVC module settings",
     )
+
+
+class HPCSettings(BaseModel):
+    """Settings for HPC modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)

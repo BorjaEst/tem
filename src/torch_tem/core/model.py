@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlias
@@ -684,18 +683,26 @@ class TEMModel(torch.nn.Module):
             n_p=self.hyper["n_p"],
             settings=params.mec_projection,
         )
+        # Build MECSettings from params.mec for legacy parity
+        mec_settings = settings.MECSettings(
+            grid_cells=settings.GridSettings(
+                do_sample=params.mec.do_sample,
+                g_init_std=params.mec.g_init_std,
+                n_hidden=params.mec.d_hidden_dim,
+                frequencies_init="linear",
+            )
+        )
         self.mec = MECModel(
             n_g=self.hyper["n_g"],
-            n_f=self.hyper["n_f"],
             n_f_g=self.hyper["n_f_g"],
             n_f_ovc=self.hyper["n_f_ovc"],
             n_a=self.hyper["n_actions"],
-            d_hidden=self.hyper["d_hidden_dim"],
-            g_conn=self.hyper["g_connections"],
-            g_init_std=self.hyper["g_init_std"],
-            separate_ovc=self.hyper["separate_ovc"],
-            do_sample=self.hyper["do_sample"],
+            settings=mec_settings,
+            f_init=self.hyper["f_initial"],  # In future I want to use different param for x and g
         )
+
+        # self.lec_projection = ProjectionModule(lec, hpc, settings)
+        # self.mec_projection = ProjectionModule(mec, hpc, settings)
 
         # Create trainable parameters
         self.init_trainable()
@@ -746,13 +753,13 @@ class TEMModel(torch.nn.Module):
             a_idx = torch.tensor([int(a) if a is not None else 0 for a in a_prev], dtype=torch.long, device=o.device)
             a = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
 
-        mec_state: MECState = self.mec(a, mec_state, locations)
+        g_gen, mec_state = self.mec(a, mec_state, locations)
         # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_inf_x
         lec_state, g_inf, p_inf_x, p_inf = self.inference(o, locations, M_prev, lec_state, mec_state)
         # Update mec_state.g to inferred g for next transition (legacy parity)
         mec_state.g = g_inf
         # Run generative model: since generative model is only used for training purposes, it will generate from *inferred* variables instead of *generated* variables (as it would when used for generation)
-        x_gen, x_logits, p_gen = self.generative(M_prev, p_inf, g_inf, mec_state.g_gen)
+        x_gen, x_logits, p_gen = self.generative(M_prev, p_inf, g_inf, g_gen)
         # Update generative memory with generated and inferred grounded location.
         M = [self.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
         # If using memory for grounded location inference: append inference memory
@@ -768,8 +775,8 @@ class TEMModel(torch.nn.Module):
         # 2. LEC: c, x_prev -> x (temporal filtering)
         # 3. Projection: x -> x_ (normalization + tiling for memory)
         c = self.autoencoder.encode(o)
-        lec_state: LECState = self.lec(c, lec_state)
-        x_ = self.lec_projection(lec_state.x)  # Project to memory format
+        x, lec_state = self.lec(c, lec_state)
+        x_ = self.lec_projection(x)  # Project to memory format
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
         p_x = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
@@ -1069,8 +1076,8 @@ class Rollout(Iterator[TEMState]):
         else:
             # Create fresh initial state: derive batch size from observation tensor
             batch_size = int(o_0.shape[0]) if o_0.ndim > 1 else 1
-            # Initialize with no previous action (reset boundary)
-            state = model.init_iteration(locations_0, o_0, [None] * batch_size, None)
+            # Initialize with stand still action (no reset)
+            state = model.init_iteration(locations_0, o_0, [0] * batch_size, None)
 
         # Initialize prev-values for first forward pass
         self._a_prev = state.a

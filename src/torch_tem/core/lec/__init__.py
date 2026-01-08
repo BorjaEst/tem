@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -65,6 +65,14 @@ class LECModel(nn.Module):
         """Dimensionality of features per frequency module."""
         return self._n_x
 
+    def forward(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
+        # Temporally filter sensory observation by mixing it with previous experience
+        x_filtered = self.x_prev2x(c, state.x_filtered)
+        # Normalize and weight filtered sensory experience for memory
+        x_normalized = self.f_n(x_filtered)
+        x = self.f_w(x_normalized)
+        return x, LECState(c=c, x=x, x_filtered=x_filtered)
+
     def x_prev2x(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
         # Calculate factor for filtering from sigmoid of learned parameter
         alpha = [torch.sigmoid(self.alpha[f]) for f, _ in enumerate(self.n_out)]
@@ -81,14 +89,6 @@ class LECModel(nn.Module):
         # Apply sigmoid-constrained scaling like legacy
         weighted = [torch.sigmoid(self.w_f[f]) * x[f] for f, _ in enumerate(self.n_out)]
         return weighted
-
-    def forward(self, c: Tensor, state: LECState) -> LECState:
-        # Temporally filter sensory observation by mixing it with previous experience
-        x_filtered = self.x_prev2x(c, state.x_filtered)
-        # Normalize and weight filtered sensory experience for memory
-        x_normalized = self.f_n(x_filtered)
-        x = self.f_w(x_normalized)
-        return LECState(c=c, x=x, x_filtered=x_filtered)
 
     def reconstruct(self, x: List[Tensor]) -> Tensor:
         """Reconstruct compressed features from filtered features.

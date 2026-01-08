@@ -479,40 +479,31 @@ class MECProjectionSettings(ProjectionSettings):
     )
 
 
+class GridSettings(BaseModel):
+    """Settings for grid cell modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    do_sample: bool = Field(True, description="Whether to sample from the transition distribution.")
+    g_init_std: float = Field(0.1, description="Standard deviation for initializing grid cell activations.")
+    n_hidden: int = Field(20, description="Hidden dimension for transition MLP.")
+    frequencies_init: str = Field("linear", description="Method for initializing frequency values.")
+
+
+class OVCSettings(BaseModel):
+    pass  # TODO: status in implementation
+
+
 class MECSettings(BaseModel):
     """Settings for MEC modules."""
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    frequencies_init: Literal["linear"] = Field(
-        "linear",
-        description="Initialization method for grid frequencies",
+    grid_cells: GridSettings = Field(
+        default_factory=GridSettings,
+        description="Grid cell module settings",
     )
-    do_sample: bool = Field(
-        default=False,
-        description="Whether to sample from distributions or use deterministic means",
-    )
-    g_init_std: float = Field(
-        default=0.5,
-        description="Standard deviation for initial abstract location (truncated normal)",
-    )
-    g_mem_std: float = Field(
-        default=0.1,
-        description="Standard deviation for MLP hidden→output layer in memory-based inference",
-    )
-    d_hidden_dim: int = Field(
-        default=20,
-        description="Hidden layer size of MLP for action-driven transitions",
-    )
-    use_p_inf: bool = Field(
-        default=True,
-        description="Use memory-based inference (p→g pathway) alongside path integration",
-    )
-    n_ovc: List[int] = Field(
-        default_factory=list,
-        description="Dimensions for object vector cell modules (empty = no OVC)",
-    )
-    f_ovc: List[float] = Field(
-        default_factory=list,
-        description="Frequencies for OVC modules (empty = merge into tail of n_g)",
+    ovc_cells: OVCSettings = Field(
+        default_factory=OVCSettings,
+        description="OVC module settings",
     )

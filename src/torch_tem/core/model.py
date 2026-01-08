@@ -705,22 +705,14 @@ class TEMModel(torch.nn.Module):
             n_p=self.hyper["n_p"],
             settings=params.mec_projection,
         )
-        # Build MECSettings from params.mec for legacy parity
-        mec_settings = settings.MECSettings(
-            grid_cells=settings.GridSettings(
-                do_sample=params.mec.do_sample,
-                g_init_std=params.mec.g_init_std,
-                n_hidden=params.mec.d_hidden_dim,
-                frequencies_init="linear",
-            )
-        )
         self.mec = MECModel(
+            n_a=self.hyper["n_actions"],
             n_g=self.hyper["n_g"],
             n_f_g=self.hyper["n_f_g"],
             n_f_ovc=self.hyper["n_f_ovc"],
-            n_a=self.hyper["n_actions"],
-            settings=mec_settings,
-            f_init=self.hyper["f_initial"],  # In future I want to use different param for x and g
+            # n_ovc=self.hyper["n_ovc"],
+            settings=params.mec_settings,
+            f_init=self.hyper["f_initial"],
         )
 
         # self.lec_projection = ProjectionModule(lec, hpc, settings)
@@ -808,7 +800,7 @@ class TEMModel(torch.nn.Module):
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
             # Reset g to priors for envs with no previous action
-            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.g_init[f].unsqueeze(0), mec_state.g[f]) for f in range(self.hyper["n_f"])]
+            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.grid.g_init_mean[f].unsqueeze(0), mec_state.g[f]) for f in range(self.hyper["n_f"])]
             mec_state.g = g_reset
 
         # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
@@ -967,7 +959,7 @@ class TEMModel(torch.nn.Module):
                     else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float, device=o.device)
                 )
         # Initialise previous abstract location by stacking abstract location prior
-        g_inf = [torch.stack([self.mec.g_init[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
+        g_inf = [torch.stack([self.mec.grid.g_init_mean[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
         # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
         x_filtered = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x"][f]), device=o.device) for f in range(self.hyper["n_f"])]
         # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
@@ -1019,7 +1011,7 @@ class TEMModel(torch.nn.Module):
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
             sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err, dim=1)), dim=1) for g in mu_g_mem]
             # Not in paper, but recommended by James for stability: get final mean of inferred abstract location by clamping activations between -1 and 1
-            mu_g_mem = self.mec.g_clamp(mu_g_mem)
+            mu_g_mem = self.mec.grid.g_clamp(mu_g_mem)
             # And get standard deviation/uncertainty of inferred abstract location by providing uncertainty function with memory quality measures
             sigma_g_mem = self.f_sigma_g_mem(sigma_g_input)
         # ... and [previous abstract location and action (path integration)]
@@ -1097,7 +1089,7 @@ class TEMModel(torch.nn.Module):
 
     def f_mu_g_shiny(self, shiny):
         # Multi layer perceptron to generate mean of abstract location from boolean location shiny-ness
-        mu_g = self.mec.MLP_mu_g_shiny(shiny)
+        mu_g = self.mec.ovc.MLP_mu_g_shiny(shiny)
         # Take absolute because James wants object vector cells to be positive
         mu_g = [torch.abs(mu) for mu in mu_g]
         # Then apply clamp and leaky relu to get object vector module activations, like it's done for ground location activations
@@ -1106,7 +1098,7 @@ class TEMModel(torch.nn.Module):
 
     def f_sigma_g_shiny(self, shiny):
         # Multi layer perceptron to generate standard deviation of abstract location from boolean location shiny-ness
-        return self.mec.MLP_sigma_g_shiny(shiny)
+        return self.mec.ovc.MLP_sigma_g_shiny(shiny)
 
     def f_sigma_p(self, p):
         # Multi layer perceptron to generate standard deviation of grounded location retrieval

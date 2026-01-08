@@ -67,7 +67,7 @@ class GridModel(nn.Module):
     # Public API (compatible with model.py)
     # ---------------------------------------------------------------------
 
-    def get_g_init(self, batch_size: int, device: torch.device) -> Transition:
+    def g_init(self, batch_size: int, device: torch.device) -> Transition:
         """Return initial grid cell activations as (mean, uncertainty) Transition."""
         mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_f)]
         uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_f)]

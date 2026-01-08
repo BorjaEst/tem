@@ -484,8 +484,8 @@ class GridSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    do_sample: bool = Field(True, description="Whether to sample from the transition distribution.")
-    g_init_std: float = Field(0.1, description="Standard deviation for initializing grid cell activations.")
+    do_sample: bool = Field(False, description="Whether to sample from the transition distribution.")
+    g_init_std: float = Field(0.5, description="Standard deviation for initializing grid cell activations.")
     n_hidden: int = Field(20, description="Hidden dimension for transition MLP.")
     frequencies_init: str = Field("linear", description="Method for initializing frequency values.")
 
@@ -499,6 +499,10 @@ class MECSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    separate_ovc: bool = Field(
+        default=False,
+        description="Whether to use separate grid modules that receive shiny information for object vector cells",
+    )
     grid_cells: GridSettings = Field(
         default_factory=GridSettings,
         description="Grid cell module settings",

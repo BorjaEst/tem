@@ -35,9 +35,8 @@ class GridModel(nn.Module):
     def __init__(self, n_a: int, n_g: List[int], settings: GridSettings, f_init: Optional[List[float]] = None):
         super().__init__()
         self._settings = settings  # Protected to avoid modification
-        self.n_g = n_g
-        self.n_a = n_a
         self.n_f = n_f = len(n_g)  # Number of grid cell frequencies
+        self.n_g = n_g
 
         alpha_freq = f_init if f_init is not None else _alpha_init(settings, len(n_g))
         self.g_connections = g_conn = grid_connections(alpha_freq)

@@ -48,7 +48,7 @@ from torch.optim import Adam
 from torch_tem import losses, metrics, settings
 from torch_tem.core.model import Rollout, TEMModel, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
-from torch_tem.metrics import AccuracyCounts, AccuracyX
+from torch_tem.metrics import AccuracyCounts, AccuracyO
 
 
 class TrainerConfig(BaseModel):
@@ -120,7 +120,7 @@ class TEMLightningModule(pl.LightningModule):
     Attributes:
         tem: The wrapped TEM model.
         loss_fn: Loss computation module.
-        acc_x_fn: Sensory accuracy metric.
+        acc_o_fn: Sensory accuracy metric.
         prev_state: Previous batch's final state (detached).
         trainer_settings: Combined trainer and schedule configuration.
     """
@@ -143,9 +143,9 @@ class TEMLightningModule(pl.LightningModule):
         self.prev_state: Optional[TEMState] = None
 
         self.loss_fn = losses.TEMLoss(training.loss)
-        self.acc_x_fn = metrics.SensoryAccuracy(reduction="none")
+        self.acc_o_fn = metrics.SensoryAccuracy(reduction="none")
 
-    def forward(self, batch: Any, prev_state: Optional[TEMState] = None) -> tuple[LossOutput, AccuracyX, TEMState]:
+    def forward(self, batch: Any, prev_state: Optional[TEMState] = None) -> tuple[LossOutput, AccuracyO, TEMState]:
         """Execute streaming rollout with visit-masked loss accumulation.
 
         Iterates through environment steps, computing and accumulating losses only
@@ -177,23 +177,17 @@ class TEMLightningModule(pl.LightningModule):
         accum = AccumLoss.zero(device=self.device)
         acc_counts = AccuracyCounts.zero(device=self.device)
 
-        last_state: Optional[TEMState] = None
-
-        for step in Rollout(self.tem, chunk, prev_state):
-            last_state = step
-            step_contrib, acc_increments = self.model_iteration(step, visited)
+        for state in Rollout(self.tem, chunk, prev_state):
+            step_contrib, acc_increments = self.model_iteration(state, visited)
 
             # Accumulate loss and accuracies
             if step_contrib is not None:
                 accum = accum + step_contrib
             acc_counts = acc_counts + acc_increments
 
-        if last_state is None:
-            raise ValueError("Rollout produced no states; check chunk formatting")
-
         final_acc = acc_counts.to_accuracy()
 
-        return accum, final_acc, last_state
+        return accum, final_acc, state  # last_state
 
     def init_state(self, batch: Any, memory: Optional[list[Tensor]] = None) -> TEMState:
         """Initialize clean state for validation/test rollouts.
@@ -244,7 +238,7 @@ class TEMLightningModule(pl.LightningModule):
         """
         use_p_inf = self.tem.hyper["use_p_inf"]
         step_losses = self.loss_fn(step, use_p_inf)
-        step_acc = self.acc_x_fn(step.x_logits, step.o)
+        step_acc = self.acc_o_fn(step.o_logits, step.o)
 
         losses_per_env: list[StepLoss] = []
         acc_total = AccuracyCounts.zero(device=self.device)
@@ -398,7 +392,7 @@ class TEMLightningModule(pl.LightningModule):
         self.log(f"{prefix}Losses/lp", loss_output.p.total)
         self.log(f"{prefix}Losses/lg", loss_output.g.total)
 
-    def _log_accuracy_metrics(self, *, prefix: str, accuracies: AccuracyX) -> None:
+    def _log_accuracy_metrics(self, *, prefix: str, accuracies: AccuracyO) -> None:
         """Log sensory prediction accuracies to tensorboard.
 
         Args:
@@ -531,7 +525,7 @@ def env_step_loss(step_losses: LossOutput, env_i: int) -> StepLoss:
     )
 
 
-def env_acc_increments(step_acc: AccuracyX, env_i: int) -> AccuracyCounts:
+def env_acc_increments(step_acc: AccuracyO, env_i: int) -> AccuracyCounts:
     """Extract accuracy counts for one environment.
 
     Args:

@@ -20,7 +20,7 @@ from torch import Tensor
 
 
 @dataclass
-class AccuracyX:
+class AccuracyO:
     """Sensory prediction accuracy metrics.
 
     Attributes:
@@ -40,7 +40,7 @@ class AccuracyCounts:
 
     Stores sums of correct predictions (numerators) and the number of evaluated
     predictions (denominator). This mirrors the loss accumulation pattern and
-    can be converted to :class:`AccuracyX` at the end of a rollout.
+    can be converted to :class:`AccuracyO` at the end of a rollout.
 
     Attributes:
         p: Sum of correct predictions from inference pathway.
@@ -100,17 +100,17 @@ class AccuracyCounts:
             total=self.total / divisor,
         )
 
-    def to_accuracy(self) -> AccuracyX:
+    def to_accuracy(self) -> AccuracyO:
         """Convert accumulated counts to mean accuracies.
 
         Divides summed correct predictions by total count, handling the
         zero-denominator case.
 
         Returns:
-            :class:`AccuracyX` with mean accuracies in [0.0, 1.0].
+            :class:`AccuracyO` with mean accuracies in [0.0, 1.0].
         """
         denom = torch.clamp(self.total, min=1.0)
-        return AccuracyX(p=self.p / denom, g=self.g / denom, gt=self.gt / denom)
+        return AccuracyO(p=self.p / denom, g=self.g / denom, gt=self.gt / denom)
 
 
 class SensoryAccuracy(nn.Module):
@@ -131,24 +131,24 @@ class SensoryAccuracy(nn.Module):
         super().__init__()
         self.reduction = reduction
 
-    def forward(self, x_logits: list[Tensor], o: Tensor) -> AccuracyX:
-        """Compute `AccuracyX` from logits and ground-truth observations.
+    def forward(self, o_logits: list[Tensor], o: Tensor) -> AccuracyO:
+        """Compute `AccuracyO` from logits and ground-truth observations.
 
         Args:
-            x_logits: Three logit tensors `[infer, retrieved, ancestral]`, each
+            o_logits: Three logit tensors `[infer, retrieved, ancestral]`, each
                 shaped `(B, n_classes)`.
             o: Ground-truth observation. Accepts either:
                 - one-hot: `(B, n_classes)`
                 - class indices: `(B,)` or `(B, 1)`
 
         Returns:
-            AccuracyX: Per-pathway prediction accuracies (float in [0.0, 1.0]).
+            AccuracyO: Per-pathway prediction accuracies (float in [0.0, 1.0]).
 
         Raises:
-            ValueError: If `x_logits` does not contain exactly 3 tensors.
+            ValueError: If `o_logits` does not contain exactly 3 tensors.
         """
-        if len(x_logits) != 3:
-            raise ValueError(f"Expected 3 logit tensors, got {len(x_logits)}")
+        if len(o_logits) != 3:
+            raise ValueError(f"Expected 3 logit tensors, got {len(o_logits)}")
 
         # Convert o to class indices if one-hot
         if o.dim() == 2 and o.shape[1] > 1:
@@ -157,9 +157,9 @@ class SensoryAccuracy(nn.Module):
             labels = o.squeeze(-1) if o.dim() == 2 else o
 
         # Compute predictions for each pathway
-        pred_p = torch.argmax(x_logits[0], dim=1)  # infer pathway
-        pred_g = torch.argmax(x_logits[1], dim=1)  # retrieved pathway
-        pred_gt = torch.argmax(x_logits[2], dim=1)  # ancestral pathway
+        pred_p = torch.argmax(o_logits[0], dim=1)  # infer pathway
+        pred_g = torch.argmax(o_logits[1], dim=1)  # retrieved pathway
+        pred_gt = torch.argmax(o_logits[2], dim=1)  # ancestral pathway
 
         # Compute per-environment correctness (float 0.0 or 1.0)
         acc_p = (pred_p == labels).float()
@@ -172,4 +172,4 @@ class SensoryAccuracy(nn.Module):
             acc_g = acc_g.mean()
             acc_gt = acc_gt.mean()
 
-        return AccuracyX(p=acc_p, g=acc_g, gt=acc_gt)
+        return AccuracyO(p=acc_p, g=acc_g, gt=acc_gt)

@@ -576,7 +576,7 @@ class TEMState:
     lec: Optional[Any] = None
     g: Any = None
     o: Optional[Tensor] = None
-    a: Any = None
+    a_prev: Any = None
 
     M: Optional[List[Tensor]] = None
 
@@ -584,7 +584,7 @@ class TEMState:
     p_gen: Optional[List[Tensor]] = None
 
     x_gen: Optional[Sequence[Tensor]] = None
-    x_logits: Optional[Sequence[Tensor]] = None
+    o_logits: Optional[Sequence[Tensor]] = None
 
     lec_state: Optional[LECState] = None
     g_inf: Optional[List[Tensor]] = None
@@ -635,12 +635,12 @@ class TEMState:
         return TEMState(
             g=self.g,
             o=_detach(self.o),
-            a=self.a,
+            a_prev=self.a_prev,
             M=_detach(self.M),
             mec_state=_detach(self.mec_state),
             p_gen=_detach(self.p_gen),
             x_gen=_detach(self.x_gen),
-            x_logits=_detach(self.x_logits),
+            o_logits=_detach(self.o_logits),
             lec_state=_detach(self.lec_state),
             g_inf=_detach(self.g_inf),
             p_inf=_detach(self.p_inf),
@@ -759,7 +759,7 @@ class TEMModel(torch.nn.Module):
         # Update mec_state.g to inferred g for next transition (legacy parity)
         mec_state.g = g_inf
         # Run generative model: since generative model is only used for training purposes, it will generate from *inferred* variables instead of *generated* variables (as it would when used for generation)
-        x_gen, x_logits, p_gen = self.generative(M_prev, p_inf, g_inf, g_gen)
+        o_gen, o_logits, p_gen = self.generative(M_prev, p_inf, g_inf, g_gen)
         # Update generative memory with generated and inferred grounded location.
         M = [self.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
         # If using memory for grounded location inference: append inference memory
@@ -767,7 +767,7 @@ class TEMModel(torch.nn.Module):
             # Inference memory is identical to generative memory if using common memory, and updated separatedly if not
             M.append(M[0] if self.hyper["common_memory"] else self.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
         # Return all iteration values (loss now computed in Lightning module)
-        return M, mec_state, p_gen, x_gen, x_logits, lec_state, g_inf, p_inf, p_inf_x
+        return M, mec_state, p_gen, o_gen, o_logits, lec_state, g_inf, p_inf, p_inf_x
 
     def inference(self, o, locations, M_prev, lec_state: LECState, mec_state: MECState):
         # Delegate sensory processing to modular components:
@@ -852,7 +852,7 @@ class TEMModel(torch.nn.Module):
         # Create initial MEC state (g_gen starts as g_inf since no movement yet, g_path.mean is g_inf with zero uncertainty)
         mec_state = MECState(g_gen=g_inf, g_path=Transition(mean=g_inf, uncertainty=[torch.zeros_like(g) for g in g_inf]))
         # And construct new iteration for that g, o, a, and M
-        return TEMState(g=g, o=o, a=a, M=M, lec_state=lec_state, mec_state=mec_state)
+        return TEMState(g=g, o=o, a_prev=a, M=M, lec_state=lec_state, mec_state=mec_state)
 
     def gen_p(self, g, M_prev):
         # We want to use g as an index for memory retrieval, but it doesn't have the right dimensions (these are grid cells, we need place cells). We need g_ instead
@@ -1080,8 +1080,8 @@ class Rollout(Iterator[TEMState]):
             state = model.init_iteration(locations_0, o_0, [0] * batch_size, None)
 
         # Initialize prev-values for first forward pass
-        self._a_prev = state.a
-        self._M_prev = state.M
+        self._a_prev = state.a_prev
+        self._M = state.M
         self._lec_state = state.lec_state
         self._mec_state = state.mec_state
 
@@ -1109,18 +1109,18 @@ class Rollout(Iterator[TEMState]):
         self._idx += 1
 
         # Run model forward
-        M, mec_state, p_gen, x_gen, x_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._M_prev, self._lec_state, self._mec_state)
+        M, mec_state, p_gen, x_gen, o_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._M, self._lec_state, self._mec_state)
 
         # Build state
         state = TEMState(
             g=locations,
             o=o,
-            a=a,
+            a_prev=a,
             M=M,
             mec_state=mec_state,
             p_gen=p_gen,
             x_gen=x_gen,
-            x_logits=x_logits,
+            o_logits=o_logits,
             lec_state=lec_state,
             g_inf=g_inf,
             p_inf=p_inf,
@@ -1129,7 +1129,7 @@ class Rollout(Iterator[TEMState]):
 
         # Update prev-values for next iteration
         self._a_prev = a
-        self._M_prev = M
+        self._M = M
         self._lec_state = lec_state
         self._mec_state = mec_state
 

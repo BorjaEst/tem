@@ -155,33 +155,25 @@ class SensoryReconstructionLoss(nn.Module):
         """Return weight multiplier applied to all $L_x$ components."""
         return self.settings.weight
 
-    def forward(self, x_logits: list[Tensor], x: Tensor) -> LossX:
+    def forward(self, o_logits: list[Tensor], o_labels: Tensor) -> LossX:
         """Compute `LossX` from logits and ground-truth observations.
 
         Args:
-            x_logits: Three logit tensors `[infer, retrieved, ancestral]`, each
+            o_logits: Three logit tensors `[infer, retrieved, ancestral]`, each
                 shaped `(B, n_classes)`.
-            x: Ground-truth observation. Accepts either:
+            o_labels: Ground-truth observation, each:
                 - one-hot: `(B, n_classes)`
-                - class indices: `(B,)` or `(B, 1)`
 
         Returns:
             LossX: Per-pathway cross-entropy losses.
 
         Raises:
-            ValueError: If `x_logits` does not contain exactly 3 tensors.
+            ValueError: If `o_logits` does not contain exactly 3 tensors.
         """
-        if len(x_logits) != 3:
-            raise ValueError(f"Expected 3 logit tensors for L_x, got {len(x_logits)}")
-        if x.dim() == 2 and x.shape[1] > 1:
-            labels = torch.argmax(x, dim=1)
-        else:
-            labels = x.view(-1).long()
-
         # Pathway order is fixed to match the legacy implementation.
-        loss_infer = F.cross_entropy(x_logits[0], labels, reduction=self.reduction)
-        loss_retrieved = F.cross_entropy(x_logits[1], labels, reduction=self.reduction)
-        loss_ancestral = F.cross_entropy(x_logits[2], labels, reduction=self.reduction)
+        loss_infer = F.cross_entropy(o_logits[0], o_labels, reduction=self.reduction)
+        loss_retrieved = F.cross_entropy(o_logits[1], o_labels, reduction=self.reduction)
+        loss_ancestral = F.cross_entropy(o_logits[2], o_labels, reduction=self.reduction)
 
         return LossX(infer=loss_infer, retrieved=loss_retrieved, ancestral=loss_ancestral) * self.weight
 
@@ -692,7 +684,7 @@ class TEMLoss(nn.Module):
             LossOutput where each component is already multiplied by settings weights.
         """
         # Raw (possibly per-env) losses
-        lx: LossX = self.loss_x_fn(step.x_logits, step.o)
+        lx: LossX = self.loss_x_fn(step.o_logits, step.o)
         lp: LossP = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_p_inf)
         lg: LossG = self.loss_g_fn(step.g_inf, step.g_gen)
         lreg: LossReg = self.loss_reg_fn(step.g_inf, step.p_inf)

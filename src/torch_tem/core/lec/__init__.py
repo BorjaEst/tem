@@ -34,22 +34,22 @@ class LECModel(nn.Module):
     - Projection (x -> x_ for memory) is handled externally
     """
 
-    def __init__(self, n_c: int, n_x: List[int], settings: LECSettings, f_init: Optional[List[float]] = None):
+    def __init__(self, n_c: int, shape: List[int], f_init: List[float], settings: LECSettings):
         super().__init__()
 
         # Store hyperparameters
         self._n_c = n_c
-        self._n_x = n_x
+        self._n_x = shape
         self.settings = settings
 
         # Initialize temporal filtering factors
         # Store as logit(f) so that sigmoid(alpha) recovers the desired frequency
-        alpha_freq = f_init if f_init is not None else _alpha_init(settings, len(n_x))
+        alpha_freq = f_init if f_init is not None else _alpha_init(settings, self.n_freq)
         alpha_logit = [np.log(f / (1 - f)) for f in alpha_freq]
         self.alpha = nn.ParameterList([nn.Parameter(torch.tensor(a, dtype=torch.float)) for a in alpha_logit])
 
         # Frequency module specific scaling of filtered sensory experience
-        self.w_f = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(len(n_x))])  # w_p in legacy
+        self.w_f = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_freq)])
 
         # Reconstruction parameters
         self.w_x = torch.nn.Parameter(torch.tensor(1.0))  # For reconstructing c from x
@@ -61,9 +61,14 @@ class LECModel(nn.Module):
         return self._n_c
 
     @property
-    def n_out(self) -> List[int]:
+    def shape(self) -> List[int]:
         """Dimensionality of features per frequency module."""
         return self._n_x
+
+    @property
+    def n_freq(self) -> int:
+        """Number of frequency modules."""
+        return len(self._n_x)
 
     def forward(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
         # Temporally filter sensory observation by mixing it with previous experience
@@ -75,19 +80,19 @@ class LECModel(nn.Module):
 
     def x_prev2x(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
         # Calculate factor for filtering from sigmoid of learned parameter
-        alpha = [torch.sigmoid(self.alpha[f]) for f, _ in enumerate(self.n_out)]
+        alpha = [torch.sigmoid(self.alpha[f]) for f in range(self.n_freq)]
         # Do exponential temporal filtering for each frequency module
-        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * c for f, _ in enumerate(self.n_out)]
+        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * c for f in range(self.n_freq)]
         return x
 
     def f_n(self, x: List[Tensor]) -> List[Tensor]:
         # Normalize using global mean across entire batch (legacy behavior)
-        normalised = [utils.normalise(utils.relu(x[f] - torch.mean(x[f]))) for f, _ in enumerate(self.n_out)]
+        normalised = [utils.normalise(utils.relu(x[f] - torch.mean(x[f]))) for f in range(self.n_freq)]
         return normalised
 
     def f_w(self, x: List[Tensor]) -> List[Tensor]:
         # Apply sigmoid-constrained scaling like legacy
-        weighted = [torch.sigmoid(self.w_f[f]) * x[f] for f, _ in enumerate(self.n_out)]
+        weighted = [torch.sigmoid(self.w_f[f]) * x[f] for f in range(self.n_freq)]
         return weighted
 
     def reconstruct(self, x: List[Tensor]) -> Tensor:

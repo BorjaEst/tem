@@ -696,9 +696,9 @@ class TEMModel(torch.nn.Module):
         )
         self.lec = LECModel(
             n_c=self.hyper["n_c"],
-            n_x=self.hyper["n_x"],
+            shape=self.hyper["n_x"],
+            f_init=self.hyper["f_initial"],
             settings=params.lec_settings,
-            f_init=self.hyper["f_initial"],  # In future I want to use different param for x and g
         )
         self.mec_projection = projection.ProjectionModule(
             n_z=self.hyper["n_g"],

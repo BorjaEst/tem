@@ -44,8 +44,7 @@ class LECModel(nn.Module):
 
         # Initialize temporal filtering factors
         # Store as logit(f) so that sigmoid(alpha) recovers the desired frequency
-        alpha_freq = f_init if f_init is not None else _alpha_init(settings, self.n_freq)
-        alpha_logit = [np.log(f / (1 - f)) for f in alpha_freq]
+        alpha_logit = [np.log(f / (1 - f)) for f in f_init]
         self.alpha = nn.ParameterList([nn.Parameter(torch.tensor(a, dtype=torch.float)) for a in alpha_logit])
 
         # Frequency module specific scaling of filtered sensory experience
@@ -109,14 +108,3 @@ class LECModel(nn.Module):
         # Use highest frequency module (most responsive to current input)
         # This matches legacy behavior of using x[0] for reconstruction
         return self.w_x * x[0] + self.b_x
-
-
-def _alpha_init(settings: LECSettings, n_f: int) -> List[float]:
-    """Initialize temporal filtering factors based on desired time constants.
-
-    Returns frequencies in [0, 1] range (NOT logit-transformed).
-    The calling code will apply the logit transform.
-    """
-    if settings.frequencies_init == "linear":  # Linearly spaced time constants between min and max
-        return np.linspace(0.9, 0.1, n_f).tolist()
-    raise ValueError(f"Unknown frequencies_init method: {settings.frequencies_init}")

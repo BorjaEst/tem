@@ -456,11 +456,6 @@ class LECSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    frequencies_init: Literal["linear"] = Field(
-        "linear",
-        description="Initialization method for feature frequencies",
-    )
-
 
 class MECProjectionSettings(ProjectionSettings):
     """Settings for MEC projection modules."""

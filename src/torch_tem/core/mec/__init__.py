@@ -72,14 +72,20 @@ class MECModel(nn.Module):
         """Number of grid cell frequency modules."""
         return len(self.shape)
 
-    def forward(self, a: Tensor, state: MECState, locations: list[dict]) -> Tuple[List[Tensor], MECState]:
+    def forward(self, a: Optional[Tensor], p_x: Optional[List[Tensor]], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
+        if p_x is None:
+            return self.generative(a, locations, state)
+        else:
+            return self.inference(p_x, locations, state)
+
+    def generative(self, a: Tensor, locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         """Compute next MEC state from action-driven transition.
 
         Args:
             a: One-hot encoded actions (B, n_a). With has_static_action=True,
                action 0 (stand still) is encoded as all-zeros.
-            state: Current MEC state
             locations: Per-env location dicts (for shiny detection)
+            state: Current MEC state
 
         Returns:
             New MECState with updated g_gen and g_path.
@@ -93,6 +99,9 @@ class MECModel(nn.Module):
         g_gen, transition = self.grid(a, state.g, no_direc=no_direc)
 
         return g_gen, MECState(g_gen=g_gen, g_path=transition)
+
+    def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
+        raise NotImplementedError("MEC inference not implemented yet.")
 
 
 def grid_connections(f_grid: list[float]) -> list[list[bool]]:

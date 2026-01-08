@@ -77,6 +77,10 @@ class LECModel(nn.Module):
         x = self.f_w(x_normalized)
         return x, LECState(c=c, x=x, x_filtered=x_filtered)
 
+    def inference(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
+        # Inference is identical to forward pass for LEC
+        return self.forward(c, state)
+
     def x_prev2x(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
         # Calculate factor for filtering from sigmoid of learned parameter
         alpha = [torch.sigmoid(self.alpha[f]) for f in range(self.n_freq)]

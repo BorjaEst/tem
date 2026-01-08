@@ -11,7 +11,7 @@ from torch_tem.modules import MLP
 from torch_tem.settings import AutoencoderSettings
 
 
-class Autoencoder(nn.Module):
+class AutoencoderModule(nn.Module):
 
     def __init__(self, n_o: int, n_c: int, settings: AutoencoderSettings):
         super().__init__()

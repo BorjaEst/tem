@@ -50,22 +50,12 @@ class MECModel(nn.Module):
         self._n_a = n_a
         self._shape = shape
 
-        # Split shape and f_init between grid and OVC modules
-        # Legacy: all modules share same index space, OVC is the "tail"
-        n_f_ovc = settings.ovc_cells.n_freq or 0
-        n_f_g = len(shape) - n_f_ovc
+        # Initialize GridModel (path integration for ALL modules)
+        self.grid = GridModel(n_a, shape, f_init, settings=settings.grid_cells)
 
-        shape_grid = shape[:n_f_g]
-        f_init_grid = f_init[:n_f_g]
-
-        shape_ovc = shape[n_f_g:] if n_f_ovc > 0 else []
-        f_init_ovc = f_init[n_f_g:] if n_f_ovc > 0 else []
-
-        # Initialize GridModel (path integration for grid modules)
-        self.grid = GridModel(n_a, shape_grid, f_init_grid, settings=settings.grid_cells)
-
-        # Initialize OVCModel (shiny landmark heads for OVC modules)
-        self.ovc = OVCModel(shape_ovc, f_init_ovc, settings=settings.ovc_cells)
+        # Initialize OVCModel (shiny landmark heads).
+        # OVCModel is responsible for selecting which modules are OVC based on settings.ovc_cells.
+        self.ovc = OVCModel(shape, f_init, settings=settings.ovc_cells)
 
     @property
     def n_in(self) -> int:

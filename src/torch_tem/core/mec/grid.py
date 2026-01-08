@@ -9,12 +9,9 @@ Design goal:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-import numpy as np
 import torch
-from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
@@ -96,9 +93,12 @@ class GridModel(nn.Module):
         # Sample g from (mu, sigma) if enabled (legacy behavior)
         g_path = self.sample_g(mu, sigma)
 
-        # if ANY shiny env exists, recompute g_gen for ALL envs from transitioned state
+        # if ANY shiny env exists, recompute g_gen for ALL envs from PREVIOUS g (not transitioned)
         shiny_envs = no_direc if no_direc is not None else [False] * a.size(0)
-        g_gen = self.generate_g(a, g_path.mean, shiny_envs)
+        if any(shiny_envs):
+            g_gen = self.g_mean(a, g, no_direc=shiny_envs)  # from previous g
+        else:
+            g_gen = g_path.mean  # transitioned
 
         return g_gen, g_path
 
@@ -132,17 +132,6 @@ class GridModel(nn.Module):
             return Transition(mean=mu, uncertainty=sigma)
         mu = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu, sigma)]
         return Transition(mean=mu, uncertainty=sigma)
-
-    def generate_g(self, a: Tensor, g_transitioned: List[Tensor], shiny_envs: list[bool]) -> List[Tensor]:
-        """Compute g_gen for generative pathway (legacy shiny behavior).
-
-        Legacy rule: if ANY env has shiny objects, recompute g_gen for ALL envs
-        using non-directional transition weights (per-env mask applied via no_direc).
-        Otherwise, g_gen = g_transitioned (the sampled/mean path integration result).
-        """
-        if any(shiny_envs):
-            return self.g_mean(a, g_transitioned, no_direc=shiny_envs)
-        return g_transitioned
 
     def transition_matrices(self, a: Tensor, no_direc: list[bool]) -> List[Tensor]:
         """Compute per-frequency transition matrices, applying no-direction rows."""

@@ -16,6 +16,8 @@ from torch_tem import settings, utils
 from torch_tem.core.lec import LECModel, LECState
 from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules import MLP, autoencoder, projection
+from torch_tem.modules.autoencoder import AutoencoderModule
+from torch_tem.modules.projection import ProjectionModule
 from torch_tem.types import Transition
 
 
@@ -683,37 +685,24 @@ class TEMModel(torch.nn.Module):
         # These will be updated by training before each forward pass
         self.runtime = RuntimeHyperparameters()
 
-        # Initialize LEC (Lateral Entorhinal Cortex) component
-        self.autoencoder = autoencoder.Autoencoder(
-            n_o=self.hyper["n_o"],
-            n_c=self.hyper["n_c"],
-            settings=params.autoencoder,
-        )
-        self.lec_projection = projection.ProjectionModule(
-            n_z=self.hyper["n_x"],
-            n_p=self.hyper["n_p"],
-            settings=params.lec_projection,
-        )
-        self.lec = LECModel(
-            n_c=self.hyper["n_c"],
-            shape=self.hyper["n_x"],
-            f_init=self.hyper["f_initial"],
-            settings=params.lec_settings,
-        )
-        self.mec_projection = projection.ProjectionModule(
-            n_z=self.hyper["n_g"],
-            n_p=self.hyper["n_p"],
-            settings=params.mec_projection,
-        )
-        self.mec = MECModel(
-            n_a=self.hyper["n_actions"],
-            shape=self.hyper["n_g"],
-            f_init=self.hyper["f_initial"],
-            settings=params.mec_settings,
-        )
+        # Extract commonly used parameters
+        n_a = self.hyper["n_actions"]
+        n_o = self.hyper["n_o"]
+        n_c = self.hyper["n_c"]
+        n_p = self.hyper["n_p"]
+        n_g = self.hyper["n_g"]
+        n_x = self.hyper["n_x"]
+        f_init = self.hyper["f_initial"]
 
-        # self.lec_projection = ProjectionModule(lec, hpc, settings)
-        # self.mec_projection = ProjectionModule(mec, hpc, settings)
+        # Initialize LEC (Lateral Entorhinal Cortex) component
+        self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
+        self.lec_projection = ProjectionModule(n_x, n_p, params.lec_projection)
+        self.lec = LECModel(n_c, n_x, f_init, params.lec_settings)
+        self.mec_projection = ProjectionModule(n_g, n_p, params.mec_projection)
+        self.mec = MECModel(n_a, n_g, f_init, params.mec_settings)
+
+        # self.lec_projection = ProjectionModule(lec, hpc, settings.lec_projection)
+        # self.mec_projection = ProjectionModule(mec, hpc, settings.mec_projection)
 
         # Create trainable parameters
         self.init_trainable()

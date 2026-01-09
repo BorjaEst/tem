@@ -70,16 +70,16 @@ class LECModel(nn.Module):
         return len(self._n_x)
 
     def forward(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
+        # Delegate to inference method
+        return self.inference(c, state)
+
+    def inference(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
         # Temporally filter sensory observation by mixing it with previous experience
         x_filtered = self.x_prev2x(c, state.x_filtered)
         # Normalize and weight filtered sensory experience for memory
         x_normalized = self.f_n(x_filtered)
         x = self.f_w(x_normalized)
         return x, LECState(c=c, x=x, x_filtered=x_filtered)
-
-    def inference(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
-        # Inference is identical to forward pass for LEC
-        return self.forward(c, state)
 
     def x_prev2x(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
         # Calculate factor for filtering from sigmoid of learned parameter

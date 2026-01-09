@@ -653,6 +653,7 @@ class TEMState:
                 return MECState(
                     g_gen=_detach(obj.g_gen),
                     g_path=Transition(mean=_detach(obj.g_path.mean), uncertainty=_detach(obj.g_path.uncertainty)),
+                    g=_detach(obj.g),
                 )
             if isinstance(obj, HPCState):
                 # Detach HPCState components (including memory matrices)
@@ -1134,8 +1135,8 @@ class Rollout(Iterator[TEMState]):
         else:
             # Create fresh initial state: derive batch size from observation tensor
             batch_size = int(o_0.shape[0]) if o_0.ndim > 1 else 1
-            # Initialize with stand still action (no reset)
-            state = model.init_iteration(locations_0, o_0, [0] * batch_size, None)
+            # Initialize with reset action (episode boundary)
+            state = model.init_iteration(locations_0, o_0, [None] * batch_size, None)
 
         # Initialize prev-values for first forward pass
         self._a_prev = state.a_prev
@@ -1185,6 +1186,6 @@ class Rollout(Iterator[TEMState]):
 
         # Update prev-values for next iteration
         self._a_prev = a
-        self._state = state.detach()
+        self._state = state
 
         return state

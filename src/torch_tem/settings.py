@@ -481,8 +481,8 @@ class GridSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     do_sample: bool = Field(
-        False,
-        description="Whether to sample from the transition distribution.",
+        default=False,
+        description="Whether to sample, or assume no noise and simply take mean of all distributions",
     )
     g_init_std: float = Field(
         0.5,
@@ -543,4 +543,8 @@ class HPCSettings(BaseModel):
     kappa: float = Field(
         default=0.8,
         description="Hebbian retrieval decay term",
+    )
+    do_sample: bool = Field(
+        default=False,
+        description="Whether to sample, or assume no noise and simply take mean of all distributions",
     )

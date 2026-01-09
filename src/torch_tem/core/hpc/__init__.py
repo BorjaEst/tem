@@ -47,6 +47,9 @@ class HPCModel(nn.Module):
         # Store mask as a buffer since it is not learnable
         self.register_buffer("p_update_mask", p_update_mask(self, f_init))
 
+        # Initialize MLPs for generating grounded location statistics
+        self.MLP_sigma_p = MLP(shape, shape, activation=[torch.tanh, torch.exp])
+
     @property
     def shape(self) -> List[int]:
         """Dimensionality of features per frequency module."""
@@ -79,6 +82,17 @@ class HPCModel(nn.Module):
         """Update runtime hyperparameters for Hebbian updates."""
         self.runtime.eta = float(eta)
         self.runtime.hebbian_decay = float(hebbian_decay)
+
+    def generative(self, p_g, state: HPCState) -> Tuple[List[Tensor], HPCState]:
+        # Retreive memory: do pattern completion on abstract location to get grounded location
+        if not self._settings.do_sample:
+            return p_g, state
+        sigma_p = self.MLP_sigma_p(p_g)
+        p = [p_g[f] + sigma_p[f] * torch.randn_like(sigma_p[f]) for f in range(self.n_freq)]
+        return p, state
+
+    # def inference(self, x_, p_g, state: HPCState) -> Tuple[List[Tensor], HPCState]:
+    #     ??
 
     def attractor(self, p_query, M, retrieve_it_mask=None):
         # Retreive grounded location from attractor network memory with weights M by pattern-completing query

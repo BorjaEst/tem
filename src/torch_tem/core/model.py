@@ -746,7 +746,7 @@ class TEMModel(nn.Module):
             return tuple(self._apply_to_nested_tensors(v, fn) for v in obj)
         return obj
 
-    def forward(self, o, locations, a_prev, M_prev, lec_state, mec_state):
+    def forward(self, o, locations, a_prev, M_prev, state: TEMState):
         """Legacy forward pass for backward compatibility.
 
         Standard Markov chain flow:
@@ -755,6 +755,8 @@ class TEMModel(nn.Module):
         3. predict(state_posterior) -> predictions
         4. update_memory(state_posterior) -> M_next
         """
+        mec_state, lec_state = state.mec_state, state.lec_state
+
         # 1. Transition: MEC path integration (action-driven)
         mec_state = self.transition(mec_state, a_prev, locations, o.device)
 
@@ -769,7 +771,7 @@ class TEMModel(nn.Module):
         mec_state.g = g_inf
 
         # 3. Predict: Generate predictions from corrected state
-        predictions = self.predict(M_prev, p_inf, g_inf, mec_state.g_gen)
+        predictions = self.predict(M_prev, p_inf, g_inf, mec_state.g_gen, state)
 
         # 4. Update memory (Hebbian write)
         M = self.update_memory(M_prev, p_inf, p_inf_x, predictions.p_gen)
@@ -794,10 +796,10 @@ class TEMModel(nn.Module):
         # MEC correction
         mec_state = self.mec.inference(p_x, locations, o, mec_state)
         g_ = self.mec_projection(mec_state.g)
-        p_g = self.hpc.attractor(g_, state.hpc_state)
+        p_g = self.hpc.attractor(g_, state.hpc_state, for_inference=False)
 
         # Inference outputs and memory update
-        hpc_state = self.hpc(g_, x_, state.hpc_state)
+        hpc_state = self.hpc(g_, x_, p_g, state.hpc_state)
 
         # Predictions from corrected state
         x = self.lec_projection.inverse(p_x)
@@ -864,7 +866,7 @@ class TEMModel(nn.Module):
             "p_inf_x": p_inf_x,
         }
 
-    def predict(self, M_prev, p_inf, g_inf, g_gen) -> TEMPrediction:
+    def predict(self, M_prev, p_inf, g_inf, g_gen, state) -> TEMPrediction:
         r"""Predict: Generate predictions from corrected state.
 
         Computes \hat{o}_t = g(S_{t|t})
@@ -883,7 +885,7 @@ class TEMModel(nn.Module):
         Returns:
             TEMPrediction with o_hat, o_logits, p_gen
         """
-        o_hat, o_logits, p_gen = self.generative(M_prev, p_inf, g_inf, g_gen)
+        o_hat, o_logits, p_gen = self.generative(M_prev, p_inf, g_inf, g_gen, state)
         return TEMPrediction(o_hat=o_hat, o_logits=o_logits, p_gen=p_gen)
 
     def update_memory(self, M_prev, p_inf, p_inf_x, p_gen) -> List[Tensor]:
@@ -927,15 +929,19 @@ class TEMModel(nn.Module):
         # Return LECState (for next step) and inferred variables
         return lec_state, g, p_x, p
 
-    def generative(self, M_prev, p_inf, g_inf, g_gen):
+    def generative(self, M_prev, p_inf, g_inf, g_gen, state: TEMState):
         # Generate observation from inferred grounded location, using only the highest frequency. Also keep non-softmaxed logits which are used in the loss later
         x_p, x_p_logits = self.gen_x(p_inf[0])
         # Retrieve grounded location from memory by pattern completion on inferred abstract location
-        p_g_inf = self.gen_p(g_inf, M_prev[0])  # was p_mem_gen
+        g_ = self.mec_projection(g_inf)
+        p_g = self.hpc.attractor(g_, M_prev[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        p_g_inf, _ = self.hpc.generative(p_g, state.hpc_state)  # was p_mem_inf
         # And generate observation from the grounded location retrieved from inferred abstract location
         x_g, x_g_logits = self.gen_x(p_g_inf[0])
         # Retreive grounded location from memory by pattern completion on abstract location by transitioning
-        p_g_gen = self.gen_p(g_gen, M_prev[0])
+        g_ = self.mec_projection(g_gen)
+        p_g = self.hpc.attractor(g_, M_prev[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        p_g_gen, _ = self.hpc.generative(g_, state.hpc_state)  # was p_mem_gen
         # Generate observation from sampled grounded location
         x_gt, x_gt_logits = self.gen_x(p_g_gen[0])
         # Return all generated observations and their corresponding logits
@@ -959,7 +965,6 @@ class TEMModel(nn.Module):
         n_f = self.hyper["n_f"]
 
         pass  # We can remove this method if there's nothing to init here
-        self.MLP_sigma_p = MLP(n_p, n_p, activation=[torch.tanh, torch.exp])
         self.MLP_mu_g_mem = MLP(n_g_subsampled, n_g, hidden_dim=[2 * g for g in n_g])
         self.MLP_mu_g_mem.set_weights(
             -1, [torch.tensor(truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=g_mem_std), dtype=torch.float32) for f in range(n_f)]
@@ -992,17 +997,6 @@ class TEMModel(nn.Module):
         mec_state = MECState(g_gen=g_inf, g_path=Transition(mean=g_inf, uncertainty=[torch.zeros_like(g) for g in g_inf]))
         # And construct new iteration for that g, o, a, and M
         return TEMState(g=g, o=o, a_prev=a, M=M, lec_state=lec_state, mec_state=mec_state)
-
-    def gen_p(self, g, M_prev):
-        # We want to use g as an index for memory retrieval, but it doesn't have the right dimensions (these are grid cells, we need place cells). We need g_ instead
-        g_ = self.mec_projection(g)
-        # Retreive memory: do pattern completion on abstract location to get grounded location
-        mu_p = self.hpc.attractor(g_, M_prev, retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
-        sigma_p = self.f_sigma_p(mu_p)
-        # Either sample new grounded location p or simply take the mean of distribution in noiseless case
-        p = [mu_p[f] + sigma_p[f] * np.random.randn() if self.hyper["do_sample"] else mu_p[f] for f in range(self.hyper["n_f"])]
-        # Return pattern-completed grounded location p after memory retrieval
-        return p
 
     def gen_x(self, p):
         # Get categorical distribution over observations from grounded location
@@ -1127,7 +1121,7 @@ class TEMModel(nn.Module):
 
         # Project highest-frequency grounded location back to all frequency modules
         # using the inverse tiling operation for each frequency
-        p_list = [p]  # generative() is still calling gen_x(p_inf[0]) so p is only highest frequency module
+        p_list = [p] if isinstance(p, Tensor) else p  # Handle both Tensor and List[Tensor]
         x = self.lec_projection.inverse(p_list)
 
         # Reconstruct compressed features from filtered features (affine transform)
@@ -1173,6 +1167,7 @@ class Rollout(Iterator[TEMState]):
         self._M = state.M
         self._lec_state = state.lec_state
         self._mec_state = state.mec_state
+        self._state = state
 
         # Track current position in walk
         self._idx = 0
@@ -1198,7 +1193,7 @@ class Rollout(Iterator[TEMState]):
         self._idx += 1
 
         # Run model forward
-        M, mec_state, p_gen, x_gen, o_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._M, self._lec_state, self._mec_state)
+        M, mec_state, p_gen, x_gen, o_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._M, self._state)
 
         # Build state
         state = TEMState(

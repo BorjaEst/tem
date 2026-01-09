@@ -708,7 +708,7 @@ class TEMModel(nn.Module):
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
         self.lec = lec = LECModel(n_c, n_x, f_init, params.lec_settings)
         self.mec = mec = MECModel(n_a, n_g, f_init, params.mec_settings)
-        self.hpc = hpc = HPCModel(mec.grid.n_freq, n_p, f_init, params.hpc_settings)
+        self.hpc = hpc = HPCModel(mec.grid.n_freq, n_p, f_init, params.hpc_settings)  # i_attactor must be equal to n of frequencies for grid cells
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
         self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
 
@@ -921,7 +921,7 @@ class TEMModel(nn.Module):
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         g = self.inf_g(p_x, mec_state.g_path, o, locations)
         # Prepare abstract location for input to memory by downsampling and weighting
-        g_ = self.g2g_(g)
+        g_ = self.mec_projection(g)
         # Infer grounded location from sensory experience and inferred abstract location
         p = self.inf_p(x_, g_)
         # Return LECState (for next step) and inferred variables
@@ -995,7 +995,7 @@ class TEMModel(nn.Module):
 
     def gen_p(self, g, M_prev):
         # We want to use g as an index for memory retrieval, but it doesn't have the right dimensions (these are grid cells, we need place cells). We need g_ instead
-        g_ = self.g2g_(g)
+        g_ = self.mec_projection(g)
         # Retreive memory: do pattern completion on abstract location to get grounded location
         mu_p = self.hpc.attractor(g_, M_prev, retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
         sigma_p = self.f_sigma_p(mu_p)
@@ -1092,14 +1092,6 @@ class TEMModel(nn.Module):
         # Return new memory constructed from sensory experience and inferred abstract location
         return p
 
-    def g2g_(self, g):
-        # Prepares abstract location for input to memory by reshaping and down-sampling for each frequency module
-        # Get downsampled abstract location for each frequency module
-        downsampled = self.f_g(g)
-        # Then reshape and reweight each frequency module separately
-        g_ = [torch.matmul(downsampled[f], self.hyper["W_repeat"][f]) for f in range(self.hyper["n_f"])]
-        return g_
-
     def f_mu_g_mem(self, g_downsampled):
         # Multi layer perceptron to generate mean of abstract location from down-sampled abstract location, obtained by summing over sensory dimension of grounded location
         return self.MLP_mu_g_mem(g_downsampled)
@@ -1151,11 +1143,6 @@ class TEMModel(nn.Module):
     def f_c_star(self, c):
         """Decompress sensory experience. Delegates to Autoencoder."""
         return self.autoencoder.decode(c)
-
-    def f_g(self, g):
-        # Downsample abstract location for each frequency module
-        downsampled = [torch.matmul(g[f], self.hyper["g_downsample"][f]) for f in range(self.hyper["n_f"])]
-        return downsampled
 
 
 Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)

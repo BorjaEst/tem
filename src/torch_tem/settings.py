@@ -469,8 +469,9 @@ class MECProjectionSettings(ProjectionSettings):
         description="MEC default: structured (downsample+repeat)",
     )
     rank: Optional[List[int]] = Field(
-        default=None,
-        description="Low_rank rank for low_rank mode (auto-derived via GCD if None)",
+        # default=None,  we will replace by None in future by default to simplify setup coherence
+        default=[10, 10, 8, 6, 6],  # same as n_g_subsampled_base in legacy for now
+        description="Base neurons for subsampled entorhinal abstract location f_g(g) for each frequency module",
     )
 
 

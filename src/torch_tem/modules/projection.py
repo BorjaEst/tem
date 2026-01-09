@@ -67,7 +67,7 @@ class TileModule(AbstractModule):
     def __init__(self, shape_from: List[int], shape_to: List[int], settings: ProjectionSettings):
         super(TileModule, self).__init__()
         self._settings = settings
-        (w_list,) = self.create_matrices(shape_from, shape_to, settings)
+        w_list = self.create_matrices(shape_from, shape_to, settings)
         self.w = nn.ParameterList([nn.Parameter(w, requires_grad=settings.learnable) for w in w_list])
 
     @staticmethod
@@ -78,7 +78,7 @@ class TileModule(AbstractModule):
             w_list = utils.create_random_projection(shape_from, shape_to)
         else:
             raise ValueError(f"Unknown init strategy: {settings.init}")
-        return [w_list]
+        return w_list
 
     def forward(self, z_from: List[Tensor]) -> List[Tensor]:
         # z[f]: [B, n_in] -> [B, n_out]
@@ -99,7 +99,7 @@ class LowRankModule(AbstractModule):
         self.w_repeat = nn.ParameterList([nn.Parameter(w, requires_grad=settings.learnable) for w in w_repeat])
 
     @staticmethod
-    def create_matrices(shape_from: List[int], shape_to: List[int], settings: ProjectionSettings) -> List[Tensor]:
+    def create_matrices(shape_from: List[int], shape_to: List[int], settings: ProjectionSettings) -> Tuple[List[Tensor], List[Tensor]]:
         rank_list = _coerce_rank_list(settings.rank, shape_from, shape_to)
         if settings.init == "identity":  # Legacy-equivalent: downsample to r dims, then repeat to n_out
             w_down = utils.create_downsample_matrix(shape_from, rank_list)
@@ -109,7 +109,7 @@ class LowRankModule(AbstractModule):
             w_repeat = utils.create_random_projection(rank_list, shape_to)
         else:
             raise ValueError(f"Unknown init strategy: {settings.init}")
-        return [w_down, w_repeat]
+        return w_down, w_repeat
 
     def forward(self, z_from: List[Tensor]) -> List[Tensor]:
         # z[f]: [B, n_in] -> [B, r] -> [B, n_out]

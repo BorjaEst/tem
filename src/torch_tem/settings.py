@@ -526,3 +526,20 @@ class HPCSettings(BaseModel):
     """Settings for HPC modules."""
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    use_p_inf: bool = Field(
+        default=True,
+        description="Whether to use inferred ground location while inferring new abstract location",
+    )
+    p2g_sig_val: float = Field(
+        default=10000.0,
+        description="Additional value to offset standard deviation of inferred grounded location",
+    )
+    common_memory: bool = Field(
+        default=False,
+        description="Use common memory for generative and inference network",
+    )
+    kappa: float = Field(
+        default=0.8,
+        description="Hebbian retrieval decay term",
+    )

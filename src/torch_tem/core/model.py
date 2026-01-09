@@ -105,7 +105,10 @@ class HPCParameters(BaseModel):
         default=False,
         description="Use common memory for generative and inference network",
     )
-    kappa: float = Field(default=0.8, description="Hebbian retrieval decay term")
+    kappa: float = Field(
+        default=0.8,
+        description="Hebbian retrieval decay term",
+    )
 
 
 class Parameters(BaseModel):
@@ -705,7 +708,7 @@ class TEMModel(nn.Module):
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
         self.lec = lec = LECModel(n_c, n_x, f_init, params.lec_settings)
         self.mec = mec = MECModel(n_a, n_g, f_init, params.mec_settings)
-        self.hpc = hpc = HPCModel(n_p, params.hpc_settings)
+        self.hpc = hpc = HPCModel(mec.grid.n_freq, n_p, f_init, params.hpc_settings)
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
         self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
 
@@ -723,6 +726,7 @@ class TEMModel(nn.Module):
         self.runtime.eta = eta
         self.runtime.hebbian_decay = hebbian_decay
         self.runtime.p2g_scale_offset = p2g_scale_offset
+        self.hpc.set_runtime(eta=eta, hebbian_decay=hebbian_decay)
 
     def _apply(self, fn):
         """Override _apply to move tensors in self.hyper when model is moved to GPU/CPU."""
@@ -897,11 +901,11 @@ class TEMModel(nn.Module):
             Updated memory matrices [M_gen, M_inf] (M_inf only if use_p_inf=True)
         """
         # Update generative memory with generated and inferred grounded location
-        M = [self.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+        M = [self.hpc.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
         # If using memory for grounded location inference: append inference memory
         if self.hyper["use_p_inf"]:
             # Inference memory is identical to generative memory if using common memory, and updated separately if not
-            M.append(M[0] if self.hyper["common_memory"] else self.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
+            M.append(M[0] if self.hyper["common_memory"] else self.hpc.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
         return M
 
     def inference(self, o, locations, M_prev, lec_state: LECState, mec_state: MECState):
@@ -913,7 +917,7 @@ class TEMModel(nn.Module):
         x, lec_state = self.lec(c, lec_state)
         x_ = self.lec_projection(x)  # Project to memory format
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
-        p_x = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
+        p_x = self.hpc.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         g = self.inf_g(p_x, mec_state.g_path, o, locations)
         # Prepare abstract location for input to memory by downsampling and weighting
@@ -993,7 +997,7 @@ class TEMModel(nn.Module):
         # We want to use g as an index for memory retrieval, but it doesn't have the right dimensions (these are grid cells, we need place cells). We need g_ instead
         g_ = self.g2g_(g)
         # Retreive memory: do pattern completion on abstract location to get grounded location
-        mu_p = self.attractor(g_, M_prev, retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        mu_p = self.hpc.attractor(g_, M_prev, retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
         sigma_p = self.f_sigma_p(mu_p)
         # Either sample new grounded location p or simply take the mean of distribution in noiseless case
         p = [mu_p[f] + sigma_p[f] * np.random.randn() if self.hyper["do_sample"] else mu_p[f] for f in range(self.hyper["n_f"])]
@@ -1078,7 +1082,7 @@ class TEMModel(nn.Module):
         p = []
         # Use the same transformation for each frequency module: leaky relu for sparsity
         for f in range(self.hyper["n_f"]):
-            mu_p = self.f_p(g_[f] * x_[f])  # This is element-wise multiplication
+            mu_p = self.hpc.f_p(g_[f] * x_[f])  # This is element-wise multiplication
             sigma_p = 0  # Unclear from paper (typo?). Some undefined function f that takes two arguments: f(f_n(o),g)
             # Either sample inferred grounded location or just take mean
             if self.hyper["do_sample"]:
@@ -1152,43 +1156,6 @@ class TEMModel(nn.Module):
         # Downsample abstract location for each frequency module
         downsampled = [torch.matmul(g[f], self.hyper["g_downsample"][f]) for f in range(self.hyper["n_f"])]
         return downsampled
-
-    def f_p(self, p):
-        # Calculate activation for inferred grounded location, using a leaky relu for sparsity. Either apply to full multi-frequency grounded location or single frequency module
-        activation = [utils.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p] if type(p) is list else utils.leaky_relu(torch.clamp(p, min=-1, max=1))
-        return activation
-
-    def attractor(self, p_query, M, retrieve_it_mask=None):
-        # Retreive grounded location from attractor network memory with weights M by pattern-completing query
-        # For example, initial attractor input can come from abstract location (g_) or sensory experience (x_)
-        # Start by flattening query grounded locations across frequency modules
-        h_t = torch.cat(p_query, dim=1)
-        # Apply activation function to initial memory index
-        h_t = self.f_p(h_t)
-        # Hierarchical retrieval (not in paper) is implemented by early stopping retrieval for low frequencies, using a mask. If not specified: initialise mask as all 1s
-        retrieve_it_mask = [torch.ones(sum(self.hyper["n_p"])) for _ in range(self.hyper["n_p"])] if retrieve_it_mask is None else retrieve_it_mask
-        # Iterate attractor dynamics to do pattern completion
-        for tau in range(self.hyper["i_attractor"]):
-            # Apply one iteration of attractor dynamics, but only where there is a 1 in the mask. NB retrieve_it_mask entries have only one row, but are broadcasted to batch_size
-            h_t = (1 - retrieve_it_mask[tau]) * h_t + retrieve_it_mask[tau] * (self.f_p(self.hyper["kappa"] * h_t + torch.squeeze(torch.matmul(torch.unsqueeze(h_t, 1), M))))
-        # Make helper list of cumulative neurons per frequency module for grounded locations
-        n_p = np.cumsum(np.concatenate(([0], self.hyper["n_p"])))
-        # Now re-cast the grounded location into different frequency modules, since memory retrieval turned it into one long vector
-        p = [h_t[:, n_p[f] : n_p[f + 1]] for f in range(self.hyper["n_f"])]
-        return p
-
-    def hebbian(self, M_prev, p_inferred, p_generated, do_hierarchical_connections=True):
-        # Create new ground memory for attractor network by setting weights to outer product of learned vectors
-        # p_inferred corresponds to p in the paper, and p_generated corresponds to p^.
-        # The order of p + p^ and p - p^ is reversed since these are row vectors, instead of column vectors in the paper.
-        M_new = torch.squeeze(torch.matmul(torch.unsqueeze(p_inferred + p_generated, 2), torch.unsqueeze(p_inferred - p_generated, 1)))
-        # Multiply by connection vector, e.g. only keeping weights from low to high frequencies for hierarchical retrieval
-        if do_hierarchical_connections:
-            M_new = M_new * self.hyper["p_update_mask"]
-        # Store grounded location in attractor network memory with weights M by Hebbian learning of pattern
-        # Rate of remembering controlled by eta, rate of forgetting by hebbian_decay (from runtime, not hyper)
-        M = torch.clamp(self.runtime.hebbian_decay * M_prev + self.runtime.eta * M_new, min=-1, max=1)
-        return M
 
 
 Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)

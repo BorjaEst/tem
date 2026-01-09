@@ -47,13 +47,13 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from torch_tem import utils
-from torch_tem.core import TEMState
+from torch_tem.core import TEMLabel, TEMPrediction, TEMState
 from torch_tem.settings import AbstractLocationSettings  # fmt: skip
 from torch_tem.settings import GroundedLocationSettings  # fmt: skip
 from torch_tem.settings import LossSettings  # fmt: skip
 from torch_tem.settings import RegularizationSettings  # fmt: skip
 from torch_tem.settings import SensoryReconstructionSettings  # fmt: skip
-from torch_tem.types import AbstractLocation, GroundedLocation, Reduction, Scalar, Transition
+from torch_tem.types import AbstractLocation, GroundedLocation, Observation, Reduction, Scalar, Transition
 
 
 @dataclass
@@ -673,7 +673,8 @@ class TEMLoss(nn.Module):
         self.loss_g_fn = AbstractLocationLoss(config.g)
         self.loss_reg_fn = RegularizationLoss(config.reg)
 
-    def forward(self, step: TEMState, use_p_inf: bool) -> LossOutput:
+    def forward(self, prediction: TEMPrediction, step: TEMState, label: TEMLabel, use_p_inf: bool) -> LossOutput:
+        # Move use_p_inf to GroundedLocationConfig
         """Compute weighted loss components for one timestep.
 
         Args:
@@ -684,9 +685,9 @@ class TEMLoss(nn.Module):
             LossOutput where each component is already multiplied by settings weights.
         """
         # Raw (possibly per-env) losses
-        lx: LossX = self.loss_x_fn(step.o_logits, step.o)
-        lp: LossP = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_p_inf)
+        lx: LossX = self.loss_x_fn(prediction.o_logits, label.o)
         lg: LossG = self.loss_g_fn(step.g_inf, step.g_gen)
+        lp: LossP = self.loss_p_fn(step.p_inf, prediction.p_gen, step.p_inf_x, use_p_inf)
         lreg: LossReg = self.loss_reg_fn(step.g_inf, step.p_inf)
 
         return LossOutput(x=lx, p=lp, g=lg, reg=lreg)

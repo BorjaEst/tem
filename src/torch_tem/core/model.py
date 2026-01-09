@@ -582,82 +582,56 @@ def parameter_iteration(iteration, params):
 @dataclass
 class TEMPrediction:
     """Prediction outputs from TEM state.
-
-    Contains all predictive outputs used for loss computation:
-    - Sensory predictions (o_hat, o_logits) from three pathways
-    - Retrieved place cell representations (p_gen)
+    Contains all predictive outputs used for loss computation.
     """
 
-    o_hat: Sequence[Tensor]  # (x_p, x_g, x_gt) - sensory predictions from 3 pathways
-    o_logits: Sequence[Tensor]  # (logits_p, logits_g, logits_gt) - logits for loss
-    p_gen: List[Tensor]  # Place cells retrieved from g_inf (for loss computation)
+    o_hat: Sequence[Tensor]  # from (p_g_gen, p_x_inf, p_g_inf) - reconstructed sensory observation
+    o_logits: Sequence[Tensor]  # from (p_g_gen, p_x_inf, p_g_inf) - logits for loss
 
 
 @dataclass
 class TEMState:
-    """State container for TEM dynamics.
-
-    Represents the complete latent state at timestep t:
-    - lec_state: LEC temporal filtering state
-    - mec_state: MEC grid cell state (contains g, g_gen, g_path)
-    - hpc_state: HPC place cell + memory state (HPCState.memory holds Hebbian matrices)
-    - g_inf: Inferred abstract location (corrected grid cells)
-    - p_inf: Inferred grounded location (corrected place cells)
-    - p_inf_x: Place cells from sensory retrieval (for loss computation)
+    """Pure latent recurrent state for TEM.
+    Contains all latent states and variables needed to carry over time.
     """
 
+    # States to carry over time to produce next step of the model
     lec_state: Optional[LECState] = None
     mec_state: Optional[MECState] = None
     hpc_state: Optional[HPCState] = None
 
+    # Abstract locations and grounded locations for loss computation
+    g_gen: Optional[List[Tensor]] = None
     g_inf: Optional[List[Tensor]] = None
-    p_inf: Optional[List[Tensor]] = None
-    p_inf_x: Optional[List[Tensor]] = None  # Grounded location from sensory input (for loss computation)
 
-    # Legacy fields for backward compatibility (mirrors hpc_state.memory when present)
-    lec: Optional[Any] = None
-    g: Any = None
-    o: Optional[Tensor] = None
-    a_prev: Any = None
-    p_gen: Optional[List[Tensor]] = None
-    x_gen: Optional[Sequence[Tensor]] = None
-    o_logits: Optional[Sequence[Tensor]] = None
-
-    @property
-    def g_gen(self) -> Optional[List[Tensor]]:
-        """Return per-frequency generated abstract location g for the current timestep."""
-        if self.mec_state is None:
-            return None
-        return self.mec_state.g_gen
-
-    def correct(self) -> List[np.ndarray]:
-        """Return per-prediction correctness arrays for the current timestep."""
-        if self.o is None or self.x_gen is None:
-            return []
-
-        observation = self.o.detach().cpu().numpy()
-        predictions = [tensor.detach().cpu().numpy() for tensor in self.x_gen]
-        return [np.argmax(pred, axis=-1) == np.argmax(observation, axis=-1) for pred in predictions]
+    # Grounded locations for loss computation from 3 pathways
+    p_g_gen: Optional[List[Tensor]] = None
+    p_x_inf: Optional[List[Tensor]] = None
+    p_g_inf: Optional[List[Tensor]] = None
 
     def detach(self) -> "TEMState":
-        """Return a detached copy suitable for storing as `prev_iter`."""
+        """Return a detached copy suitable for caching between rollout steps."""
 
         def _detach(obj: Any) -> Any:
             if obj is None:
                 return None
             if isinstance(obj, LECState):
-                # Detach LECState components
-                return LECState(c=_detach(obj.c), x=_detach(obj.x), x_filtered=_detach(obj.x_filtered))
+                return LECState(
+                    c=_detach(obj.c),
+                    x=_detach(obj.x),
+                    x_filtered=_detach(obj.x_filtered),
+                )
             if isinstance(obj, MECState):
-                # Detach MECState components
                 return MECState(
                     g_gen=_detach(obj.g_gen),
                     g_path=Transition(mean=_detach(obj.g_path.mean), uncertainty=_detach(obj.g_path.uncertainty)),
                     g=_detach(obj.g),
                 )
             if isinstance(obj, HPCState):
-                # Detach HPCState components (including memory matrices)
-                return HPCState(p=_detach(obj.p), memory=_detach(obj.memory))
+                return HPCState(
+                    p=_detach(obj.p),
+                    memory=_detach(obj.memory),
+                )
             if torch.is_tensor(obj):
                 return obj.detach()
             if isinstance(obj, list):
@@ -669,19 +643,21 @@ class TEMState:
             return obj
 
         return TEMState(
-            g=self.g,
-            o=_detach(self.o),
-            a_prev=self.a_prev,
             lec_state=_detach(self.lec_state),
             mec_state=_detach(self.mec_state),
             hpc_state=_detach(self.hpc_state),
-            p_gen=_detach(self.p_gen),
-            x_gen=_detach(self.x_gen),
-            o_logits=_detach(self.o_logits),
+            g_gen=_detach(self.g_gen),
             g_inf=_detach(self.g_inf),
-            p_inf=_detach(self.p_inf),
-            p_inf_x=_detach(self.p_inf_x),
+            p_g_gen=_detach(self.p_g_gen),
+            p_x_inf=_detach(self.p_x_inf),
+            p_g_inf=_detach(self.p_g_inf),
         )
+
+
+@dataclass
+class TEMLabel:
+    o: Tensor  # True sensory observation (for loss computation)
+    locations: List[Tensor]  # True locations (for loss computation)
 
 
 class TEMModel(nn.Module):
@@ -760,190 +736,79 @@ class TEMModel(nn.Module):
             memory.append(m0 if self.hyper["common_memory"] else m0.clone())
         return memory
 
-    def forward(self, o, locations, a_prev, state: TEMState):
-        """Legacy forward pass for backward compatibility.
-
-        Standard Markov chain flow:
-        1. transition(state, action) -> state_prior
-        2. observe(state_prior, observation) -> state_posterior
-        3. predict(state_posterior) -> predictions
-        4. update_memory(state_posterior) -> M_next
-        """
+    def forward(self, o, locations, a_prev, state: TEMState) -> Tuple[TEMPrediction, TEMState]:
+        """Legacy forward pass for backward compatibility."""
         mec_state, lec_state, hpc_state = state.mec_state, state.lec_state, state.hpc_state
+        memory = hpc_state.memory  # Legacy [M_gen, M_inf?] format
+        c = self.autoencoder.encode(o)  # Encode observation to compressed code
+        device = o.device  # Get device from input
 
-        # 1. Transition: MEC path integration (action-driven)
-        mec_state = self.transition(mec_state, a_prev, locations, o.device)
-
-        # 2. Observe / infer: LEC filtering + HPC retrieval + MEC correction
-        lec_state, g_inf, p_inf_x, p_inf, hpc_state = self.inference(
-            o,
-            locations,
-            TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state),
-        )
-
-        # Update mec_state.g to inferred g for next transition (legacy parity)
-        mec_state.g = g_inf
-
-        # 3. Predict: Generate predictions from corrected state
-        predictions = self.predict(
-            p_inf,
-            g_inf,
-            mec_state.g_gen,
-            TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state),
-        )
-
-        # 4. Update memory (Hebbian write)
-        M = self.update_memory(hpc_state.memory, p_inf, p_inf_x, predictions.p_gen)
-        hpc_state.memory = M
-        state.hpc_state = hpc_state
-
-        # Return all iteration values (loss now computed in Lightning module)
-        return hpc_state, mec_state, predictions.p_gen, predictions.o_hat, predictions.o_logits, lec_state, g_inf, p_inf, p_inf_x
-
-    def _future_forward(self, o, locations, a_prev, state: TEMState):
-        """Future-style forward pass returning full TEMState.
-        Combines transition, observe, predict, and update_memory into single pass.
-        It is not completed and might have some inaccuracies and bugs.
-        """
-
-        z = self.autoencoder.encode(o)
-        mec_state = self.mec.generative(a_prev, locations, state.mec_state)  # Path integration
-        lec_state = self.lec.inference(z, state.lec_state)  # Update x fom observation
-
-        # Calculate projected x_ so we can run MEC inference later
-        x_ = self.lec_projection(lec_state.x)
-        p_x = self.hpc.attractor(x_, state.hpc_state)
-
-        # MEC correction
-        mec_state = self.mec.inference(p_x, locations, o, mec_state)
-        g_ = self.mec_projection(mec_state.g)
-        p_g = self.hpc.attractor(g_, state.hpc_state, for_inference=False)
-
-        # Inference outputs and memory update
-        hpc_state = self.hpc(g_, x_, p_g, state.hpc_state)
-
-        # Predictions from corrected state
-        x = self.lec_projection.inverse(p_x)
-        o_hat, o_logits = self.autoencoder.decode(x)
-
-        return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
-
-    def transition(self, mec_state: MECState, a_prev, locations, device) -> MECState:
-        """Transition: MEC path integration (action-driven, no observation).
-
-        Computes S_{t|t-1} = f(S_{t-1|t-1}, a_{t-1})
-
-        Args:
-            mec_state: Previous MEC state (contains g posterior from t-1)
-            a_prev: Actions from previous timestep
-            locations: Location metadata (for shiny detection)
-            device: Torch device
-
-        Returns:
-            Updated MEC state with g_path (prior), g_gen (ancestral prediction)
-        """
         # Handle reset boundaries: where a_prev is None, reset state to priors before transition
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
             # Reset g to priors for envs with no previous action
             g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.grid.g_init_mean[f].unsqueeze(0), mec_state.g[f]) for f in range(self.hyper["n_f"])]
             mec_state.g = g_reset
+            # Reset LEC filtered state (x_filtered) to zeros for new episodes
+            x_filtered_reset = [torch.where(reset_mask.unsqueeze(-1), torch.zeros_like(lec_state.x_filtered[f]), lec_state.x_filtered[f]) for f in range(self.hyper["n_f"])]
+            lec_state = LECState(c=lec_state.c, x=lec_state.x, x_filtered=x_filtered_reset)
+            # Reset memory slices for new episodes (legacy behavior: M[:, b, :] = M[:, b, :] * 0)
+            for m_idx in range(len(memory)):
+                memory[m_idx] = torch.where(reset_mask.unsqueeze(-1).unsqueeze(-1), torch.zeros_like(memory[m_idx]), memory[m_idx])
 
         # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
         if self.hyper["has_static_action"]:
-            a = utils.one_hot_with_zero(a_prev, self.hyper["n_actions"], device=device)
+            a_prev = utils.one_hot_with_zero(a_prev, self.hyper["n_actions"], device=device)
         else:
             a_idx = torch.tensor([int(a) if a is not None else 0 for a in a_prev], dtype=torch.long, device=device)
-            a = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
+            a_prev = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
 
-        g_gen, mec_state = self.mec.generative(a, locations, mec_state)
-        return mec_state
+        # 1. Retrieve place from generated grid (full generative path)
+        g_gen, mec_state = self.mec.generative(a_prev, locations, mec_state)
+        g_ = self.mec_projection(g_gen)  # Project to memory format
+        p_g_gen = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
 
-    def predict(self, p_inf, g_inf, g_gen, state: TEMState) -> TEMPrediction:
-        r"""Predict: Generate predictions from corrected state.
+        # 2. Decode from inferred place cells (recognition path)
+        x_inf, lec_state = self.lec.inference(c, lec_state)
+        x_ = self.lec_projection(x_inf)  # Project to memory format
+        p_x_inf = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
 
-        Computes \hat{o}_t = g(S_{t|t})
+        # 3. Retrieve place from inferred grid (memory-consistency path)
+        # g_inf, mec_state = self.mec.inference(p_x_inf, o, locations, mec_state)
+        g_inf = self.mec_inference(p_x_inf, g_gen, o, locations)
+        mec_state.g = g_inf  # Update mec_state.g for next iteration
+        g_ = self.mec_projection(g_inf)  # Project to memory format
+        p_g_inf = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
 
-        Generates sensory predictions from three pathways:
-        1. From inferred place cells (p_inf -> o_hat)
-        2. From inferred grid cells via memory (g_inf -> p -> o_hat)
-        3. From generated grid cells via memory (g_gen -> p -> o_hat)
+        # Retrieve grounded location from memory by pattern completion on inferred abstract location
+        # This is p(g_inf) in the paper: used for L_p_g loss and Hebbian update
+        p_gen, hpc_state = self.hpc.generative(p_g_gen, hpc_state)
+        # ??? Update gen memory with generated grounded location here instead of after inference???
+        # Ideally memory gets updated in the hpc.generative call
 
-        Args:
-            p_inf: Inferred place cells
-            g_inf: Inferred grid cells (corrected)
-            g_gen: Generated grid cells (from transition)
-            state: TEMState containing hpc_state with memory
+        # Calculate infered grounded location
+        p_inf, hpc_state = self.hpc.inference(x_, g_, hpc_state)
+        # Ideally memory gets updated in the hpc.inference call
 
-        Returns:
-            TEMPrediction with o_hat, o_logits, p_gen
-        """
-        o_hat, o_logits, p_gen = self.generative(p_inf, g_inf, g_gen, state)
-        return TEMPrediction(o_hat=o_hat, o_logits=o_logits, p_gen=p_gen)
-
-    def update_memory(self, memory_prev: List[Tensor], p_inf, p_inf_x, p_gen) -> List[Tensor]:
-        """Update Hebbian memory matrices.
-
-        Computes M_{t+1} after predictions are made (to avoid write-then-read shortcut).
-
-        Args:
-            memory_prev: Previous memory matrices (from state.hpc_state.memory)
-            p_inf: Inferred place cells
-            p_inf_x: Place cells from sensory retrieval
-            p_gen: Generated place cells (from g_inf via memory)
-
-        Returns:
-            Updated memory matrices [M_gen, M_inf] (M_inf only if use_p_inf=True)
-        """
         # Update generative memory with generated and inferred grounded location
-        M = [self.hpc.hebbian(memory_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+        # We should move this to HPCModel.memory_update
+        M = [self.hpc.hebbian(memory[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
         # If using memory for grounded location inference: append inference memory
         if self.hyper["use_p_inf"]:
             # Inference memory is identical to generative memory if using common memory, and updated separately if not
-            M.append(
-                M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False)
-            )
-        return M
+            M.append(M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
+        hpc_state = HPCState(p=hpc_state.p, memory=M)
 
-    def inference(self, o, locations, state: TEMState):
-        lec_state, mec_state, hpc_state = state.lec_state, state.mec_state, state.hpc_state
-        memory = hpc_state.memory
-        # Delegate sensory processing to modular components:
-        # 1. Autoencoder: o -> c (compression)
-        # 2. LEC: c, x_prev -> x (temporal filtering)
-        # 3. Projection: x -> x_ (normalization + tiling for memory)
-        c = self.autoencoder.encode(o)
-        x, lec_state = self.lec(c, lec_state)
-        x_ = self.lec_projection(x)  # Project to memory format
-        # Retrieve grounded location from memory by doing pattern completion on current sensory experience
-        p_x = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
-        # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
-        g = self.inf_g(p_x, mec_state.g_path, o, locations)
-        # Prepare abstract location for input to memory by downsampling and weighting
-        g_ = self.mec_projection(g)
-        # Infer grounded location from sensory experience and inferred abstract location
-        p, hpc_state = self.hpc.inference(x_, g_, hpc_state)
-        # Return LECState (for next step) and inferred variables
-        return lec_state, g, p_x, p, hpc_state
+        # Construct new TEMState for next iteration
+        new_state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state, g_gen=g_gen, g_inf=g_inf, p_g_gen=p_g_gen, p_x_inf=p_x_inf, p_g_inf=p_g_inf)
 
-    def generative(self, p_inf, g_inf, g_gen, state: TEMState):
-        memory = state.hpc_state.memory
-        # Generate observation from inferred grounded location, using only the highest frequency. Also keep non-softmaxed logits which are used in the loss later
-        x_p, x_p_logits = self.gen_x(p_inf[0])
-        # Retrieve grounded location from memory by pattern completion on inferred abstract location
-        g_ = self.mec_projection(g_inf)
-        p_g = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
-        p_g_inf, _ = self.hpc.generative(p_g, state.hpc_state)  # was p_mem_inf
-        # And generate observation from the grounded location retrieved from inferred abstract location
-        x_g, x_g_logits = self.gen_x(p_g_inf[0])
-        # Retreive grounded location from memory by pattern completion on abstract location by transitioning
-        g_ = self.mec_projection(g_gen)
-        p_g = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
-        p_g_gen, _ = self.hpc.generative(p_g, state.hpc_state)  # was p_mem_gen
-        # Generate observation from sampled grounded location
-        x_gt, x_gt_logits = self.gen_x(p_g_gen[0])
-        # Return all generated observations and their corresponding logits
-        return (x_p, x_g, x_gt), (x_p_logits, x_g_logits, x_gt_logits), p_g_inf
+        # Construct TEMPrediction for loss computation
+        o_g_gen, o_g_gen_logits = self.gen_o(p_g_gen[0])  # Sensory prediction from generative path
+        o_x_inf, o_x_inf_logits = self.gen_o(p_x_inf[0])  # Sensory prediction from recognition path
+        o_g_inf, o_g_inf_logits = self.gen_o(p_g_inf[0])  # Sensory prediction from memory-consistency path
+        prediction = TEMPrediction(o_hat=(o_g_gen, o_x_inf, o_g_inf), o_logits=(o_g_gen_logits, o_x_inf_logits, o_g_inf_logits))
+
+        return prediction, new_state
 
     def init_trainable(self):
         # Initialize LEC (Lateral Entorhinal Cortex) component parameters with proper initial values
@@ -969,7 +834,7 @@ class TEMModel(nn.Module):
         )
         self.MLP_sigma_g_mem = MLP([2 for _ in n_g_subsampled], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
-    def init_iteration(self, g, o, a, M):
+    def init_iteration(self, o, M):
         # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
         self.hyper["batch_size"] = o.shape[0]
         # Initialize memory (now owned by HPCState)
@@ -987,9 +852,9 @@ class TEMModel(nn.Module):
         p_init = [torch.zeros((int(self.hyper["batch_size"]), int(n)), device=o.device) for n in self.hyper["n_p"]]
         hpc_state = HPCState(p=p_init, memory=memory)
         # And construct new iteration for that g, o, a, and M
-        return TEMState(g=g, o=o, a_prev=a, lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
+        return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
 
-    def gen_x(self, p):
+    def gen_o(self, p):
         # Get categorical distribution over observations from grounded location
         # If you actually want to sample observation, you need a reparaterisation trick for categorical distributions
         # Sampling would be the correct way to do this, since observations are discrete, and it's also what the TEM paper says
@@ -1003,7 +868,28 @@ class TEMModel(nn.Module):
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return o, logits
 
-    def inf_g(self, p_x, g_path: Transition, o, locations):
+    def f_x(self, p: Tensor):
+        # Calculate categorical probability distribution over observations for a given ground location
+        # Legacy behavior: p is only the highest-frequency module with shape (B, n_p[0])
+        # p is the outer product of g and x for the highest frequency (p = g^T * x)
+        # To get x from p, sum over abstract locations g (transpose of tiling matrix)
+
+        # Project highest-frequency grounded location back to all frequency modules
+        # using the inverse tiling operation for each frequency
+        p_list = [p] if isinstance(p, Tensor) else p  # Handle both Tensor and List[Tensor]
+        x = self.lec_projection.inverse(p_list)
+
+        # Reconstruct compressed features from filtered features (affine transform)
+        c = self.lec.reconstruct(x)
+
+        # Decompress c to observation logits using decoder
+        logits = self.autoencoder.decode(c)
+
+        # Keep both logits and probabilities
+        probability = utils.softmax(logits)
+        return probability, logits
+
+    def mec_inference(self, p_x, g_path: Transition, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_p_inf"]:
             # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
@@ -1013,7 +899,7 @@ class TEMModel(nn.Module):
             # Not in paper, but this greatly improves zero-shot inference: provide the uncertainty function of the inferred abstract location with measures of memory quality
             with torch.no_grad():
                 # For the first measure, use the grounded location inferred from memory to generate an observation
-                o_hat, x_hat_logits = self.gen_x(p_x[0])
+                o_hat, o_hat_logits = self.gen_o(p_x[0])
                 # Then calculate the error between the generated observation and the actual observation: if the memory is working well, this error should be small
                 err = utils.squared_error(o, o_hat)
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
@@ -1085,40 +971,11 @@ class TEMModel(nn.Module):
         # Multi layer perceptron to generate standard deviation of abstract location from boolean location shiny-ness
         return self.mec.ovc.MLP_sigma_g_shiny(shiny)
 
-    def f_sigma_p(self, p):
-        # Multi layer perceptron to generate standard deviation of grounded location retrieval
-        return self.MLP_sigma_p(p)
-
-    def f_x(self, p: Tensor):
-        # Calculate categorical probability distribution over observations for a given ground location
-        # Legacy behavior: p is only the highest-frequency module with shape (B, n_p[0])
-        # p is the outer product of g and x for the highest frequency (p = g^T * x)
-        # To get x from p, sum over abstract locations g (transpose of tiling matrix)
-
-        # Project highest-frequency grounded location back to all frequency modules
-        # using the inverse tiling operation for each frequency
-        p_list = [p] if isinstance(p, Tensor) else p  # Handle both Tensor and List[Tensor]
-        x = self.lec_projection.inverse(p_list)
-
-        # Reconstruct compressed features from filtered features (affine transform)
-        c = self.lec.reconstruct(x)
-
-        # Decompress c to observation logits using decoder
-        logits = self.autoencoder.decode(c)
-
-        # Keep both logits and probabilities
-        probability = utils.softmax(logits)
-        return probability, logits
-
-    def f_c_star(self, c):
-        """Decompress sensory experience. Delegates to Autoencoder."""
-        return self.autoencoder.decode(c)
-
 
 Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)
 
 
-class Rollout(Iterator[TEMState]):
+class Rollout(Iterator[Tuple[TEMPrediction, TEMState, TEMLabel]]):
     def __init__(self, model: TEMModel, walk: Walk, initial: Optional[TEMState] = None):
         self.model = model
         self.walk = list(walk)  # Materialize for predictable indexing
@@ -1127,19 +984,17 @@ class Rollout(Iterator[TEMState]):
             raise ValueError("Rollout requires at least 1 timestep in walk")
 
         # Extract first step to determine batch size and initialize state
-        locations_0, o_0, _ = self.walk[0]
+        locations_0, o_0, a = self.walk[0]
 
         # Determine initial state
         if initial is not None:
             state = initial
         else:
-            # Create fresh initial state: derive batch size from observation tensor
-            batch_size = int(o_0.shape[0]) if o_0.ndim > 1 else 1
             # Initialize with reset action (episode boundary)
-            state = model.init_iteration(locations_0, o_0, [None] * batch_size, None)
+            state = model.init_iteration(o_0, None)
 
         # Initialize prev-values for first forward pass
-        self._a_prev = state.a_prev
+        self._a_prev = a
         self._state = state
 
         # Track current position in walk
@@ -1163,29 +1018,18 @@ class Rollout(Iterator[TEMState]):
 
         # Get current timestep
         locations, o, a = self.walk[self._idx]
+        a_prev = self._a_prev
+        state = self._state
         self._idx += 1
 
         # Run model forward
-        hpc_state, mec_state, p_gen, x_gen, o_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._state)
-
-        # Build state with updated components
-        state = TEMState(
-            g=locations,
-            o=o,
-            a_prev=a,
-            lec_state=lec_state,
-            mec_state=mec_state,
-            hpc_state=hpc_state,
-            g_inf=g_inf,
-            p_inf=p_inf,
-            p_inf_x=p_inf_x,
-            p_gen=p_gen,
-            x_gen=x_gen,
-            o_logits=o_logits,
-        )
+        predictions, state = self.model(o, locations, a_prev, state)
 
         # Update prev-values for next iteration
         self._a_prev = a
         self._state = state
 
-        return state
+        # Prepare labels for loss computation
+        labels = TEMLabel(o=o, locations=locations)
+
+        return predictions, state, labels

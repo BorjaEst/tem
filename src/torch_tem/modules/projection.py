@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from abc import ABC, abstractmethod
 from typing import List, Literal, Optional, Protocol, Sequence
 
 import torch
@@ -19,103 +20,106 @@ class TEMComponent(Protocol):
 class ProjectionModule(nn.Module):
 
     def __init__(self, z_from: TEMComponent, z_to: TEMComponent, settings: ProjectionSettings):
-        shape_from, shape_to = z_from.shape, z_to.shape
-        if len(shape_from) != len(shape_to):
+        self._shape_from, self._shape_to = z_from.shape, z_to.shape
+        if len(self._shape_from) != len(self._shape_to):
             raise ValueError("Components must have the same number of frequency modules.")
 
         super().__init__()
+        self._module: Optional[AbstractModule] = None
         self._settings = settings
-        self._projection_module = _select_module(settings, shape_from, shape_to)
-        self.set_learning(settings.learnable)
+        self._module = self.create_module(settings, self._shape_from, self._shape_to)
+        self.set_learning()
 
-    @property
-    def w(self):
-        return self._projection_module.w
-
-    def set_learning(self, enable: bool) -> None:
-        """Enable or disable learning of projection weights."""
-        for param in self._projection_module.parameters():
-            param.requires_grad = enable
-        # Note: settings is immutable, don't try to update it
-
-    def set_w(self, w: List[Tensor]) -> None:
-        """Set projection weights directly."""
-        target = self._projection_module.w
-        if isinstance(target, nn.ParameterList):
-            if len(w) != len(target):
-                raise ValueError(f"Expected {len(target)} tensors, got {len(w)}.")
-            with torch.no_grad():
-                for i, wi in enumerate(w):
-                    target[i].copy_(wi)
+    @staticmethod
+    def create_module(settings: ProjectionSettings, shape_from: List[int], shape_to: List[int]) -> nn.Module:
+        if settings.mode == "tiling":
+            module = TileModule(shape_from, shape_to, settings)
+        elif settings.mode == "low_rank":
+            module = LowRankModule(shape_from, shape_to, settings)
         else:
-            with torch.no_grad():
-                target.copy_(w)
+            raise ValueError(f"Unknown projection mode: {settings.mode}")
+        return module
+
+    def set_learning(self) -> None:
+        """Enable or disable learning of projection weights."""
+        for param in self._module.parameters():
+            param.requires_grad = self._settings.learnable
 
     def forward(self, z: List[Tensor]) -> List[Tensor]:
-        return self._projection_module(z)
+        return self._module.forward(z)
 
     def inverse(self, p: List[Tensor]) -> List[Tensor]:
-        return self._projection_module.inverse(p)
+        return self._module.inverse(p)
 
 
-class TileModule(nn.Module):
+class AbstractModule(nn.Module, ABC):
+    @abstractmethod
+    def forward(self, z: List[Tensor]) -> List[Tensor]:
+        pass
+
+    @abstractmethod
+    def inverse(self, p: List[Tensor]) -> List[Tensor]:
+        pass
+
+
+class TileModule(AbstractModule):
 
     def __init__(self, shape_from: List[int], shape_to: List[int], settings: ProjectionSettings):
         super(TileModule, self).__init__()
-        self.settings = settings
-        w_list = utils.create_tiling_matrices(shape_from, shape_to)
-        self.w = nn.ParameterList([nn.Parameter(w) for w in w_list])
+        self._settings = settings
+        (w_list,) = self.create_matrices(shape_from, shape_to, settings)
+        self.w = nn.ParameterList([nn.Parameter(w, requires_grad=settings.learnable) for w in w_list])
+
+    @staticmethod
+    def create_matrices(shape_from: List[int], shape_to: List[int], settings: ProjectionSettings) -> List[Tensor]:
+        if settings.init == "identity":
+            w_list = utils.create_tiling_matrices(shape_from, shape_to)
+        elif settings.init == "random":
+            w_list = utils.create_random_projection(shape_from, shape_to)
+        else:
+            raise ValueError(f"Unknown init strategy: {settings.init}")
+        return [w_list]
 
     def forward(self, z_from: List[Tensor]) -> List[Tensor]:
+        # z[f]: [B, n_in] -> [B, n_out]
         return [torch.matmul(z_from[f], self.w[f]) for f in range(len(z_from))]
 
     def inverse(self, z_to: List[Tensor]) -> List[Tensor]:
+        # z[f]: [B, n_out] -> [B, n_in]
         return [torch.matmul(z_to[f], self.w[f].T) for f in range(len(z_to))]
 
 
-class LowRankModule(nn.Module):
+class LowRankModule(AbstractModule):
 
     def __init__(self, shape_from: List[int], shape_to: List[int], settings: ProjectionSettings):
         super(LowRankModule, self).__init__()
-        self.settings = settings
-        self._shape_from = list(shape_from)
-        self._shape_to = list(shape_to)
-
-        rank_list = _coerce_rank_list(getattr(settings, "rank", None), shape_from, shape_to)
-
-        if settings.init == "identity":
-            # Legacy-equivalent: downsample to r dims, then repeat to n_out
-            w_down = utils.create_downsample_matrix(shape_from, rank_list)
-            w_repeat = utils.create_repeat_matrices(rank_list, shape_to)
-        elif settings.init == "random":
-            w_down = [torch.randn(n_in, r, dtype=torch.float) / math.sqrt(max(1, n_in)) for n_in, r in zip(shape_from, rank_list)]
-            w_repeat = [torch.randn(r, n_out, dtype=torch.float) / math.sqrt(max(1, r)) for r, n_out in zip(rank_list, shape_to)]
-        else:
-            raise ValueError(f"Unknown init strategy: {settings.init}")
-
+        self._settings = settings
+        w_down, w_repeat = self.create_matrices(shape_from, shape_to, settings)
         self.w_down = nn.ParameterList([nn.Parameter(w, requires_grad=settings.learnable) for w in w_down])
         self.w_repeat = nn.ParameterList([nn.Parameter(w, requires_grad=settings.learnable) for w in w_repeat])
 
-    @property
-    def w(self) -> List[Tensor]:
-        # Full matrices for inspection (not stored)
-        return [self.w_down[f] @ self.w_repeat[f] for f in range(len(self.w_down))]
+    @staticmethod
+    def create_matrices(shape_from: List[int], shape_to: List[int], settings: ProjectionSettings) -> List[Tensor]:
+        rank_list = _coerce_rank_list(settings.rank, shape_from, shape_to)
+        if settings.init == "identity":  # Legacy-equivalent: downsample to r dims, then repeat to n_out
+            w_down = utils.create_downsample_matrix(shape_from, rank_list)
+            w_repeat = utils.create_repeat_matrices(rank_list, shape_to)
+        elif settings.init == "random":
+            w_down = utils.create_random_projection(shape_from, rank_list)
+            w_repeat = utils.create_random_projection(rank_list, shape_to)
+        else:
+            raise ValueError(f"Unknown init strategy: {settings.init}")
+        return [w_down, w_repeat]
 
     def forward(self, z_from: List[Tensor]) -> List[Tensor]:
         # z[f]: [B, n_in] -> [B, r] -> [B, n_out]
-        return [torch.matmul(torch.matmul(z_from[f], self.w_down[f]), self.w_repeat[f]) for f in range(len(z_from))]
+        z_down = [torch.matmul(z_from[f], self.w_down[f]) for f in range(len(z_from))]
+        return [torch.matmul(z_down[f], self.w_repeat[f]) for f in range(len(z_down))]
 
     def inverse(self, z_to: List[Tensor]) -> List[Tensor]:
-        # Approx reverse: p -> g_downsampled -> g
-        return [torch.matmul(torch.matmul(z_to[f], self.w_repeat[f].T), self.w_down[f].T) for f in range(len(z_to))]
-
-
-def _select_module(settings: ProjectionSettings, shape_from: List[int], shape_to: List[int]) -> nn.Module:
-    if settings.mode == "tiling":
-        return TileModule(shape_from, shape_to, settings)
-    if settings.mode == "low_rank":
-        return LowRankModule(shape_from, shape_to, settings)
-    raise ValueError(f"Unknown projection mode: {settings.mode}")
+        # z[f]: [B, n_out] -> [B, r] -> [B, n_in]
+        z_down = [torch.matmul(z_to[f], self.w_repeat[f].T) for f in range(len(z_to))]
+        return [torch.matmul(z_down[f], self.w_down[f].T) for f in range(len(z_down))]
 
 
 def _coerce_rank_list(rank, shape_from: Sequence[int], shape_to: Sequence[int]) -> List[int]:

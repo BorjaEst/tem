@@ -86,13 +86,18 @@ class HPCModel(nn.Module):
     def generative(self, p_g, state: HPCState) -> Tuple[List[Tensor], HPCState]:
         # Retreive memory: do pattern completion on abstract location to get grounded location
         if not self._settings.do_sample:
-            return p_g, state
+            return p_g, HPCState(p=p_g, memory=state.memory)
         sigma_p = self.MLP_sigma_p(p_g)
         p = [p_g[f] + sigma_p[f] * torch.randn_like(sigma_p[f]) for f in range(self.n_freq)]
-        return p, state
+        return p, HPCState(p=p, memory=state.memory)
 
-    # def inference(self, x_, p_g, state: HPCState) -> Tuple[List[Tensor], HPCState]:
-    #     ??
+    def inference(self, x_: List[Tensor], g_: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
+        mu_p = self.f_p([g_[f] * x_[f] for f in range(self.n_freq)])  # This is element-wise multiplication
+        if not self._settings.do_sample:
+            return mu_p, HPCState(p=mu_p, memory=state.memory)
+        sigma_p = self.MLP_sigma_p(mu_p)
+        p = [mu_p[f] + sigma_p[f] * torch.randn_like(sigma_p[f]) for f in range(self.n_freq)]
+        return p, HPCState(p=p, memory=state.memory)
 
     def attractor(self, p_query, M, retrieve_it_mask=None):
         # Retreive grounded location from attractor network memory with weights M by pattern-completing query
@@ -131,8 +136,7 @@ class HPCModel(nn.Module):
 
     def f_p(self, p):
         # Calculate activation for inferred grounded location, using a leaky relu for sparsity. Either apply to full multi-frequency grounded location or single frequency module
-        activation = [utils.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p] if type(p) is list else utils.leaky_relu(torch.clamp(p, min=-1, max=1))
-        return activation
+        return [utils.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p] if type(p) is list else utils.leaky_relu(torch.clamp(p, min=-1, max=1))
 
 
 def p_update_mask(hpc: HPCModel, f_init: List[float]) -> Tensor:

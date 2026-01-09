@@ -774,6 +774,11 @@ class TEMModel(nn.Module):
         return M, mec_state, predictions.p_gen, predictions.o_hat, predictions.o_logits, lec_state, g_inf, p_inf, p_inf_x
 
     def _future_forward(self, o, locations, a_prev, state: TEMState):
+        """Future-style forward pass returning full TEMState.
+        Combines transition, observe, predict, and update_memory into single pass.
+        It is not completed and might have some inaccuracies and bugs.
+        """
+
         z = self.autoencoder.encode(o)
         mec_state = self.mec.generative(a_prev, locations, state.mec_state)  # Path integration
         lec_state = self.lec.inference(z, state.lec_state)  # Update x fom observation
@@ -794,13 +799,7 @@ class TEMModel(nn.Module):
         x = self.lec_projection.inverse(p_x)
         o_hat, o_logits = self.autoencoder.decode(x)
 
-        return TEMState(
-            predictions=TEMPrediction(o_hat=[o_hat], o_logits=[o_logits], p_gen=[]),
-            lec_state=lec_state,
-            mec_state=mec_state,
-            hpc_state=hpc_state,
-            observation=o,
-        )
+        return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
 
     def transition(self, mec_state: MECState, a_prev, locations, device) -> MECState:
         """Transition: MEC path integration (action-driven, no observation).

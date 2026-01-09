@@ -38,6 +38,9 @@ class HPCModel(nn.Module):
         self._n_p = shape
         self._i_attractor = i_attractor
 
+        if self._i_attractor < 1 or self._i_attractor > len(self._n_p):
+            raise ValueError(f"i_attractor must be in [1, n_freq]. Got i_attractor={self._i_attractor}, n_freq={len(self._n_p)}.")
+
         # Store runtime parameters
         self.runtime = HPCRuntime()
 
@@ -127,9 +130,9 @@ def p_update_mask(hpc: HPCModel, f_init: List[float]) -> Tensor:
     for f_from in range(n_f):
         for f_to in range(n_f):
             # For connections that involve separate object vector modules
-            if f_from > i_attractor or f_to > i_attractor:
+            if f_from >= i_attractor or f_to >= i_attractor:
                 # Connection between object vector modules: only allow from low to high frequency
-                if f_from > i_attractor and f_to > i_attractor:
+                if f_from >= i_attractor and f_to >= i_attractor:
                     if f_init[f_from] <= f_init[f_to]:
                         mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
                 # Connection between object vector and normal modules: allow any connections

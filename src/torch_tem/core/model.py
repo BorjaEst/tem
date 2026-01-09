@@ -378,9 +378,9 @@ class Parameters(BaseModel):
         for f_from in range(self.n_f):
             for f_to in range(self.n_f):
                 # For connections that involve separate object vector modules
-                if f_from > self.n_f_g or f_to > self.n_f_g:
+                if f_from >= self.n_f_g or f_to >= self.n_f_g:
                     # Connection between object vector modules: only allow from low to high frequency
-                    if f_from > self.n_f_g and f_to > self.n_f_g:
+                    if f_from >= self.n_f_g and f_to >= self.n_f_g:
                         if self.f_initial[f_from] <= self.f_initial[f_to]:
                             mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
                     # Connection between object vector and normal modules: allow any connections
@@ -708,7 +708,7 @@ class TEMModel(nn.Module):
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
         self.lec = lec = LECModel(n_c, n_x, f_init, params.lec_settings)
         self.mec = mec = MECModel(n_a, n_g, f_init, params.mec_settings)
-        self.hpc = hpc = HPCModel(mec.grid.n_freq, n_p, f_init, params.hpc_settings)  # i_attactor must be equal to n of frequencies for grid cells
+        self.hpc = hpc = HPCModel(params.i_attractor, n_p, f_init, params.hpc_settings)  # i_attactor must be equal to n of frequencies for grid cells
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
         self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
 

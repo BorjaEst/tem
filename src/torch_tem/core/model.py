@@ -617,15 +617,13 @@ class TEMState:
                 return None
             if isinstance(obj, LECState):
                 return LECState(
-                    c=_detach(obj.c),
                     x=_detach(obj.x),
                     x_filtered=_detach(obj.x_filtered),
                 )
             if isinstance(obj, MECState):
                 return MECState(
-                    g_gen=_detach(obj.g_gen),
-                    g_path=Transition(mean=_detach(obj.g_path.mean), uncertainty=_detach(obj.g_path.uncertainty)),
                     g=_detach(obj.g),
+                    uncertainty=_detach(obj.uncertainty),
                 )
             if isinstance(obj, HPCState):
                 return HPCState(
@@ -763,22 +761,23 @@ class TEMModel(nn.Module):
             a_idx = torch.tensor([int(a) if a is not None else 0 for a in a_prev], dtype=torch.long, device=device)
             a_prev = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
 
-        # 1. Retrieve place from generated grid (full generative path)
+        # 1. Retrieve place from generated grid (ancestral / path-integration prior)
         g_gen, mec_state = self.mec.generative(a_prev, locations, mec_state)
         g_ = self.mec_projection(g_gen)  # Project to memory format
         p_g_gen = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
 
-        # 2. Decode from inferred place cells (recognition path)
+        # 2. Retrieve place from sensory experience (x -> p)
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
         p_x_inf = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
 
-        # 3. Retrieve place from inferred grid (memory-consistency path)
-        # g_inf, mec_state = self.mec.inference(p_x_inf, o, locations, mec_state)
-        g_inf = self.mec_inference(p_x_inf, g_gen, o, locations)
+        # 3. Infer grid (posterior) by combining path-integration transition with memory cue
+        # NOTE: mec_inference expects a Transition (mean + uncertainty), not g_gen.
+        # g_inf = self.mec_inference(p_x_inf, mec_state.g_path, o, locations)
+        g_inf = self.mec_inference(p_x_inf, o, locations, mec_state)
         mec_state.g = g_inf  # Update mec_state.g for next iteration
         g_ = self.mec_projection(g_inf)  # Project to memory format
-        p_g_inf = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
+        p_g_inf = self.hpc.attractor(g_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
 
         # Retrieve grounded location from memory by pattern completion on inferred abstract location
         # This is p(g_inf) in the paper: used for L_p_g loss and Hebbian update
@@ -796,7 +795,7 @@ class TEMModel(nn.Module):
         # If using memory for grounded location inference: append inference memory
         if self.hyper["use_p_inf"]:
             # Inference memory is identical to generative memory if using common memory, and updated separately if not
-            M.append(M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
+            M.append(M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory[1], torch.cat(p_inf, dim=1), torch.cat(p_x_inf, dim=1), do_hierarchical_connections=False))
         hpc_state = HPCState(p=hpc_state.p, memory=M)
 
         # Construct new TEMState for next iteration
@@ -839,15 +838,10 @@ class TEMModel(nn.Module):
         self.hyper["batch_size"] = o.shape[0]
         # Initialize memory (now owned by HPCState)
         memory = M if M is not None else self._init_memory(batch_size=int(self.hyper["batch_size"]), device=o.device)
-        # Initialise previous abstract location by stacking abstract location prior
-        g_inf = [torch.stack([self.mec.grid.g_init_mean[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
-        # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
-        x_filtered = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x"][f]), device=o.device) for f in range(self.hyper["n_f"])]
         # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
-        c_init = self.autoencoder.encode(o)
-        lec_state = LECState(c=c_init, x=x_filtered, x_filtered=x_filtered)
+        lec_state = self.lec.init_state(self.hyper["batch_size"], device=o.device)
         # Create initial MEC state (g_gen starts as g_inf since no movement yet, g_path.mean is g_inf with zero uncertainty)
-        mec_state = MECState(g_gen=g_inf, g_path=Transition(mean=g_inf, uncertainty=[torch.zeros_like(g) for g in g_inf]))
+        mec_state = self.mec.init_state(self.hyper["batch_size"], device=o.device)
         # Create initial HPC state with initialized memory
         p_init = [torch.zeros((int(self.hyper["batch_size"]), int(n)), device=o.device) for n in self.hyper["n_p"]]
         hpc_state = HPCState(p=p_init, memory=memory)
@@ -889,7 +883,8 @@ class TEMModel(nn.Module):
         probability = utils.softmax(logits)
         return probability, logits
 
-    def mec_inference(self, p_x, g_path: Transition, o, locations):
+    def mec_inference(self, p_x, o, locations, mec_state: MECState):
+        g_path = Transition(mean=mec_state.g, uncertainty=mec_state.uncertainty)
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_p_inf"]:
             # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T

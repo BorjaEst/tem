@@ -76,7 +76,7 @@ class GridModel(nn.Module):
         uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
         return Transition(mean=mean, uncertainty=uncertainty)
 
-    def forward(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Tuple[List[Tensor], Transition]:
+    def forward(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Transition:
         """Return the transition distribution (mu, sigma) before sampling.
 
         Args:
@@ -87,20 +87,18 @@ class GridModel(nn.Module):
         Returns:
             Transition with mean and uncertainty
         """
-        mu = self.g_mean(a, g, no_direc=no_direc)
         sigma = self.g_uncertainty(g)
+        mu = self.g_mean(a, g, no_direc=no_direc)
 
         # Sample g from (mu, sigma) if enabled (legacy behavior)
-        g_path = self.sample_g(mu, sigma)
+        mu = self.sample_g(mu, sigma) if self._settings.do_sample else mu
 
-        # if ANY shiny env exists, recompute g_gen for ALL envs from PREVIOUS g (not transitioned)
+        # Recompute mean taking into account possible shiny non-directional
         shiny_envs = no_direc if no_direc is not None else [False] * a.size(0)
         if any(shiny_envs):
-            g_gen = self.g_mean(a, g, no_direc=shiny_envs)  # from previous g
-        else:
-            g_gen = g_path.mean  # transitioned
+            mu = self.g_mean(a, mu, no_direc=shiny_envs)  # from previous g
 
-        return g_gen, g_path
+        return Transition(mean=mu, uncertainty=sigma)
 
     # ---------------------------------------------------------------------
     # Mean / uncertainty (legacy f_mu_g_path / f_sigma_g_path)
@@ -126,12 +124,10 @@ class GridModel(nn.Module):
     # Helper functions (small + explicit)
     # ---------------------------------------------------------------------
 
-    def sample_g(self, mu, sigma) -> Transition:
+    def sample_g(self, mu, sigma) -> List[Tensor]:
         """Sample g from (mu, sigma) if enabled (legacy behavior)."""
-        if not self._settings.do_sample:
-            return Transition(mean=mu, uncertainty=sigma)
         mu = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu, sigma)]
-        return Transition(mean=mu, uncertainty=sigma)
+        return mu
 
     def transition_matrices(self, a: Tensor, no_direc: list[bool]) -> List[Tensor]:
         """Compute per-frequency transition matrices, applying no-direction rows."""

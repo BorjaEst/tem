@@ -69,7 +69,7 @@ class LossX:
         retrieved: Retrieved pathway loss ($g_{inf} \to p \to x$). Predicts via
             grounded location retrieved from inferred abstract location.
         ancestral: Ancestral/generative pathway loss ($g_{t-1} \to g_t \to p \to x$).
-            Predicts via one-step transition in abstract space.
+            Predicts via one-state transition in abstract space.
 
     Note:
         Shape is scalar (reduced) or ``(B,)`` depending on reduction mode.
@@ -186,7 +186,7 @@ class LossG:
 
     Attributes:
         transition: Transition consistency ($||g_{inf} - g_{gen}||^2$ or KL divergence).
-            Compares inference with one-step prediction from previous timestep.
+            Compares inference with one-state prediction from previous timestate.
     """
 
     transition: Tensor
@@ -568,9 +568,9 @@ class LossOutput:
         Accumulating losses over a rollout::
 
             accum = LossOutput.zero(device=device)
-            for step in rollout:
-                step_loss = loss_fn(step)
-                accum = accum + step_loss
+            for state in rollout:
+                state_loss = loss_fn(state)
+                accum = accum + state_loss
             mean_loss = accum / len(rollout)
     """
 
@@ -640,7 +640,7 @@ AccumLoss = LossOutput
 class TEMLoss(nn.Module):
     """Top-level TEM loss computation module.
 
-    Orchestrates all loss components for a single timestep, applying configured
+    Orchestrates all loss components for a single timestate, applying configured
     weights and reduction modes. This is the primary interface used by the
     training loop.
 
@@ -673,12 +673,12 @@ class TEMLoss(nn.Module):
         self.loss_g_fn = AbstractLocationLoss(config.g)
         self.loss_reg_fn = RegularizationLoss(config.reg)
 
-    def forward(self, prediction: TEMPrediction, step: TEMState, label: TEMLabel, use_p_inf: bool) -> LossOutput:
+    def forward(self, prediction: TEMPrediction, state: TEMState, label: TEMLabel, use_p_inf: bool) -> LossOutput:
         # Move use_p_inf to GroundedLocationConfig
         """Compute weighted loss components for one timestep.
 
         Args:
-            step: TEMState at current timestep.
+            state: TEMState at current timestep.
             use_p_inf: Whether to include sensory grounded-location term.
 
         Returns:
@@ -686,8 +686,8 @@ class TEMLoss(nn.Module):
         """
         # Raw (possibly per-env) losses
         lx: LossX = self.loss_x_fn(prediction.o_logits, label.o)
-        lg: LossG = self.loss_g_fn(step.g_inf, step.g_gen)
-        lp: LossP = self.loss_p_fn(step.p_inf, prediction.p_gen, step.p_inf_x, use_p_inf)
-        lreg: LossReg = self.loss_reg_fn(step.g_inf, step.p_inf)
+        lg: LossG = self.loss_g_fn(state.g_inf, state.g_gen)
+        lp: LossP = self.loss_p_fn(state.p_g_inf, state.p_g_gen, state.p_x_inf, use_p_inf)
+        lreg: LossReg = self.loss_reg_fn(state.g_inf, state.p_g_inf)
 
         return LossOutput(x=lx, p=lp, g=lg, reg=lreg)

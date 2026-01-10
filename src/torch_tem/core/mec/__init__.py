@@ -23,22 +23,14 @@ from torch_tem.types import Transition
 
 @dataclass
 class MECState:
-    """State container for MEC dynamics.
+    """State container for MEC dynamics."""
 
-    Attributes:
-        g_gen: Ancestral prediction for the generative pathway.
-        g_path: Path integration prior (mean, uncertainty) for inference.
-        g: Infered abstract location.
-    """
-
-    g_gen: List[Tensor]
-    g_path: Transition
+    # Recurrent carry state (posterior grid from previous step)
     g: Optional[List[Tensor]] = None
+    uncertainty: Optional[List[Tensor]] = None
 
-    def __post_init__(self):
-        """Ensure g is always defined (defaults to g_path.mean)."""
-        if self.g is None:
-            self.g = list(self.g_path.mean)
+    # Optional object-vector cell state (not yet used)
+    ovc: Optional[List[Tensor]] = None
 
 
 class MECModel(nn.Module):
@@ -56,6 +48,11 @@ class MECModel(nn.Module):
         # Initialize OVCModel (shiny landmark heads).
         # OVCModel is responsible for selecting which modules are OVC based on settings.ovc_cells.
         self.ovc = OVCModel(shape, f_init, settings=settings.ovc_cells)
+
+    def init_state(self, batch_size: int, device: torch.device) -> MECState:
+        """Initialize MEC state with zeros."""
+        gt_0 = self.grid.g_init(batch_size, device)
+        return MECState(g=gt_0.mean, uncertainty=gt_0.uncertainty)
 
     @property
     def n_in(self) -> int:
@@ -88,7 +85,9 @@ class MECModel(nn.Module):
             state: Current MEC state
 
         Returns:
-            New MECState with updated g_gen and g_path.
+            Tuple of:
+            - g_gen: Generated grid cell activations (before memory retrieval)
+            - Updated MECState with
 
         Note:
             Caller is responsible for resetting state.g to g_init at episode boundaries.
@@ -96,9 +95,9 @@ class MECModel(nn.Module):
         """
         # Shiny envs use no_direc=True (no action-driven transitions)
         no_direc = [loc.get("shiny") is not None for loc in locations]
-        g_gen, transition = self.grid(a, state.g, no_direc=no_direc)
+        transition = self.grid(a, state.g, no_direc=no_direc)
 
-        return g_gen, MECState(g_gen=g_gen, g_path=transition)
+        return transition.mean, MECState(g=transition.mean, uncertainty=transition.uncertainty)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         raise NotImplementedError("MEC inference not implemented yet.")

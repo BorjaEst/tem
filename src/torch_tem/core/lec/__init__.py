@@ -17,7 +17,6 @@ from torch_tem.settings import LECSettings
 class LECState:
     """State container for TEM model components."""
 
-    c: Tensor  # Compressed observation
     x: List[Tensor]  # Multi-frequency filtered features
     x_filtered: List[Tensor]  # Unweighted filtered features
 
@@ -54,6 +53,11 @@ class LECModel(nn.Module):
         self.w_x = torch.nn.Parameter(torch.tensor(1.0))  # For reconstructing c from x
         self.b_x = torch.nn.Parameter(torch.zeros(self._n_c))  # Bias for reconstructing c from x
 
+    def init_state(self, batch_size: int, device: torch.device) -> LECState:
+        """Initialize LEC state with zeros."""
+        x0 = [torch.zeros((batch_size, n), device=device) for n in self._n_x]
+        return LECState(x=x0, x_filtered=x0)
+
     @property
     def n_in(self) -> int:
         """Dimensionality of compressed features."""
@@ -79,7 +83,7 @@ class LECModel(nn.Module):
         # Normalize and weight filtered sensory experience for memory
         x_normalized = self.f_n(x_filtered)
         x = self.f_w(x_normalized)
-        return x, LECState(c=c, x=x, x_filtered=x_filtered)
+        return x, LECState(x=x, x_filtered=x_filtered)
 
     def x_prev2x(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
         # Calculate factor for filtering from sigmoid of learned parameter

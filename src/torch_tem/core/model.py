@@ -647,7 +647,7 @@ class TEMState:
                 return None
             if isinstance(obj, LECState):
                 # Detach LECState components
-                return LECState(c=_detach(obj.c), x=_detach(obj.x), x_filtered=_detach(obj.x_filtered))
+                return LECState(x=_detach(obj.x), x_filtered=_detach(obj.x_filtered))
             if isinstance(obj, MECState):
                 # Detach MECState components
                 return MECState(
@@ -682,6 +682,12 @@ class TEMState:
             p_inf=_detach(self.p_inf),
             p_inf_x=_detach(self.p_inf_x),
         )
+
+
+@dataclass
+class TEMLabel:
+    o: Tensor  # True sensory observation (for loss computation)
+    locations: List[Tensor]  # True locations (for loss computation)
 
 
 class TEMModel(nn.Module):
@@ -956,7 +962,6 @@ class TEMModel(nn.Module):
         # Use MEC's init_f method to set frequencies
         # self.mec.init_trainable(self.hyper["f_initial"]) already inits in MECModel __init__
         # self.mec_projection.init_trainable() already inits in ProjectionModule __init__
-        n_p = self.hyper["n_p"]
         n_g = self.hyper["n_g"]
         n_g_subsampled = self.hyper["n_g_subsampled"]
         g_mem_std = self.hyper["g_mem_std"]
@@ -979,8 +984,7 @@ class TEMModel(nn.Module):
         # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
         x_filtered = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x"][f]), device=o.device) for f in range(self.hyper["n_f"])]
         # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
-        c_init = self.autoencoder.encode(o)
-        lec_state = LECState(c=c_init, x=x_filtered, x_filtered=x_filtered)
+        lec_state = LECState(x=x_filtered, x_filtered=x_filtered)
         # Create initial MEC state (g_gen starts as g_inf since no movement yet, g_path.mean is g_inf with zero uncertainty)
         mec_state = MECState(g_gen=g_inf, g_path=Transition(mean=g_inf, uncertainty=[torch.zeros_like(g) for g in g_inf]))
         # Create initial HPC state with initialized memory

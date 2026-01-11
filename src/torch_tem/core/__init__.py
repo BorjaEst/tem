@@ -1,3 +1,3 @@
-from torch_tem.core.model import Parameters, Rollout, TEMModel, TEMPrediction, TEMState
+from torch_tem.core.model import Parameters, Rollout, TEMLabel, TEMModel, TEMPrediction, TEMState
 
-__all__ = ["TEMModel", "Parameters", "Rollout", "TEMState", "TEMPrediction"]
+__all__ = ["TEMModel", "Parameters", "Rollout", "TEMState", "TEMPrediction", "TEMLabel"]

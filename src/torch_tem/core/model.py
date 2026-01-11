@@ -973,6 +973,27 @@ class TEMModel(nn.Module):
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return o, logits
 
+    def f_o(self, p: Tensor):
+        # Calculate categorical probability distribution over observations for a given ground location
+        # Legacy behavior: p is only the highest-frequency module with shape (B, n_p[0])
+        # p is the outer product of g and x for the highest frequency (p = g^T * x)
+        # To get x from p, sum over abstract locations g (transpose of tiling matrix)
+
+        # Project highest-frequency grounded location back to all frequency modules
+        # using the inverse tiling operation for each frequency
+        p_list = [p] if isinstance(p, Tensor) else p  # Handle both Tensor and List[Tensor]
+        x = self.lec_projection.inverse(p_list)
+
+        # Reconstruct compressed features from filtered features (affine transform)
+        c = self.lec.reconstruct(x)
+
+        # Decompress c to observation logits using decoder
+        logits = self.autoencoder.decode(c)
+
+        # Keep both logits and probabilities
+        probability = utils.softmax(logits)
+        return probability, logits
+
     def inf_g(self, p_x, g_path: Transition, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_x_cued_recall"]:
@@ -1058,27 +1079,6 @@ class TEMModel(nn.Module):
     def f_sigma_p(self, p):
         # Multi layer perceptron to generate standard deviation of grounded location retrieval
         return self.MLP_sigma_p(p)
-
-    def f_o(self, p: Tensor):
-        # Calculate categorical probability distribution over observations for a given ground location
-        # Legacy behavior: p is only the highest-frequency module with shape (B, n_p[0])
-        # p is the outer product of g and x for the highest frequency (p = g^T * x)
-        # To get x from p, sum over abstract locations g (transpose of tiling matrix)
-
-        # Project highest-frequency grounded location back to all frequency modules
-        # using the inverse tiling operation for each frequency
-        p_list = [p] if isinstance(p, Tensor) else p  # Handle both Tensor and List[Tensor]
-        x = self.lec_projection.inverse(p_list)
-
-        # Reconstruct compressed features from filtered features (affine transform)
-        c = self.lec.reconstruct(x)
-
-        # Decompress c to observation logits using decoder
-        logits = self.autoencoder.decode(c)
-
-        # Keep both logits and probabilities
-        probability = utils.softmax(logits)
-        return probability, logits
 
     def f_c_star(self, c):
         """Decompress sensory experience. Delegates to Autoencoder."""

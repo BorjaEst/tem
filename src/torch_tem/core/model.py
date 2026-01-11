@@ -592,7 +592,6 @@ class TEMState:
     hpc_state: HPCState
 
     def detach(self) -> "TEMState":
-        """Return a detached copy suitable for storing as `prev_iter`."""
         return TEMState(
             lec_state=self.lec_state.detach(),
             mec_state=self.mec_state.detach(),

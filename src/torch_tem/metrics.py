@@ -21,96 +21,81 @@ from torch import Tensor
 
 @dataclass
 class AccuracyO:
-    """Sensory prediction accuracy metrics.
+    """Sensory prediction accuracy metrics with weighted averaging support.
 
     Attributes:
-        p: Accuracy of prediction from inferred grounded location (x_p pathway).
-        g: Accuracy of prediction from memory retrieval (x_g pathway).
-        gt: Accuracy of prediction from ancestral/generative rollout (x_gen pathway).
+        o_p_inf: Accuracy for inference pathway (float in [0.0, 1.0]).
+        o_gen_gi: Accuracy for retrieved pathway (float in [0.0, 1.0]).
+        o_gen_gg: Accuracy for ancestral pathway (float in [0.0, 1.0]).
+
+    Note:
+        Internal weight tracking (_total) is used for weighted averaging.
+        Users should not access or modify this field directly.
     """
 
-    p: Tensor  # x_p accuracy (infer pathway)
-    g: Tensor  # x_g accuracy (retrieved pathway)
-    gt: Tensor  # x_gen accuracy (ancestral/generative pathway)
-
-
-@dataclass
-class AccuracyCounts:
-    """Accumulator for sensory accuracy computation.
-
-    Stores sums of correct predictions (numerators) and the number of evaluated
-    predictions (denominator). This mirrors the loss accumulation pattern and
-    can be converted to :class:`AccuracyO` at the end of a rollout.
-
-    Attributes:
-        p: Sum of correct predictions from inference pathway.
-        g: Sum of correct predictions from retrieved pathway.
-        gt: Sum of correct predictions from ancestral pathway.
-        total: Total number of evaluated predictions.
-    """
-
-    p: Tensor
-    g: Tensor
-    gt: Tensor
-    total: Tensor
+    o_p_inf: Tensor  # inference pathway
+    o_gen_gi: Tensor  # retrieved pathway
+    o_gen_gg: Tensor  # ancestral pathway
+    _total: Tensor | None = None  # weight for averaging (internal)
 
     @classmethod
-    def zero(cls, *, device: torch.device | str, dtype: torch.dtype = torch.float32) -> "AccuracyCounts":
-        """Create a zero-initialized accumulator.
+    def zero(cls, *, device: torch.device | str, dtype: torch.dtype = torch.float32) -> "AccuracyO":
+        """Create a zero-initialized accuracy.
 
         Args:
             device: Device for tensor allocation.
             dtype: Data type for tensors.
 
         Returns:
-            Zero-initialized :class:`AccuracyCounts`.
+            Zero-initialized :class:`AccuracyO`.
         """
         z = torch.zeros((), device=device, dtype=dtype)
-        return cls(p=z.clone(), g=z.clone(), gt=z.clone(), total=z.clone())
+        return cls(o_p_inf=z.clone(), o_gen_gi=z.clone(), o_gen_gg=z.clone(), _total=z.clone())
 
-    def __add__(self, other: "AccuracyCounts") -> "AccuracyCounts":
-        """Add two accuracy accumulators element-wise.
+    def __post_init__(self):
+        """Set default _total to 1 if not provided."""
+        if self._total is None:
+            # Use device and dtype from first accuracy tensor
+            self._total = torch.ones((), device=self.o_p_inf.device, dtype=self.o_p_inf.dtype)
+
+    def __add__(self, other: "AccuracyO") -> "AccuracyO":
+        """Add two accuracies with weighted averaging.
+
+        Combines weighted accuracies: (acc1 * weight1 + acc2 * weight2) / (weight1 + weight2)
 
         Args:
-            other: Another :class:`AccuracyCounts` to add.
+            other: Another :class:`AccuracyO` to add.
 
         Returns:
-            New :class:`AccuracyCounts` with summed components.
+            New :class:`AccuracyO` with weighted-averaged components.
         """
-        return AccuracyCounts(
-            p=self.p + other.p,
-            g=self.g + other.g,
-            gt=self.gt + other.gt,
-            total=self.total + other.total,
+        total_new = self._total + other._total
+        # Handle zero denominator case (both weights are 0)
+        # Clamp to minimum 1.0 to avoid NaN
+        denom = torch.clamp(total_new, min=1.0)
+        # Weighted average: (a1*w1 + a2*w2) / (w1 + w2)
+        return AccuracyO(
+            o_p_inf=(self.o_p_inf * self._total + other.o_p_inf * other._total) / denom,
+            o_gen_gi=(self.o_gen_gi * self._total + other.o_gen_gi * other._total) / denom,
+            o_gen_gg=(self.o_gen_gg * self._total + other.o_gen_gg * other._total) / denom,
+            _total=total_new,
         )
 
-    def __truediv__(self, divisor: int | float) -> "AccuracyCounts":
-        """Divide all components by a scalar.
+    def __truediv__(self, divisor: int | float) -> "AccuracyO":
+        """Divide internal weight by a scalar (accuracies unchanged).
 
         Args:
             divisor: Scalar divisor.
 
         Returns:
-            New :class:`AccuracyCounts` with scaled components.
+            New :class:`AccuracyO` with scaled internal weight.
         """
-        return AccuracyCounts(
-            p=self.p / divisor,
-            g=self.g / divisor,
-            gt=self.gt / divisor,
-            total=self.total / divisor,
+        return AccuracyO(
+            o_p_inf=self.o_p_inf,
+            o_gen_gi=self.o_gen_gi,
+            o_gen_gg=self.o_gen_gg,
+            _total=self._total / divisor,
         )
-
-    def to_accuracy(self) -> AccuracyO:
-        """Convert accumulated counts to mean accuracies.
-
-        Divides summed correct predictions by total count, handling the
-        zero-denominator case.
-
-        Returns:
-            :class:`AccuracyO` with mean accuracies in [0.0, 1.0].
-        """
-        denom = torch.clamp(self.total, min=1.0)
-        return AccuracyO(p=self.p / denom, g=self.g / denom, gt=self.gt / denom)
 
 
 class SensoryAccuracy(nn.Module):
@@ -162,14 +147,14 @@ class SensoryAccuracy(nn.Module):
         pred_gt = torch.argmax(o_logits[2], dim=1)  # ancestral pathway
 
         # Compute per-environment correctness (float 0.0 or 1.0)
-        acc_p = (pred_p == labels).float()
-        acc_g = (pred_g == labels).float()
-        acc_gt = (pred_gt == labels).float()
+        acc_o_p_inf = (pred_p == labels).float()
+        acc_o_gen_gi = (pred_g == labels).float()
+        acc_o_gen_gg = (pred_gt == labels).float()
 
         # Apply reduction if requested
         if self.reduction == "mean":
-            acc_p = acc_p.mean()
-            acc_g = acc_g.mean()
-            acc_gt = acc_gt.mean()
+            acc_o_p_inf = acc_o_p_inf.mean()
+            acc_o_gen_gi = acc_o_gen_gi.mean()
+            acc_o_gen_gg = acc_o_gen_gg.mean()
 
-        return AccuracyO(p=acc_p, g=acc_g, gt=acc_gt)
+        return AccuracyO(o_p_inf=acc_o_p_inf, o_gen_gi=acc_o_gen_gi, o_gen_gg=acc_o_gen_gg)

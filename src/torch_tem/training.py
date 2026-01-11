@@ -48,7 +48,7 @@ from torch.optim import Adam
 from torch_tem import losses, metrics, settings
 from torch_tem.core.model import Rollout, TEMLabel, TEMModel, TEMOutput, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
-from torch_tem.metrics import AccuracyCounts, AccuracyO
+from torch_tem.metrics import AccuracyO
 
 
 class TrainerConfig(BaseModel):
@@ -175,7 +175,7 @@ class TEMLightningModule(pl.LightningModule):
             raise ValueError("forward requires a non-empty chunk")
 
         accum = AccumLoss.zero(device=self.device)
-        acc_counts = AccuracyCounts.zero(device=self.device)
+        acc_counts = AccuracyO.zero(device=self.device)
 
         for output, labels, state in Rollout(self.tem, chunk, prev_state):
             step_contrib, acc_increments = self.model_iteration(output, labels, state, visited)
@@ -185,7 +185,7 @@ class TEMLightningModule(pl.LightningModule):
                 accum = accum + step_contrib
             acc_counts = acc_counts + acc_increments
 
-        final_acc = acc_counts.to_accuracy()
+        final_acc = acc_counts
 
         return accum, final_acc, state  # last_state
 
@@ -217,7 +217,7 @@ class TEMLightningModule(pl.LightningModule):
 
         return self.tem.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], memory)
 
-    def model_iteration(self, output: TEMOutput, label: TEMLabel, state: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyCounts]:
+    def model_iteration(self, output: TEMOutput, label: TEMLabel, state: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyO]:
         """Compute visit-masked loss and accuracy for a single timestep.
 
         Implements the revisit gating policy: losses and accuracies are only
@@ -235,14 +235,13 @@ class TEMLightningModule(pl.LightningModule):
             Tuple of:
                 step_loss: Mean loss over contributing environments, or None if
                     all environments are on first visits.
-                accuracy_counts: :class:`AccuracyCounts` with summed correct
-                    predictions and total count.
+                accuracy_counts: :class:`AccuracyO` with weighted accuracies.
         """
         step_losses = self.loss_fn(output, label, state)
         step_acc = self.acc_o_fn(output.reconstruction.o_logits, label.o)
 
         losses_per_env: list[StepLoss] = []
-        acc_total = AccuracyCounts.zero(device=self.device)
+        acc_total = AccuracyO.zero(device=self.device)
 
         for env_i, env_visited in enumerate(visited):
             loc_id = label.locations[env_i]["id"]
@@ -379,19 +378,24 @@ class TEMLightningModule(pl.LightningModule):
             loss_output: Complete loss output to log.
         """
         self.log(f"{prefix}loss", loss_output.total, prog_bar=True)
-        self.log(f"{prefix}Losses/Total", loss_output.total.detach())
-        # Individual components follow legacy naming for comparability.
-        self.log(f"{prefix}Losses/p_g", loss_output.p.abstract)
-        self.log(f"{prefix}Losses/p_x", loss_output.p.sensory)
-        self.log(f"{prefix}Losses/x_gen", loss_output.x.ancestral)
-        self.log(f"{prefix}Losses/x_g", loss_output.x.retrieved)
-        self.log(f"{prefix}Losses/x_p", loss_output.x.infer)
-        self.log(f"{prefix}Losses/g", loss_output.g.transition)
+
+        # Sensory reconstruction losses
+        self.log(f"{prefix}Losses/lx_p_inf", loss_output.x.infer)
+        self.log(f"{prefix}Losses/lx_p_gen_gi", loss_output.x.retrieved)
+        self.log(f"{prefix}Losses/lx_p_gen_gg", loss_output.x.ancestral)
+        self.log(f"{prefix}Losses/lx", loss_output.x.total)
+
+        # Abstract location consistency losses
+        self.log(f"{prefix}Losses/lg", loss_output.g.total)
+
+        # Grounded location consistency losses
+        self.log(f"{prefix}Losses/lp_g", loss_output.p.abstract)
+        self.log(f"{prefix}Losses/lp_x", loss_output.p.sensory)
+        self.log(f"{prefix}Losses/lp", loss_output.p.total)
+
+        # Regularization losses
         self.log(f"{prefix}Losses/reg_g", loss_output.reg.g_l2)
         self.log(f"{prefix}Losses/reg_p", loss_output.reg.p_l1)
-        self.log(f"{prefix}Losses/lx", loss_output.x.total)
-        self.log(f"{prefix}Losses/lp", loss_output.p.total)
-        self.log(f"{prefix}Losses/lg", loss_output.g.total)
 
     def _log_accuracy_metrics(self, *, prefix: str, accuracies: AccuracyO) -> None:
         """Log sensory prediction accuracies to tensorboard.
@@ -400,9 +404,9 @@ class TEMLightningModule(pl.LightningModule):
             prefix: Metric namespace prefix (e.g., "val/", "test/", "").
             accuracies: Accuracy metrics for the three prediction pathways.
         """
-        self.log(f"{prefix}Accuracies/p", accuracies.p)
-        self.log(f"{prefix}Accuracies/g", accuracies.g)
-        self.log(f"{prefix}Accuracies/gt", accuracies.gt)
+        self.log(f"{prefix}Accuracies/o_p_inf", accuracies.o_p_inf)
+        self.log(f"{prefix}Accuracies/o_gen_gi", accuracies.o_gen_gi)
+        self.log(f"{prefix}Accuracies/o_gen_gg", accuracies.o_gen_gg)
 
     def configure_optimizers(self):
         """Configure optimizer for training.
@@ -526,21 +530,21 @@ def env_step_loss(step_losses: LossOutput, env_i: int) -> StepLoss:
     )
 
 
-def env_acc_increments(step_acc: AccuracyO, env_i: int) -> AccuracyCounts:
-    """Extract accuracy counts for one environment.
+def env_acc_increments(step_acc: AccuracyO, env_i: int) -> AccuracyO:
+    """Extract accuracy for one environment.
 
     Args:
         step_acc: Batch-level accuracy (possibly unreduced).
         env_i: Environment index to extract.
 
     Returns:
-        :class:`AccuracyCounts` with per-pathway correctness and count of 1.
+        :class:`AccuracyO` with per-pathway correctness and internal weight of 1.
     """
-    p = select_env(step_acc.p, env_i)
-    g = select_env(step_acc.g, env_i)
-    gt = select_env(step_acc.gt, env_i)
-    total = torch.ones((), device=p.device, dtype=p.dtype)
-    return AccuracyCounts(p=p, g=g, gt=gt, total=total)
+    o_p_inf = select_env(step_acc.o_p_inf, env_i)
+    o_gen_gi = select_env(step_acc.o_gen_gi, env_i)
+    o_gen_gg = select_env(step_acc.o_gen_gg, env_i)
+    _total = torch.ones((), device=o_p_inf.device, dtype=o_p_inf.dtype)
+    return AccuracyO(o_p_inf=o_p_inf, o_gen_gi=o_gen_gi, o_gen_gg=o_gen_gg, _total=_total)
 
 
 def mean_step_losses(losses_per_env: list[StepLoss]) -> Optional[StepLoss]:

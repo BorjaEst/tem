@@ -34,6 +34,7 @@ class MECState:
     g_gen: List[Tensor]
     g_path: Transition
     g: Optional[List[Tensor]] = None
+    ovc: Optional[List[Tensor]] = None
 
     def __post_init__(self):
         """Ensure g is always defined (defaults to g_path.mean)."""
@@ -56,6 +57,11 @@ class MECModel(nn.Module):
         # Initialize OVCModel (shiny landmark heads).
         # OVCModel is responsible for selecting which modules are OVC based on settings.ovc_cells.
         self.ovc = OVCModel(shape, f_init, settings=settings.ovc_cells)
+
+    def init_state(self, batch_size: int, device: torch.device) -> MECState:
+        """Initialize MEC state with prior grid cell activations."""
+        g_init = self.grid.g_init(batch_size, device)
+        return MECState(g_gen=list(g_init.mean), g_path=g_init)
 
     @property
     def n_in(self) -> int:

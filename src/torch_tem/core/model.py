@@ -806,34 +806,6 @@ class TEMModel(nn.Module):
         # Return all iteration values (loss now computed in Lightning module)
         return hpc_state, mec_state, predictions.p_gen, predictions.o_hat, predictions.o_logits, lec_state, g_inf, p_inf, p_inf_x
 
-    def _future_forward(self, o, locations, a_prev, state: TEMState):
-        """Future-style forward pass returning full TEMState.
-        Combines transition, observe, predict, and update_memory into single pass.
-        It is not completed and might have some inaccuracies and bugs.
-        """
-
-        z = self.autoencoder.encode(o)
-        mec_state = self.mec.generative(a_prev, locations, state.mec_state)  # Path integration
-        lec_state = self.lec.inference(z, state.lec_state)  # Update x fom observation
-
-        # Calculate projected x_ so we can run MEC inference later
-        x_ = self.lec_projection(lec_state.x)
-        p_x = self.hpc.attractor(x_, state.hpc_state)
-
-        # MEC correction
-        mec_state = self.mec.inference(p_x, locations, o, mec_state)
-        g_ = self.mec_projection(mec_state.g)
-        p_g = self.hpc.attractor(g_, state.hpc_state, for_inference=False)
-
-        # Inference outputs and memory update
-        hpc_state = self.hpc(g_, x_, p_g, state.hpc_state)
-
-        # Predictions from corrected state
-        x = self.lec_projection.inverse(p_x)
-        o_hat, o_logits = self.autoencoder.decode(x)
-
-        return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
-
     def transition(self, mec_state: MECState, a_prev, locations, device) -> MECState:
         """Transition: MEC path integration (action-driven, no observation).
 
@@ -977,19 +949,13 @@ class TEMModel(nn.Module):
     def init_iteration(self, g, o, a, M):
         # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
         self.hyper["batch_size"] = o.shape[0]
-        # Initialize memory (now owned by HPCState)
-        memory = M if M is not None else self._init_memory(batch_size=int(self.hyper["batch_size"]), device=o.device)
-        # Initialise previous abstract location by stacking abstract location prior
-        g_inf = [torch.stack([self.mec.grid.g_init_mean[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
-        # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
-        x_filtered = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x"][f]), device=o.device) for f in range(self.hyper["n_f"])]
         # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
-        lec_state = LECState(x=x_filtered, x_filtered=x_filtered)
-        # Create initial MEC state (g_gen starts as g_inf since no movement yet, g_path.mean is g_inf with zero uncertainty)
-        mec_state = MECState(g_gen=g_inf, g_path=Transition(mean=g_inf, uncertainty=[torch.zeros_like(g) for g in g_inf]))
+        lec_state = self.lec.init_state(batch_size=self.hyper["batch_size"], device=o.device)
+        # Initialise previous abstract location by stacking abstract location prior
+        mec_state = self.mec.init_state(batch_size=self.hyper["batch_size"], device=o.device)
         # Create initial HPC state with initialized memory
-        p_init = [torch.zeros((int(self.hyper["batch_size"]), int(n)), device=o.device) for n in self.hyper["n_p"]]
-        hpc_state = HPCState(p=p_init, memory=memory)
+        hpc_state = self.hpc.init_state(batch_size=self.hyper["batch_size"], device=o.device)
+        hpc_state.memory = M if M is not None else self._init_memory(batch_size=int(self.hyper["batch_size"]), device=o.device)
         # And construct new iteration for that g, o, a, and M
         return TEMState(g=g, o=o, a_prev=a, lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
 

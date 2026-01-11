@@ -55,6 +55,12 @@ class GridModel(nn.Module):
         # Transition uncertainty model
         self.MLP_sigma_g_path = MLP(n_g, n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
+    def g_init(self, batch_size: int, device: torch.device) -> Transition:
+        """Return initial grid cell activations as (mean, uncertainty) Transition."""
+        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
+        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
+        return Transition(mean=mean, uncertainty=uncertainty)
+
     @property
     def n_in(self) -> int:
         """Dimensionality of grid cell activations."""
@@ -69,12 +75,6 @@ class GridModel(nn.Module):
     def n_freq(self) -> int:
         """Number of grid cell frequency modules."""
         return len(self.shape)
-
-    def g_init(self, batch_size: int, device: torch.device) -> Transition:
-        """Return initial grid cell activations as (mean, uncertainty) Transition."""
-        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
-        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
-        return Transition(mean=mean, uncertainty=uncertainty)
 
     def forward(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Tuple[List[Tensor], Transition]:
         """Return the transition distribution (mu, sigma) before sampling.

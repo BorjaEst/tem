@@ -232,12 +232,12 @@ class AbstractLocationLoss(nn.Module):
     Modes:
         mse:
             Surrogate objective using squared error (legacy):
-            $0.5 \sum_f ||g_{inf}^f - g_{gen}^f||^2$
+            $0.5 sum_f ||g_{inf}^f - g_{gen}^f||^2$
 
         kl:
             Uncertainty-weighted KL divergence. Requires :class:`Transition`
             input with mean and uncertainty:
-            $\sum_f D_{KL}(g_{inf}^f || \mathcal{N}(g_{gen}^f, \sigma_{gen}^f))$
+            $sum_f D_{KL}(g_{inf}^f || mathcal{N}(g_{gen}^f, sigma_{gen}^f))$
     """
 
     def __init__(self, settings: Optional[AbstractLocationSettings] = None):

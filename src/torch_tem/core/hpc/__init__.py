@@ -53,8 +53,16 @@ class HPCModel(nn.Module):
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
         """Initialize HPC state with empty memory and zeroed features."""
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
-        memory_init = [torch.zeros((sum(self.shape), sum(self.shape)), device=device)]
+        memory_init = [torch.zeros((sum(self.shape), sum(self.shape)), device=device)]  # Update to TEMModel._init_memory
         return HPCState(p=p_init, memory=memory_init)
+
+    # def _init_memory(self, *, batch_size: int, device: torch.device) -> List[Tensor]:
+    #     """Create initial Hebbian memory matrices in the legacy [M_gen, M_inf?] format."""
+    #     m0 = torch.zeros((batch_size, sum(self.shape), sum(self.shape)), dtype=torch.float, device=device)
+    #     memory = [m0]
+    #     if self.hyper["use_x_cued_recall"]:
+    #         memory.append(m0 if self.hyper["common_memory"] else m0.clone())
+    #     return memory
 
     @property
     def shape(self) -> List[int]:

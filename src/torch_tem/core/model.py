@@ -896,7 +896,7 @@ class TEMModel(nn.Module):
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
         p_x = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
-        g = self.inf_g(p_x, mec_state.g_path, o, locations)
+        g = self.mec_inference(p_x, o, locations, mec_state)
         # Prepare abstract location for input to memory by downsampling and weighting
         g_ = self.mec_projection(g)
         # Infer grounded location from sensory experience and inferred abstract location
@@ -994,7 +994,8 @@ class TEMModel(nn.Module):
         probability = utils.softmax(logits)
         return probability, logits
 
-    def inf_g(self, p_x, g_path: Transition, o, locations):
+    def mec_inference(self, p_x, o, locations, mec_state: MECState):
+        g_path = mec_state.g_path
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_x_cued_recall"]:
             # Not in paper, but makes sense from symmetry with f_o: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
@@ -1004,7 +1005,7 @@ class TEMModel(nn.Module):
             # Not in paper, but this greatly improves zero-shot inference: provide the uncertainty function of the inferred abstract location with measures of memory quality
             with torch.no_grad():
                 # For the first measure, use the grounded location inferred from memory to generate an observation
-                o_hat, x_hat_logits = self.gen_o(p_x[0])
+                o_hat, o_hat_logits = self.gen_o(p_x[0])
                 # Then calculate the error between the generated observation and the actual observation: if the memory is working well, this error should be small
                 err = utils.squared_error(o, o_hat)
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function

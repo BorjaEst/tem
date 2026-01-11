@@ -50,6 +50,12 @@ class HPCModel(nn.Module):
         # Initialize MLPs for generating grounded location statistics
         self.MLP_sigma_p = MLP(shape, shape, activation=[torch.tanh, torch.exp])
 
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
+        """Initialize HPC state with empty memory and zeroed features."""
+        p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
+        memory_init = [torch.zeros((sum(self.shape), sum(self.shape)), device=device)]
+        return HPCState(p=p_init, memory=memory_init)
+
     @property
     def shape(self) -> List[int]:
         """Dimensionality of features per frequency module."""
@@ -121,11 +127,11 @@ class HPCModel(nn.Module):
         p = [h_t[:, n_p[f] : n_p[f + 1]] for f in range(self.n_freq)]
         return p
 
-    def hebbian(self, M_prev, p_inferred, p_generated, do_hierarchical_connections=True):
+    def hebbian(self, M_prev, p_inf, p_gen, do_hierarchical_connections=True):
         # Create new ground memory for attractor network by setting weights to outer product of learned vectors
-        # p_inferred corresponds to p in the paper, and p_generated corresponds to p^.
+        # p_inf corresponds to p in the paper, and p_gen corresponds to p^.
         # The order of p + p^ and p - p^ is reversed since these are row vectors, instead of column vectors in the paper.
-        M_new = torch.squeeze(torch.matmul(torch.unsqueeze(p_inferred + p_generated, 2), torch.unsqueeze(p_inferred - p_generated, 1)))
+        M_new = torch.squeeze(torch.matmul(torch.unsqueeze(p_inf + p_gen, 2), torch.unsqueeze(p_inf - p_gen, 1)))
         # Multiply by connection vector, e.g. only keeping weights from low to high frequencies for hierarchical retrieval
         if do_hierarchical_connections:
             M_new = M_new * self.p_update_mask

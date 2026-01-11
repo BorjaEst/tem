@@ -92,7 +92,7 @@ class HPCParameters(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    use_p_inf: bool = Field(
+    use_x_cued_recall: bool = Field(
         default=True,
         description="Whether to use inferred ground location while inferring new abstract location",
     )
@@ -204,7 +204,7 @@ class Parameters(BaseModel):
         ):
             pop_into(key, mec)
 
-        for key in ("use_p_inf", "p2g_sig_val", "common_memory", "kappa"):
+        for key in ("use_x_cued_recall", "p2g_sig_val", "common_memory", "kappa"):
             pop_into(key, hpc)
 
         if world:
@@ -268,8 +268,8 @@ class Parameters(BaseModel):
         return self.mec.f_initial_base
 
     @property
-    def use_p_inf(self) -> bool:
-        return self.hpc.use_p_inf
+    def use_x_cued_recall(self) -> bool:
+        return self.hpc.use_x_cued_recall
 
     @property
     def p2g_sig_val(self) -> float:
@@ -501,7 +501,7 @@ class Parameters(BaseModel):
             "n_ovc_base": self.n_ovc_base,
             "f_initial_base": self.f_initial_base,
             # HPC
-            "use_p_inf": self.use_p_inf,
+            "use_x_cued_recall": self.use_x_cued_recall,
             "p2g_sig_val": self.p2g_sig_val,
             "common_memory": self.common_memory,
             "kappa": self.kappa,
@@ -585,8 +585,8 @@ class TEMPrediction:
     Contains all predictive outputs used for loss computation.
     """
 
-    o_hat: Sequence[Tensor]  # from (p_g_gen, p_x_inf, p_g_inf) - reconstructed sensory observation
-    o_logits: Sequence[Tensor]  # from (p_g_gen, p_x_inf, p_g_inf) - logits for loss
+    o_hat: Sequence[Tensor]  # from (p_gg, p_xi, p_g_inf) - reconstructed sensory observation
+    o_logits: Sequence[Tensor]  # from (p_gg, p_xi, p_g_inf) - logits for loss
 
 
 @dataclass
@@ -600,14 +600,14 @@ class TEMState:
     mec_state: Optional[MECState] = None
     hpc_state: Optional[HPCState] = None
 
-    # Abstract locations and grounded locations for loss computation
-    g_gen: Optional[List[Tensor]] = None
+    # Abstract locations and path integration transitions from 2 pathways
     g_inf: Optional[List[Tensor]] = None
+    g_gen: Optional[List[Tensor]] = None
 
     # Grounded locations for loss computation from 3 pathways
-    p_g_gen: Optional[List[Tensor]] = None
-    p_x_inf: Optional[List[Tensor]] = None
-    p_g_inf: Optional[List[Tensor]] = None
+    p_inf: Optional[List[Tensor]] = None
+    p_gen_gi: Optional[List[Tensor]] = None
+    p_xi: Optional[List[Tensor]] = None
 
     def detach(self) -> "TEMState":
         """Return a detached copy suitable for caching between rollout steps."""
@@ -644,11 +644,11 @@ class TEMState:
             lec_state=_detach(self.lec_state),
             mec_state=_detach(self.mec_state),
             hpc_state=_detach(self.hpc_state),
-            g_gen=_detach(self.g_gen),
             g_inf=_detach(self.g_inf),
-            p_g_gen=_detach(self.p_g_gen),
-            p_x_inf=_detach(self.p_x_inf),
-            p_g_inf=_detach(self.p_g_inf),
+            g_gen=_detach(self.g_gen),
+            p_inf=_detach(self.p_inf),
+            p_gen_gi=_detach(self.p_gen_gi),
+            p_xi=_detach(self.p_xi),
         )
 
 
@@ -730,7 +730,7 @@ class TEMModel(nn.Module):
             device=device,
         )
         memory = [m0]
-        if self.hyper["use_p_inf"]:
+        if self.hyper["use_x_cued_recall"]:
             memory.append(m0 if self.hyper["common_memory"] else m0.clone())
         return memory
 
@@ -764,48 +764,49 @@ class TEMModel(nn.Module):
         # 1. Retrieve place from generated grid (ancestral / path-integration prior)
         g_gen, mec_state = self.mec.generative(a_prev, locations, mec_state)
         g_ = self.mec_projection(g_gen)  # Project to memory format
-        p_g_gen = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        p_gg = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        p_gen_gg, hpc_state = self.hpc.generative(p_gg, hpc_state)  # Generated grounded location from generative path
 
         # 2. Retrieve place from sensory experience (x -> p)
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
-        p_x_inf = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
+        p_xi = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
+        # there is no generation of p_gen_xi
 
         # 3. Infer grid (posterior) by combining path-integration transition with memory cue
         # NOTE: mec_inference expects a Transition (mean + uncertainty), not g_gen.
-        # g_inf = self.mec_inference(p_x_inf, mec_state.g_path, o, locations)
-        g_inf = self.mec_inference(p_x_inf, o, locations, mec_state)
+        # g_inf, mec_state = self.mec.inference(p_xi, , o, locations, mec_state)
+        g_inf = self.mec_inference(p_xi, o, locations, mec_state)
         mec_state.g = g_inf  # Update mec_state.g for next iteration
         g_ = self.mec_projection(g_inf)  # Project to memory format
-        p_g_inf = self.hpc.attractor(g_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
-
-        # Retrieve grounded location from memory by pattern completion on inferred abstract location
-        # This is p(g_inf) in the paper: used for L_p_g loss and Hebbian update
-        p_gen, hpc_state = self.hpc.generative(p_g_gen, hpc_state)
-        # ??? Update gen memory with generated grounded location here instead of after inference???
-        # Ideally memory gets updated in the hpc.generative call
+        p_gi = self.hpc.attractor(g_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
+        p_gen_gi, hpc_state = self.hpc.generative(p_gi, hpc_state)  # Generated grounded location from memory-consistency path
 
         # Calculate infered grounded location
-        p_inf, hpc_state = self.hpc.inference(x_, g_, hpc_state)
-        # Ideally memory gets updated in the hpc.inference call
+        p_inf, hpc_state = self.hpc.inference(x_, g_, hpc_state)  # Using sensory and inferred grid location
+        # Ideally, inference memory gets updated in the hpc.inference call
 
         # Update generative memory with generated and inferred grounded location
         # We should move this to HPCModel.memory_update
-        M = [self.hpc.hebbian(memory[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+        M = [self.hpc.hebbian(memory[0], torch.cat(p_inf, dim=1), torch.cat(p_gen_gi, dim=1))]
         # If using memory for grounded location inference: append inference memory
-        if self.hyper["use_p_inf"]:
+        if self.hyper["use_x_cued_recall"]:
             # Inference memory is identical to generative memory if using common memory, and updated separately if not
-            M.append(M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory[1], torch.cat(p_inf, dim=1), torch.cat(p_x_inf, dim=1), do_hierarchical_connections=False))
+            M.append(M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory[1], torch.cat(p_inf, dim=1), torch.cat(p_xi, dim=1), do_hierarchical_connections=False))
         hpc_state = HPCState(p=hpc_state.p, memory=M)
 
         # Construct new TEMState for next iteration
-        new_state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state, g_gen=g_gen, g_inf=g_inf, p_g_gen=p_g_gen, p_x_inf=p_x_inf, p_g_inf=p_g_inf)
+        new_state = TEMState(
+            lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state, # carry over states
+            g_inf=g_inf, g_gen=g_gen,  # Used to compute abstract location losses
+            p_inf=p_inf, p_gen_gi=p_gen_gi, p_xi=p_xi,  # Used to compute grounded location losses
+        )  # fmt: skip
 
         # Construct TEMPrediction for loss computation
-        o_g_gen, o_g_gen_logits = self.gen_o(p_g_gen[0])  # Sensory prediction from generative path
-        o_x_inf, o_x_inf_logits = self.gen_o(p_x_inf[0])  # Sensory prediction from recognition path
-        o_g_inf, o_g_inf_logits = self.gen_o(p_g_inf[0])  # Sensory prediction from memory-consistency path
-        prediction = TEMPrediction(o_hat=(o_g_gen, o_x_inf, o_g_inf), o_logits=(o_g_gen_logits, o_x_inf_logits, o_g_inf_logits))
+        o_p_inf, o_p_inf_logits = self.gen_o(p_inf[0])  # Inference pathway: observation from inferred grounded location
+        o_gen_gi, o_gen_gi_logits = self.gen_o(p_gen_gi[0])  # Retrieved pathway :observation from the grounded location retrieved from inferred abstract location
+        o_gen_gg, o_gen_gg_logits = self.gen_o(p_gen_gg[0])  #  Ancestral/generative pathway :observation from sampled grounded location
+        prediction = TEMPrediction(o_hat=(o_p_inf, o_gen_gi, o_gen_gg), o_logits=(o_p_inf_logits, o_gen_gi_logits, o_gen_gg_logits))
 
         return prediction, new_state
 
@@ -836,17 +837,17 @@ class TEMModel(nn.Module):
     def init_iteration(self, o, M):
         # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
         self.hyper["batch_size"] = o.shape[0]
-        # Initialize memory (now owned by HPCState)
-        memory = M if M is not None else self._init_memory(batch_size=int(self.hyper["batch_size"]), device=o.device)
         # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
         lec_state = self.lec.init_state(self.hyper["batch_size"], device=o.device)
-        # Create initial MEC state (g_gen starts as g_inf since no movement yet, g_path.mean is g_inf with zero uncertainty)
+        # Create initial MEC state (g_gen starts as g_inf since no movement yet)
         mec_state = self.mec.init_state(self.hyper["batch_size"], device=o.device)
+        g_inf = g_gen = mec_state.g
         # Create initial HPC state with initialized memory
-        p_init = [torch.zeros((int(self.hyper["batch_size"]), int(n)), device=o.device) for n in self.hyper["n_p"]]
-        hpc_state = HPCState(p=p_init, memory=memory)
-        # And construct new iteration for that g, o, a, and M
-        return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
+        hpc_state = self.hpc.init_state(self.hyper["batch_size"], device=o.device)
+        p_inf = p_gen_gi = p_xi = hpc_state.p
+        hpc_state.memory = M if M is not None else self._init_memory(batch_size=int(self.hyper["batch_size"]), device=o.device)  # Remove after correcting hpc.init_state
+        # Return initial TEMState
+        return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state, g_inf=g_inf, g_gen=g_gen, p_inf=p_inf, p_gen_gi=p_gen_gi, p_xi=p_xi)
 
     def gen_o(self, p):
         # Get categorical distribution over observations from grounded location
@@ -854,15 +855,15 @@ class TEMModel(nn.Module):
         # Sampling would be the correct way to do this, since observations are discrete, and it's also what the TEM paper says
         # However, it looks like you could also get away with using categorical distribution directly as an approximation of the one-hot observations
         if self.hyper["do_sample"]:
-            o, logits = self.f_x(
+            o, logits = self.f_o(
                 p
             )  # This is a placeholder! Should be done using reparameterisation trick (like https://blog.evjang.com/2016/11/tutorial-categorical-variational.html)
         else:
-            o, logits = self.f_x(p)
+            o, logits = self.f_o(p)
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return o, logits
 
-    def f_x(self, p: Tensor):
+    def f_o(self, p: Tensor):
         # Calculate categorical probability distribution over observations for a given ground location
         # Legacy behavior: p is only the highest-frequency module with shape (B, n_p[0])
         # p is the outer product of g and x for the highest frequency (p = g^T * x)
@@ -886,7 +887,7 @@ class TEMModel(nn.Module):
     def mec_inference(self, p_x, o, locations, mec_state: MECState):
         g_path = Transition(mean=mec_state.g, uncertainty=mec_state.uncertainty)
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
-        if self.hyper["use_p_inf"]:
+        if self.hyper["use_x_cued_recall"]:
             # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
             g_downsampled = [torch.matmul(p_x[f], torch.t(self.hyper["W_repeat"][f])) for f in range(self.hyper["n_f"])]
             # Then use abstract location after summing over sensory preferences as input to MLP to obtain the inferred abstract location from memory
@@ -909,7 +910,7 @@ class TEMModel(nn.Module):
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         mu_g, sigma_g = [], []
         for f in range(self.hyper["n_f"]):
-            if self.hyper["use_p_inf"]:
+            if self.hyper["use_x_cued_recall"]:
                 # Then get full gaussian distribution of inferred abstract location by calculating precision weighted mean
                 mu, sigma = utils.inv_var_weight([mu_g_path[f], mu_g_mem[f]], [sigma_g_path[f], sigma_g_mem[f]])
             else:

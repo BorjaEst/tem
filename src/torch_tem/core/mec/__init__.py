@@ -94,7 +94,8 @@ class MECModel(nn.Module):
             This module always applies transition dynamics from the provided state.
         """
         # Shiny envs use no_direc=True (no action-driven transitions)
-        no_direc = [loc.get("shiny") is not None for loc in locations]
+        # Only trigger when shiny is explicitly True (not just when key exists)
+        no_direc = [loc.get("shiny") is True for loc in locations]
         transition = self.grid(a, state.g, no_direc=no_direc)
 
         return transition.mean, MECState(g=transition.mean, uncertainty=transition.uncertainty)

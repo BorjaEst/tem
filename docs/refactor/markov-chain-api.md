@@ -15,13 +15,13 @@ The TEM model has been refactored to cleanly separate state transitions, observa
 - `mec_state`: MEC grid cell state (contains `g`, `g_gen`, `g_path`)
 - `g_inf`: Inferred abstract location (corrected grid cells)
 - `p_inf`: Inferred grounded location (corrected place cells)
-- `p_inf_x`: Place cells from sensory retrieval (for loss computation)
+- `p_xi`: Place cells from sensory retrieval (for loss computation)
 
 **TEMPrediction**: Contains all predictive outputs for loss computation
 
 - `o_hat`: Sensory predictions from 3 pathways (tuple of 3 tensors)
 - `o_logits`: Logits for loss computation (tuple of 3 tensors)
-- `p_gen`: Retrieved place cells from `g_inf` (for loss)
+- `p_gen_gi`: Retrieved place cells from `g_inf` (for loss)
 
 ### Core Methods
 
@@ -62,7 +62,7 @@ The model now exposes four core methods that implement the Markov chain flow:
 - `lec_state`: Updated LEC state
 - `g_inf`: Inferred (corrected) grid cells - **this is "what MEC represents now"**
 - `p_inf`: Inferred place cells
-- `p_inf_x`: Place cells from sensory retrieval (for loss)
+- `p_xi`: Place cells from sensory retrieval (for loss)
 
 **Note**: This is the "update" step in predict-update filters. It produces the _posterior_ estimate after incorporating the observation.
 
@@ -78,11 +78,11 @@ The model now exposes four core methods that implement the Markov chain flow:
 2. From inferred grid cells via memory: $g_{inf} \to p \to \hat{o}$
 3. From generated grid cells via memory: $g_{gen} \to p \to \hat{o}$
 
-**Returns**: `TEMPrediction` with `o_hat`, `o_logits`, `p_gen`
+**Returns**: `TEMPrediction` with `o_hat`, `o_logits`, `p_gen_gi`
 
 **Note**: All three pathways are used for training (different loss terms test different aspects of the model).
 
-#### 4. `update_memory(M_prev, p_inf, p_inf_x, p_gen) -> List[Tensor]`
+#### 4. `update_memory(M_prev, p_inf, p_xi, p_gen_gi) -> List[Tensor]`
 
 **Purpose**: Hebbian memory update
 
@@ -90,7 +90,7 @@ The model now exposes four core methods that implement the Markov chain flow:
 
 **Why after predictions?** To avoid a trivial "write then immediately read the same thing" shortcut during training.
 
-**Returns**: Updated memory matrices `[M_gen, M_inf]` (M_inf only if `use_p_inf=True`)
+**Returns**: Updated memory matrices `[M_gen, M_inf]` (M_inf only if `use_x_cued_recall=True`)
 
 ## Usage Example
 
@@ -122,7 +122,7 @@ for o_t, a_t, locations_t in walk:
     prediction = model.predict(state.M, obs_dict["p_inf"], obs_dict["g_inf"], mec_state.g_gen)
 
     # 4. Update memory (after predictions to avoid write-then-read shortcut)
-    M_next = model.update_memory(state.M, obs_dict["p_inf"], obs_dict["p_inf_x"], prediction.p_gen)
+    M_next = model.update_memory(state.M, obs_dict["p_inf"], obs_dict["p_xi"], prediction.p_gen_gi)
 
     # Compute loss
     loss = loss_fn(o_t, prediction, obs_dict, mec_state)
@@ -139,7 +139,7 @@ for o_t, a_t, locations_t in walk:
 The original `forward()` method is preserved for backward compatibility:
 
 ```python
-M, mec_state, p_gen, x_gen, o_logits, lec_state, g_inf, p_inf, p_inf_x = model.forward(
+M, mec_state, p_gen_gi, x_gen, o_logits, lec_state, g_inf, p_inf, p_xi = model.forward(
     o, locations, a_prev, M_prev, lec_state, mec_state
 )
 ```

@@ -238,8 +238,7 @@ class TEMLightningModule(pl.LightningModule):
                 accuracy_counts: :class:`AccuracyCounts` with summed correct
                     predictions and total count.
         """
-        use_p_inf = self.tem.hyper["use_p_inf"]
-        step_losses = self.loss_fn(prediction, state, label, use_p_inf)
+        step_losses = self.loss_fn(prediction, state, label)
         step_acc = self.acc_o_fn(prediction.o_logits, label.o)
 
         losses_per_env: list[StepLoss] = []

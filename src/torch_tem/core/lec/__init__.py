@@ -93,8 +93,9 @@ class LECModel(nn.Module):
         return x
 
     def f_n(self, x: List[Tensor]) -> List[Tensor]:
-        # Normalize using global mean across entire batch (legacy behavior)
-        normalised = [utils.normalise(utils.relu(x[f] - torch.mean(x[f]))) for f in range(self.n_freq)]
+        # Normalize per sample: subtract mean along feature dimension (dim=1), then L2-normalize
+        # This keeps each environment's representation independent
+        normalised = [utils.normalise(utils.relu(x[f] - torch.mean(x[f], dim=1, keepdim=True))) for f in range(self.n_freq)]
         return normalised
 
     def f_w(self, x: List[Tensor]) -> List[Tensor]:

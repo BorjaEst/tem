@@ -26,25 +26,14 @@ class MECState:
     """State container for MEC dynamics.
 
     Attributes:
-        g_gen: Ancestral prediction for the generative pathway.
-        g_path: Path integration prior (mean, uncertainty) for inference.
-        g: Infered abstract location.
+        g: Abstract location from called operations (list of Tensors per frequency).
+        ovc: OVC landmark head activations (list of Tensors per frequency).
+        uncertainty: Uncertainty (stddev) of location (list of Tensors per frequency).
     """
 
-    g_gen: List[Tensor]
-    g_path: Transition
     g: Optional[List[Tensor]] = None
     ovc: Optional[List[Tensor]] = None
-
-    def __post_init__(self):
-        """Ensure g is always defined (defaults to g_path.mean)."""
-        if self.g is None:
-            self.g = list(self.g_path.mean)
-
-    @property
-    def uncertainty(self) -> List[Tensor]:
-        """Return uncertainty (stddev) of inferred location."""
-        return self.g_path.uncertainty
+    uncertainty: Optional[List[Tensor]] = None
 
 
 class MECModel(nn.Module):
@@ -66,7 +55,8 @@ class MECModel(nn.Module):
     def init_state(self, batch_size: int, device: torch.device) -> MECState:
         """Initialize MEC state with prior grid cell activations."""
         g_init = self.grid.g_init(batch_size, device)
-        return MECState(g_gen=list(g_init.mean), g_path=g_init)
+        ovc = None  # TODO: Initialize OVC state if needed
+        return MECState(g=g_init.mean, uncertainty=g_init.uncertainty, ovc=ovc)
 
     @property
     def n_in(self) -> int:
@@ -83,11 +73,8 @@ class MECModel(nn.Module):
         """Number of grid cell frequency modules."""
         return len(self.shape)
 
-    def forward(self, a: Optional[Tensor], p_x: Optional[List[Tensor]], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
-        if p_x is None:
-            return self.generative(a, locations, state)
-        else:
-            return self.inference(p_x, locations, state)
+    def forward(self, *, _) -> Tuple[List[Tensor], MECState]:
+        raise NotImplementedError("MEC forward not implemented. Use generative() or inference().")
 
     def generative(self, a: Tensor, locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         """Compute next MEC state from action-driven transition.
@@ -109,7 +96,7 @@ class MECModel(nn.Module):
         no_direc = [loc.get("shiny") is not None for loc in locations]
         g_gen, transition = self.grid(a, state.g, no_direc=no_direc)
 
-        return g_gen, MECState(g_gen=g_gen, g_path=transition)
+        return g_gen, MECState(g=transition.mean, uncertainty=transition.uncertainty)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         raise NotImplementedError("MEC inference not implemented yet.")

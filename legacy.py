@@ -60,7 +60,7 @@ class Model(torch.nn.Module):
         # Update generative memory with generated and inferred grounded location.
         M = [self.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen_gi, dim=1))]
         # If using memory for grounded location inference: append inference memory
-        if self.hyper["use_p_inf"]:
+        if self.hyper["use_x_cued_recall"]:
             # Inference memory is identical to generative memory if using common memory, and updated separatedly if not
             M.append(M[0] if self.hyper["common_memory"] else self.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_xi, dim=1), do_hierarchical_connections=False))
         # Calculate loss of this step
@@ -76,7 +76,7 @@ class Model(torch.nn.Module):
         # Prepare sensory experience for input to memory by normalisation and weighting
         x_ = self.x2x_(x_inf)
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
-        p_xi = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
+        p_xi = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         g_inf = self.inf_g(p_xi, g_gen, o, locations)
         # Prepare abstract location for input to memory by downsampling and weighting
@@ -105,7 +105,7 @@ class Model(torch.nn.Module):
         # L_p_gen is squared error loss between inferred grounded location and grounded location retrieved from inferred abstract location
         L_p_g = torch.sum(torch.stack(utils.squared_error(p_inf, p_gen_gi), dim=0), dim=0)
         # L_p_inf is squared error loss between inferred grounded location and grounded location retrieved from sensory experience
-        L_p_x = torch.sum(torch.stack(utils.squared_error(p_inf, p_xi), dim=0), dim=0) if self.hyper["use_p_inf"] else torch.zeros_like(L_p_g)
+        L_p_x = torch.sum(torch.stack(utils.squared_error(p_inf, p_xi), dim=0), dim=0) if self.hyper["use_x_cued_recall"] else torch.zeros_like(L_p_g)
         # L_g is squared error loss between generated abstract location and inferred abstract location
         L_g = torch.sum(torch.stack(utils.squared_error(g_inf, g_gen), dim=0), dim=0)
         # L_x is a cross-entropy loss between sensory experience and different model predictions. First get true labels from sensory experience
@@ -211,7 +211,7 @@ class Model(torch.nn.Module):
             # Create new empty memory dict for generative network: zero connectivity matrix M_0, then empty list of the memory vectors a and b for each iteration for efficient hebbian memory computation
             M = [torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float)]
             # Append inference memory only if memory is used in grounded location inference
-            if self.hyper["use_p_inf"]:
+            if self.hyper["use_x_cued_recall"]:
                 # If inference and generative network share common memory: reuse same connectivity, and same memory vectors. Else, create a new empty memory list for inference network
                 M.append(M[0] if self.hyper["common_memory"] else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float))
         # Initialise previous abstract location by stacking abstract location prior
@@ -270,18 +270,18 @@ class Model(torch.nn.Module):
         # Sampling would be the correct way to do this, since observations are discrete, and it's also what the TEM paper says
         # However, it looks like you could also get away with using categorical distribution directly as an approximation of the one-hot observations
         if self.hyper["do_sample"]:
-            x, logits = self.f_x(
+            x, logits = self.f_o(
                 p
             )  # This is a placeholder! Should be done using reparameterisation trick (like https://blog.evjang.com/2016/11/tutorial-categorical-variational.html)
         else:
-            x, logits = self.f_x(p)
+            x, logits = self.f_o(p)
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return x, logits
 
     def inf_g(self, p_x, g_path, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
-        if self.hyper["use_p_inf"]:
-            # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
+        if self.hyper["use_x_cued_recall"]:
+            # Not in paper, but makes sense from symmetry with f_o: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
             g_downsampled = [torch.matmul(p_x[f], torch.t(self.hyper["W_repeat"][f])) for f in range(self.hyper["n_f"])]
             # Then use abstract location after summing over sensory preferences as input to MLP to obtain the inferred abstract location from memory
             mu_g_mem = self.f_mu_g_mem(g_downsampled)
@@ -303,7 +303,7 @@ class Model(torch.nn.Module):
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         mu_g, sigma_g = [], []
         for f in range(self.hyper["n_f"]):
-            if self.hyper["use_p_inf"]:
+            if self.hyper["use_x_cued_recall"]:
                 # Then get full gaussian distribution of inferred abstract location by calculating precision weighted mean
                 mu, sigma = utils.inv_var_weight([mu_g_path[f], mu_g_mem[f]], [sigma_g_path[f], sigma_g_mem[f]])
             else:
@@ -454,7 +454,7 @@ class Model(torch.nn.Module):
         # Multi layer perceptron to generate standard deviation of grounded location retrieval
         return self.MLP_sigma_p(p)
 
-    def f_x(self, p):
+    def f_o(self, p):
         # Calculate categorical probability distribution over observations for a given ground location
         # p has dimensions n_p[0]. We'll need to transform those to temporally filtered sensory experience, before we can decompress
         # p is the flattened (by concatenating rows - like reading sentences) outer product of g and x (p = g^T * x).

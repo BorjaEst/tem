@@ -135,11 +135,11 @@ class HPCModel(nn.Module):
         p = [h_t[:, n_p[f] : n_p[f + 1]] for f in range(self.n_freq)]
         return p
 
-    def hebbian(self, M_prev, p_inf, p_gen, do_hierarchical_connections=True):
+    def hebbian(self, M_prev, p_inf, p_gen_gi, do_hierarchical_connections=True):
         # Create new ground memory for attractor network by setting weights to outer product of learned vectors
-        # p_inf corresponds to p in the paper, and p_gen corresponds to p^.
+        # p_inf corresponds to p in the paper, and p_gen_gi corresponds to p^.
         # The order of p + p^ and p - p^ is reversed since these are row vectors, instead of column vectors in the paper.
-        M_new = torch.squeeze(torch.matmul(torch.unsqueeze(p_inf + p_gen, 2), torch.unsqueeze(p_inf - p_gen, 1)))
+        M_new = torch.squeeze(torch.matmul(torch.unsqueeze(p_inf + p_gen_gi, 2), torch.unsqueeze(p_inf - p_gen_gi, 1)))
         # Multiply by connection vector, e.g. only keeping weights from low to high frequencies for hierarchical retrieval
         if do_hierarchical_connections:
             M_new = M_new * self.p_update_mask

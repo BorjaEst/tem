@@ -907,19 +907,19 @@ class TEMModel(nn.Module):
     def generative(self, p_inf, g_inf, g_gen, state: TEMState):
         memory = state.hpc_state.memory
         # Generate observation from inferred grounded location, using only the highest frequency. Also keep non-softmaxed logits which are used in the loss later
-        x_p, x_p_logits = self.gen_x(p_inf[0])
+        x_p, x_p_logits = self.gen_o(p_inf[0])
         # Retrieve grounded location from memory by pattern completion on inferred abstract location
         g_ = self.mec_projection(g_inf)
         p_g = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
         p_g_inf, _ = self.hpc.generative(p_g, state.hpc_state)  # was p_mem_inf
         # And generate observation from the grounded location retrieved from inferred abstract location
-        x_g, x_g_logits = self.gen_x(p_g_inf[0])
+        x_g, x_g_logits = self.gen_o(p_g_inf[0])
         # Retreive grounded location from memory by pattern completion on abstract location by transitioning
         g_ = self.mec_projection(g_gen)
         p_g = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
         p_g_gen, _ = self.hpc.generative(p_g, state.hpc_state)  # was p_mem_gen
         # Generate observation from sampled grounded location
-        x_gt, x_gt_logits = self.gen_x(p_g_gen[0])
+        x_gt, x_gt_logits = self.gen_o(p_g_gen[0])
         # Return all generated observations and their corresponding logits
         return (x_p, x_g, x_gt), (x_p_logits, x_g_logits, x_gt_logits), p_g_inf
 
@@ -959,31 +959,31 @@ class TEMModel(nn.Module):
         # And construct new iteration for that g, o, a, and M
         return TEMState(g=g, o=o, a_prev=a, lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
 
-    def gen_x(self, p):
+    def gen_o(self, p):
         # Get categorical distribution over observations from grounded location
         # If you actually want to sample observation, you need a reparaterisation trick for categorical distributions
         # Sampling would be the correct way to do this, since observations are discrete, and it's also what the TEM paper says
         # However, it looks like you could also get away with using categorical distribution directly as an approximation of the one-hot observations
         if self.hyper["do_sample"]:
-            o, logits = self.f_x(
+            o, logits = self.f_o(
                 p
             )  # This is a placeholder! Should be done using reparameterisation trick (like https://blog.evjang.com/2016/11/tutorial-categorical-variational.html)
         else:
-            o, logits = self.f_x(p)
+            o, logits = self.f_o(p)
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return o, logits
 
     def inf_g(self, p_x, g_path: Transition, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
         if self.hyper["use_x_cued_recall"]:
-            # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
+            # Not in paper, but makes sense from symmetry with f_o: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
             g_downsampled = [torch.matmul(p_x[f], torch.t(self.hyper["W_repeat"][f])) for f in range(self.hyper["n_f"])]
             # Then use abstract location after summing over sensory preferences as input to MLP to obtain the inferred abstract location from memory
             mu_g_mem = self.f_mu_g_mem(g_downsampled)
             # Not in paper, but this greatly improves zero-shot inference: provide the uncertainty function of the inferred abstract location with measures of memory quality
             with torch.no_grad():
                 # For the first measure, use the grounded location inferred from memory to generate an observation
-                o_hat, x_hat_logits = self.gen_x(p_x[0])
+                o_hat, x_hat_logits = self.gen_o(p_x[0])
                 # Then calculate the error between the generated observation and the actual observation: if the memory is working well, this error should be small
                 err = utils.squared_error(o, o_hat)
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
@@ -1059,7 +1059,7 @@ class TEMModel(nn.Module):
         # Multi layer perceptron to generate standard deviation of grounded location retrieval
         return self.MLP_sigma_p(p)
 
-    def f_x(self, p: Tensor):
+    def f_o(self, p: Tensor):
         # Calculate categorical probability distribution over observations for a given ground location
         # Legacy behavior: p is only the highest-frequency module with shape (B, n_p[0])
         # p is the outer product of g and x for the highest frequency (p = g^T * x)

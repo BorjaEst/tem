@@ -46,7 +46,7 @@ from torch import Tensor
 from torch.optim import Adam
 
 from torch_tem import losses, metrics, settings
-from torch_tem.core.model import Rollout, TEMLabel, TEMModel, TEMPrediction, TEMState
+from torch_tem.core.model import Rollout, TEMLabel, TEMModel, TEMOutput, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.metrics import AccuracyCounts, AccuracyO
 
@@ -177,8 +177,8 @@ class TEMLightningModule(pl.LightningModule):
         accum = AccumLoss.zero(device=self.device)
         acc_counts = AccuracyCounts.zero(device=self.device)
 
-        for prediction, state, labels in Rollout(self.tem, chunk, prev_state):
-            step_contrib, acc_increments = self.model_iteration(labels, prediction, state, visited)
+        for output, labels, state in Rollout(self.tem, chunk, prev_state):
+            step_contrib, acc_increments = self.model_iteration(output, labels, state, visited)
 
             # Accumulate loss and accuracies
             if step_contrib is not None:
@@ -217,7 +217,7 @@ class TEMLightningModule(pl.LightningModule):
 
         return self.tem.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], memory)
 
-    def model_iteration(self, label: TEMLabel, prediction: TEMPrediction, state: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyCounts]:
+    def model_iteration(self, output: TEMOutput, label: TEMLabel, state: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyCounts]:
         """Compute visit-masked loss and accuracy for a single timestep.
 
         Implements the revisit gating policy: losses and accuracies are only
@@ -225,8 +225,8 @@ class TEMLightningModule(pl.LightningModule):
         visits are excluded from optimization but update the visited mask.
 
         Args:
+            output: TEM predictions for the current timestep.
             label: Ground truth observations for the current timestep.
-            prediction: TEM predictions for the current timestep.
             state: Current TEM state containing predictions and ground truth.
             visited: Per-environment visited masks ``visited[env_i][loc_id]``.
                 Updated in-place when environments visit new locations.
@@ -238,8 +238,8 @@ class TEMLightningModule(pl.LightningModule):
                 accuracy_counts: :class:`AccuracyCounts` with summed correct
                     predictions and total count.
         """
-        step_losses = self.loss_fn(prediction, state, label)
-        step_acc = self.acc_o_fn(prediction.o_logits, label.o)
+        step_losses = self.loss_fn(output, label, state)
+        step_acc = self.acc_o_fn(output.reconstruction.o_logits, label.o)
 
         losses_per_env: list[StepLoss] = []
         acc_total = AccuracyCounts.zero(device=self.device)

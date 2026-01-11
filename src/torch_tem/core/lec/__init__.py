@@ -20,6 +20,13 @@ class LECState:
     x: List[Tensor]  # Multi-frequency filtered features
     x_filtered: List[Tensor]  # Unweighted filtered features
 
+    def detach(self) -> "LECState":
+        """Return a detached copy suitable for storing as `prev_iter`."""
+        return LECState(
+            x=[v.detach() for v in self.x],
+            x_filtered=[v.detach() for v in self.x_filtered],
+        )
+
 
 class LECModel(nn.Module):
     """Lateral Entorhinal Cortex: Temporal filtering of compressed sensory features.

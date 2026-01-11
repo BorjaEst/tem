@@ -580,82 +580,51 @@ def parameter_iteration(iteration, params):
 
 
 @dataclass
-class TEMPrediction:
-    """Prediction outputs from TEM state.
-
-    Contains all predictive outputs used for loss computation:
-    - o_hat: sensory predictions from the 3 pathways (path integration, generative, and grounded location cued)
-    - o_logits: logits for loss computation from the 3 pathways
-    """
-
-    o_hat: Sequence[Tensor]  # (x_p, x_g, x_gt) - sensory predictions from 3 pathways
-    o_logits: Sequence[Tensor]  # (logits_p, logits_g, logits_gt) - logits for loss
+class TEMLabel:
+    o: Tensor  # True sensory observation (for loss computation)
+    locations: List[Tensor]  # True locations (for loss computation)
 
 
 @dataclass
 class TEMState:
-    """State container for TEM dynamics.
-
-    Represents the complete latent state at timestep t:
-    - lec_state: LEC temporal filtering state
-    - mec_state: MEC grid cell state (contains g, g_gen, g_path)
-    - hpc_state: HPC place cell + memory state (HPCState.memory holds Hebbian matrices)
-    - g_inf: Inferred abstract location (corrected grid cells)
-    - p_inf: Inferred grounded location (corrected place cells)
-    - p_xi: Place cells from sensory retrieval (for loss computation)
-    """
-
-    # States to carry over time to produce next step of the model
-    lec_state: Optional[LECState] = None
-    mec_state: Optional[MECState] = None
-    hpc_state: Optional[HPCState] = None
-
-    # Abstract locations and path integration transitions from 2 pathways
-    g_inf: Optional[List[Tensor]] = None
-    g_gen: Optional[List[Tensor]] = None
-
-    # Grounded locations from inference and sensory cued retrieval
-    p_inf: Optional[List[Tensor]] = None
-    p_gen_gi: Optional[List[Tensor]] = None
-    p_xi: Optional[List[Tensor]] = None
+    lec_state: LECState
+    mec_state: MECState
+    hpc_state: HPCState
 
     def detach(self) -> "TEMState":
         """Return a detached copy suitable for storing as `prev_iter`."""
-
-        def _detach(obj: Any) -> Any:
-            if obj is None:
-                return None
-            if isinstance(obj, LECState):
-                # Detach LECState components
-                return LECState(x=_detach(obj.x), x_filtered=_detach(obj.x_filtered))
-            if isinstance(obj, MECState):
-                # Detach MECState components
-                return MECState(g=_detach(obj.g), ovc=_detach(obj.ovc), uncertainty=_detach(obj.uncertainty))
-            if isinstance(obj, HPCState):
-                # Detach HPCState components (including memory matrices)
-                return HPCState(p=_detach(obj.p), memory=_detach(obj.memory))
-            if torch.is_tensor(obj):
-                return obj.detach()
-            if isinstance(obj, list):
-                return [_detach(v) for v in obj]
-            return obj
-
         return TEMState(
-            lec_state=_detach(self.lec_state),
-            mec_state=_detach(self.mec_state),
-            hpc_state=_detach(self.hpc_state),
-            g_inf=_detach(self.g_inf),
-            g_gen=_detach(self.g_gen),
-            p_inf=_detach(self.p_inf),
-            p_gen_gi=_detach(self.p_gen_gi),
-            p_xi=_detach(self.p_xi),
+            lec_state=self.lec_state.detach(),
+            mec_state=self.mec_state.detach(),
+            hpc_state=self.hpc_state.detach(),
         )
 
 
 @dataclass
-class TEMLabel:
-    o: Tensor  # True sensory observation (for loss computation)
-    locations: List[Tensor]  # True locations (for loss computation)
+class TEMInference:
+    g_inf: List[Tensor]
+    p_inf: List[Tensor]
+    p_xi: List[Tensor]
+
+
+@dataclass
+class TEMGenerative:
+    g_gen: List[Tensor]
+    p_gen_gg: List[Tensor]
+    p_gen_gi: List[Tensor]
+
+
+@dataclass
+class TEMReconstruction:
+    o_hat: Sequence[Tensor]
+    o_logits: Sequence[Tensor]
+
+
+@dataclass
+class TEMOutput:
+    inference: TEMInference
+    generative: TEMGenerative
+    reconstruction: TEMReconstruction
 
 
 class TEMModel(nn.Module):
@@ -734,7 +703,7 @@ class TEMModel(nn.Module):
             memory.append(m0 if self.hyper["common_memory"] else m0.clone())
         return memory
 
-    def forward(self, o, locations, a_prev, state: TEMState) -> tuple[TEMPrediction, TEMState]:
+    def forward(self, o, locations, a_prev, state: TEMState) -> tuple[TEMOutput, TEMState]:
         mec_state, lec_state, hpc_state = state.mec_state, state.lec_state, state.hpc_state
         c = self.autoencoder.encode(o)
         device = o.device
@@ -754,18 +723,18 @@ class TEMModel(nn.Module):
             a_idx = torch.tensor([int(a) if a is not None else 0 for a in a_prev], dtype=torch.long, device=device)
             a = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
 
-        # Transition: MEC path integration (action-driven)
-        g_gen, mec_state = self.mec.generative(a, locations, mec_state)
-        g_ = self.mec_projection(g_gen)
-        p_gg = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
-
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
         p_xi = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
 
+        # Transition: MEC path integration (action-driven)
+        g_gen, mec_state = self.mec.generative(a, locations, mec_state)  # Updates mec state with g_path
+        g_ = self.mec_projection(g_gen)
+        p_gg = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+
         # Infer abstract location by using state and sensory experience
-        g_inf, mec_state = self.mec_inference(p_xi, o, locations, mec_state)
+        g_inf, mec_state = self.mec_inference(p_xi, o, locations, mec_state)  # Updates g_path.mean with g_inf
         g_ = self.mec_projection(g_inf)
         p_gi = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
 
@@ -776,28 +745,31 @@ class TEMModel(nn.Module):
         # Infer grounded location from abstract location and sensory experience
         p_inf, hpc_state = self.hpc.inference(x_, g_, hpc_state)
 
-        # Generate observation from sampled grounded location
-        o_p_inf, o_p_inf_logits = self.gen_o(p_inf)
-        o_gen_gi, o_gen_gi_logits = self.gen_o(p_gen_gi)
-        o_gen_gg, x_gen_gg_logits = self.gen_o(p_gen_gg)
-
         # Update memory (Hebbian write)  (Idealy should be in hpc.generative and hpc.inference)
         M = self.update_memory(hpc_state.memory, p_inf, p_xi, p_gen_gi)
         hpc_state.memory = M
         state.hpc_state = hpc_state
 
+        # Build tem state
+        state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
+
+        # Build tem generative and inference interfaces
+        generative = TEMGenerative(g_gen=g_gen, p_gen_gg=p_gen_gg, p_gen_gi=p_gen_gi)
+        inference = TEMInference(g_inf=g_inf, p_inf=p_inf, p_xi=p_xi)
+
+        # Generate observation from sampled grounded location
+        o_p_inf, o_p_inf_logits = self.gen_o(p_inf)
+        o_gen_gi, o_gen_gi_logits = self.gen_o(p_gen_gi)
+        o_gen_gg, x_gen_gg_logits = self.gen_o(p_gen_gg)
+
         # Return all generated observations and their corresponding logits
         o_hat, o_logits = (o_p_inf, o_gen_gi, o_gen_gg), (o_p_inf_logits, o_gen_gi_logits, x_gen_gg_logits)
-        predictions = TEMPrediction(o_hat=o_hat, o_logits=o_logits)
+        reconstructions = TEMReconstruction(o_hat=o_hat, o_logits=o_logits)
 
-        # Return all iteration values (loss now computed in Lightning module)
-        state = TEMState(
-            lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state,  # Carry over states
-            g_inf=g_inf, g_gen=g_gen,  # Abstract locations for LossG
-            p_inf=p_inf, p_gen_gi=p_gen_gi, p_xi=p_xi,  # Grounded locations for LossP
-        )  # fmt: skip
-
-        return predictions, state
+        # Build full output, state and return
+        output = TEMOutput(inference=inference, generative=generative, reconstruction=reconstructions)
+        state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
+        return output, state
 
     def update_memory(self, memory_prev: List[Tensor], p_inf, p_xi, p_gen_gi) -> List[Tensor]:
         """Update Hebbian memory matrices.
@@ -1022,7 +994,7 @@ class Rollout(Iterator[TEMState]):
         self._idx += 1
 
         # Run model forward
-        prediction, state = self.model(o, locations, self._a_prev, self._state)
+        output, state = self.model(o, locations, self._a_prev, self._state)
 
         # Build state with updated components
         state.g = locations
@@ -1035,4 +1007,4 @@ class Rollout(Iterator[TEMState]):
         # Build labels for current timestep
         labels = TEMLabel(o=o, locations=locations)
 
-        return prediction, state, labels
+        return output, labels, state

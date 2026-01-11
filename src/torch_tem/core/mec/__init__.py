@@ -23,17 +23,19 @@ from torch_tem.types import Transition
 
 @dataclass
 class MECState:
-    """State container for MEC dynamics.
+    """State container for MEC dynamics."""
 
-    Attributes:
-        g: Abstract location from called operations (list of Tensors per frequency).
-        ovc: OVC landmark head activations (list of Tensors per frequency).
-        uncertainty: Uncertainty (stddev) of location (list of Tensors per frequency).
-    """
+    g: List[Tensor]  # Grid cell activations
+    ovc: Optional[List[Tensor]] = None  # OVC activations
+    uncertainty: Optional[List[Tensor]] = None  # Grid cell uncertainty
 
-    g: Optional[List[Tensor]] = None
-    ovc: Optional[List[Tensor]] = None
-    uncertainty: Optional[List[Tensor]] = None
+    def detach(self) -> "MECState":
+        """Return a detached copy suitable for storing as `prev_iter`."""
+        return MECState(
+            g=[v.detach() for v in self.g] if self.g is not None else None,
+            ovc=[v.detach() for v in self.ovc] if self.ovc is not None else None,
+            uncertainty=[v.detach() for v in self.uncertainty] if self.uncertainty is not None else None,
+        )
 
 
 class MECModel(nn.Module):

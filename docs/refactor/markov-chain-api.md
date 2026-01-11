@@ -17,7 +17,7 @@ The TEM model has been refactored to cleanly separate state transitions, observa
 - `p_inf`: Inferred grounded location (corrected place cells)
 - `p_xi`: Place cells from sensory retrieval (for loss computation)
 
-**TEMPrediction**: Contains all predictive outputs for loss computation
+**TEMOutput**: Contains all predictive outputs for loss computation
 
 - `o_hat`: Sensory predictions from 3 pathways (tuple of 3 tensors)
 - `o_logits`: Logits for loss computation (tuple of 3 tensors)
@@ -66,7 +66,7 @@ The model now exposes four core methods that implement the Markov chain flow:
 
 **Note**: This is the "update" step in predict-update filters. It produces the _posterior_ estimate after incorporating the observation.
 
-#### 3. `predict(M_prev, p_inf, g_inf, g_gen) -> TEMPrediction`
+#### 3. `predict(M_prev, p_inf, g_inf, g_gen) -> TEMOutput`
 
 **Purpose**: Generate predictions from corrected state
 
@@ -78,7 +78,7 @@ The model now exposes four core methods that implement the Markov chain flow:
 2. From inferred grid cells via memory: $g_{inf} \to p \to \hat{o}$
 3. From generated grid cells via memory: $g_{gen} \to p \to \hat{o}$
 
-**Returns**: `TEMPrediction` with `o_hat`, `o_logits`, `p_gen_gi`
+**Returns**: `TEMOutput` with `o_hat`, `o_logits`, `p_gen_gi`
 
 **Note**: All three pathways are used for training (different loss terms test different aspects of the model).
 

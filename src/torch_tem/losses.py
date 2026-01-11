@@ -48,7 +48,7 @@ from torch import Tensor
 from torch.distributions import Normal
 
 from torch_tem import utils
-from torch_tem.core import TEMLabel, TEMPrediction, TEMState
+from torch_tem.core import TEMLabel, TEMOutput, TEMState
 from torch_tem.settings import AbstractLocationSettings  # fmt: skip
 from torch_tem.settings import GroundedLocationSettings  # fmt: skip
 from torch_tem.settings import LossSettings  # fmt: skip
@@ -704,22 +704,25 @@ class TEMLoss(nn.Module):
         self.loss_g_fn = AbstractLocationLoss(config.g)
         self.loss_reg_fn = RegularizationLoss(config.reg)
 
-    def forward(self, prediction: TEMPrediction, state: TEMState, label: TEMLabel) -> LossOutput:
+    def forward(self, output: TEMOutput, label: TEMLabel, state: TEMState) -> LossOutput:
         # Move use_x_cued_recall to GroundedLocationConfig
         """Compute weighted loss components for one timestep.
 
         Args:
-            prediction: TEMPrediction at current timestep.
+            output: TEMOutput at current timestep.
             state: TEMState at current timestep.
             label: TEMLabel with ground-truth data for current timestep.
 
         Returns:
             LossOutput where each component is already multiplied by settings weights.
         """
+        g_inf, g_gen = output.inference.g_inf, output.generative.g_gen
+        p_inf, p_gen_gi, p_xi = output.inference.p_inf, output.generative.p_gen_gi, output.inference.p_xi
+
         # Raw (possibly per-env) losses
-        lx: LossX = self.loss_x_fn(prediction.o_logits, label.o)
-        lg: LossG = self.loss_g_fn(state.g_inf, state.g_gen, state.mec_state.uncertainty)
-        lp: LossP = self.loss_p_fn(state.p_inf, state.p_gen_gi, state.p_xi)
-        lreg: LossReg = self.loss_reg_fn(state.g_inf, state.p_inf)
+        lx: LossX = self.loss_x_fn(output.reconstruction.o_logits, label.o)
+        lg: LossG = self.loss_g_fn(g_inf, g_gen, state.mec_state.uncertainty)
+        lp: LossP = self.loss_p_fn(p_inf, p_gen_gi, p_xi)
+        lreg: LossReg = self.loss_reg_fn(g_inf, p_inf)
 
         return LossOutput(x=lx, p=lp, g=lg, reg=lreg)

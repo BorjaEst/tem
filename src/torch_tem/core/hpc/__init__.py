@@ -16,8 +16,17 @@ from torch_tem.types import Matrix
 
 @dataclass
 class HPCState:
+    """State container for HPC dynamics."""
+
     p: List[Tensor]  # Multi-frequency filtered features
     memory: List[Matrix]  # Memory matrices
+
+    def detach(self) -> "HPCState":
+        """Return a detached copy suitable for storing as `prev_iter`."""
+        return HPCState(
+            p=[v.detach() for v in self.p] if self.p is not None else None,
+            memory=[m.detach() for m in self.memory] if self.memory is not None else None,
+        )
 
 
 @dataclass

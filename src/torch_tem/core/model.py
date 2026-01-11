@@ -1077,14 +1077,6 @@ class TEMModel(nn.Module):
         # Multi layer perceptron to generate standard deviation of abstract location from boolean location shiny-ness
         return self.mec.ovc.MLP_sigma_g_shiny(shiny)
 
-    def f_sigma_p(self, p):
-        # Multi layer perceptron to generate standard deviation of grounded location retrieval
-        return self.MLP_sigma_p(p)
-
-    def f_c_star(self, c):
-        """Decompress sensory experience. Delegates to Autoencoder."""
-        return self.autoencoder.decode(c)
-
 
 Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)
 

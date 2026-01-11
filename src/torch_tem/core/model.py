@@ -744,12 +744,15 @@ class TEMModel(nn.Module):
         # Handle reset boundaries: where a_prev is None, reset state to priors before transition
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
-            # Reset g to priors for envs with no previous action
+            # Reset g to priors (mean) for envs with no previous action
             g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.grid.g_init_mean[f].unsqueeze(0), mec_state.g[f]) for f in range(self.hyper["n_f"])]
             mec_state.g = g_reset
+            # Reset uncertainty to exp(logsig) for envs with no previous action (legacy behavior)
+            uncertainty_reset = [torch.where(reset_mask.unsqueeze(-1), torch.exp(self.mec.grid.g_init_logstd[f]).unsqueeze(0), mec_state.uncertainty[f]) for f in range(self.hyper["n_f"])]
+            mec_state.uncertainty = uncertainty_reset
             # Reset LEC filtered state (x_filtered) to zeros for new episodes
             x_filtered_reset = [torch.where(reset_mask.unsqueeze(-1), torch.zeros_like(lec_state.x_filtered[f]), lec_state.x_filtered[f]) for f in range(self.hyper["n_f"])]
-            lec_state = LECState(c=lec_state.c, x=lec_state.x, x_filtered=x_filtered_reset)
+            lec_state = LECState(x=lec_state.x, x_filtered=x_filtered_reset)
             # Reset memory slices for new episodes (legacy behavior: M[:, b, :] = M[:, b, :] * 0)
             for m_idx in range(len(memory)):
                 memory[m_idx] = torch.where(reset_mask.unsqueeze(-1).unsqueeze(-1), torch.zeros_like(memory[m_idx]), memory[m_idx])
@@ -770,7 +773,8 @@ class TEMModel(nn.Module):
         # 2. Retrieve place from sensory experience (x -> p)
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
-        p_xi = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"])
+        # Only compute p_xi if use_x_cued_recall is enabled (legacy behavior)
+        p_xi = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
         # there is no generation of p_gen_xi
 
         # 3. Infer grid (posterior) by combining path-integration transition with memory cue
@@ -940,7 +944,7 @@ class TEMModel(nn.Module):
                 mu_g[f] = mu_g[f].masked_scatter(mask, mu)
                 sigma_g[f] = sigma_g[f].masked_scatter(mask, sigma)
         # Either sample inferred abstract location from combined (precision weighted) distribution or just take mean
-        g = [mu_g[f] + sigma_g[f] * np.random.randn() if self.hyper["do_sample"] else mu_g[f] for f in range(self.hyper["n_f"])]
+        g = [mu_g[f] + sigma_g[f] * torch.randn_like(sigma_g[f]) if self.hyper["do_sample"] else mu_g[f] for f in range(self.hyper["n_f"])]
         # Return abstract location inferred from grounded location from memory and previous abstract location
         return g
 

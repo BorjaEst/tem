@@ -92,7 +92,7 @@ class HPCParameters(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    use_p_inf: bool = Field(
+    use_x_cued_recall: bool = Field(
         default=True,
         description="Whether to use inferred ground location while inferring new abstract location",
     )
@@ -204,7 +204,7 @@ class Parameters(BaseModel):
         ):
             pop_into(key, mec)
 
-        for key in ("use_p_inf", "p2g_sig_val", "common_memory", "kappa"):
+        for key in ("use_x_cued_recall", "p2g_sig_val", "common_memory", "kappa"):
             pop_into(key, hpc)
 
         if world:
@@ -268,8 +268,8 @@ class Parameters(BaseModel):
         return self.mec.f_initial_base
 
     @property
-    def use_p_inf(self) -> bool:
-        return self.hpc.use_p_inf
+    def use_x_cued_recall(self) -> bool:
+        return self.hpc.use_x_cued_recall
 
     @property
     def p2g_sig_val(self) -> float:
@@ -501,7 +501,7 @@ class Parameters(BaseModel):
             "n_ovc_base": self.n_ovc_base,
             "f_initial_base": self.f_initial_base,
             # HPC
-            "use_p_inf": self.use_p_inf,
+            "use_x_cued_recall": self.use_x_cued_recall,
             "p2g_sig_val": self.p2g_sig_val,
             "common_memory": self.common_memory,
             "kappa": self.kappa,
@@ -762,7 +762,7 @@ class TEMModel(nn.Module):
             device=device,
         )
         memory = [m0]
-        if self.hyper["use_p_inf"]:
+        if self.hyper["use_x_cued_recall"]:
             memory.append(m0 if self.hyper["common_memory"] else m0.clone())
         return memory
 
@@ -899,12 +899,12 @@ class TEMModel(nn.Module):
             p_gen: Generated place cells (from g_inf via memory)
 
         Returns:
-            Updated memory matrices [M_gen, M_inf] (M_inf only if use_p_inf=True)
+            Updated memory matrices [M_gen, M_inf] (M_inf only if use_x_cued_recall=True)
         """
         # Update generative memory with generated and inferred grounded location
         M = [self.hpc.hebbian(memory_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
         # If using memory for grounded location inference: append inference memory
-        if self.hyper["use_p_inf"]:
+        if self.hyper["use_x_cued_recall"]:
             # Inference memory is identical to generative memory if using common memory, and updated separately if not
             M.append(
                 M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False)
@@ -922,7 +922,7 @@ class TEMModel(nn.Module):
         x, lec_state = self.lec(c, lec_state)
         x_ = self.lec_projection(x)  # Project to memory format
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
-        p_x = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
+        p_x = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         g = self.inf_g(p_x, mec_state.g_path, o, locations)
         # Prepare abstract location for input to memory by downsampling and weighting
@@ -1009,7 +1009,7 @@ class TEMModel(nn.Module):
 
     def inf_g(self, p_x, g_path: Transition, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
-        if self.hyper["use_p_inf"]:
+        if self.hyper["use_x_cued_recall"]:
             # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
             g_downsampled = [torch.matmul(p_x[f], torch.t(self.hyper["W_repeat"][f])) for f in range(self.hyper["n_f"])]
             # Then use abstract location after summing over sensory preferences as input to MLP to obtain the inferred abstract location from memory
@@ -1032,7 +1032,7 @@ class TEMModel(nn.Module):
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         mu_g, sigma_g = [], []
         for f in range(self.hyper["n_f"]):
-            if self.hyper["use_p_inf"]:
+            if self.hyper["use_x_cued_recall"]:
                 # Then get full gaussian distribution of inferred abstract location by calculating precision weighted mean
                 mu, sigma = utils.inv_var_weight([mu_g_path[f], mu_g_mem[f]], [sigma_g_path[f], sigma_g_mem[f]])
             else:

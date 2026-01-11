@@ -380,7 +380,7 @@ class GroundedLocationLoss(nn.Module):
         Sensory ($L_{p,x}$):
             $0.5 \sum_f ||p_{inf}^f - p_{inf,x}^f||^2$
             where $p_{inf,x}$ is retrieved via sensory input ($x \to p$)
-            (optional, controlled by ``use_p_inf`` flag)
+            (optional, controlled by ``use_x_cued_recall`` flag)
     """
 
     def __init__(self, settings: Optional[GroundedLocationSettings] = None):
@@ -400,7 +400,7 @@ class GroundedLocationLoss(nn.Module):
     def weight(self) -> float:
         return self.settings.weight
 
-    def forward(self, p_inf: GroundedLocation, p_gen: GroundedLocation, p_inf_x: Optional[GroundedLocation] = None, use_p_inf: bool = True) -> LossP:
+    def forward(self, p_inf: GroundedLocation, p_gen: GroundedLocation, p_inf_x: Optional[GroundedLocation] = None, use_x_cued_recall: bool = True) -> LossP:
         """Compute `LossP` from grounded location codes.
 
         Args:
@@ -409,15 +409,15 @@ class GroundedLocationLoss(nn.Module):
             p_gen: Grounded location retrieved via abstract location (g_inf → p).
                 Required for L_p_g computation.
             p_inf_x: Grounded location from sensory memory retrieval (x → p).
-                Used for L_p_x if use_p_inf=True.
-            use_p_inf: Whether to compute L_p_x (sensory consistency term).
+                Used for L_p_x if use_x_cued_recall=True.
+            use_x_cued_recall: Whether to compute L_p_x (sensory consistency term).
                 Set to False to disable this term (returns zeros).
 
         Returns:
             LossP dataclass with abstract and sensory components.
 
         Notes:
-            Squared errors include a 0.5 factor by convention. When `use_p_inf`
+            Squared errors include a 0.5 factor by convention. When `use_x_cued_recall`
             is False, the sensory term is zeroed.
         """
         loss_abstract_per_env = None
@@ -425,7 +425,7 @@ class GroundedLocationLoss(nn.Module):
             se = 0.5 * (p_i - p_g).pow(2).sum(dim=-1)
             loss_abstract_per_env = se if loss_abstract_per_env is None else loss_abstract_per_env + se
 
-        if use_p_inf and p_inf_x is not None:
+        if use_x_cued_recall and p_inf_x is not None:
             loss_sensory_per_env = None
             for p_i, p_x in zip(p_inf, p_inf_x):
                 se = 0.5 * (p_i - p_x).pow(2).sum(dim=-1)
@@ -673,19 +673,19 @@ class TEMLoss(nn.Module):
         self.loss_g_fn = AbstractLocationLoss(config.g)
         self.loss_reg_fn = RegularizationLoss(config.reg)
 
-    def forward(self, step: TEMState, use_p_inf: bool) -> LossOutput:
+    def forward(self, step: TEMState, use_x_cued_recall: bool) -> LossOutput:
         """Compute weighted loss components for one timestep.
 
         Args:
             step: TEMState at current timestep.
-            use_p_inf: Whether to include sensory grounded-location term.
+            use_x_cued_recall: Whether to include sensory grounded-location term.
 
         Returns:
             LossOutput where each component is already multiplied by settings weights.
         """
         # Raw (possibly per-env) losses
         lx: LossX = self.loss_x_fn(step.o_logits, step.o)
-        lp: LossP = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_p_inf)
+        lp: LossP = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_x_cued_recall)
         lg: LossG = self.loss_g_fn(step.g_inf, step.g_gen)
         lreg: LossReg = self.loss_reg_fn(step.g_inf, step.p_inf)
 

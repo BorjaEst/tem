@@ -528,7 +528,7 @@ class HPCSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    use_p_inf: bool = Field(
+    use_x_cued_recall: bool = Field(
         default=True,
         description="Whether to use inferred ground location while inferring new abstract location",
     )

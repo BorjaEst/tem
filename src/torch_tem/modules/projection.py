@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from typing import List, Literal, Optional, Protocol, Sequence
+from typing import List, Literal, Optional, Protocol, Sequence, Tuple
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field

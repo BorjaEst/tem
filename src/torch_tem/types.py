@@ -224,7 +224,7 @@ Shape:
     Each matrix: [batch_size, sum(n_p), sum(n_p)]
 
 Theory:
-    Hebbian plasticity M = λ·M + η·(p_inf + p_gen) ⊗ (p_inf - p_gen)
+    Hebbian plasticity M = λ·M + η·(p_inf + p_gen_gi) ⊗ (p_inf - p_gen_gi)
     creates associative connections between abstract and grounded
     representations, enabling both memory-guided generation and inference.
     The dual-memory architecture allows separate optimization of the

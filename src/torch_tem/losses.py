@@ -162,8 +162,7 @@ class SensoryReconstructionLoss(nn.Module):
         Args:
             o_logits: Three logit tensors `[infer, retrieved, ancestral]`, each
                 shaped `(B, n_classes)`.
-            o_labels: Ground-truth observation, each:
-                - one-hot: `(B, n_classes)`
+            o_labels: Ground-truth observation, one-hot encoded `(B, n_classes)`.
 
         Returns:
             LossX: Per-pathway cross-entropy losses.
@@ -171,10 +170,13 @@ class SensoryReconstructionLoss(nn.Module):
         Raises:
             ValueError: If `o_logits` does not contain exactly 3 tensors.
         """
+        # Convert one-hot to class indices (legacy: labels = argmax(o, 1))
+        labels = torch.argmax(o_labels, dim=1)
+        
         # Pathway order is fixed to match the legacy implementation.
-        loss_infer = F.cross_entropy(o_logits[0], o_labels, reduction=self.reduction)
-        loss_retrieved = F.cross_entropy(o_logits[1], o_labels, reduction=self.reduction)
-        loss_ancestral = F.cross_entropy(o_logits[2], o_labels, reduction=self.reduction)
+        loss_infer = F.cross_entropy(o_logits[0], labels, reduction=self.reduction)
+        loss_retrieved = F.cross_entropy(o_logits[1], labels, reduction=self.reduction)
+        loss_ancestral = F.cross_entropy(o_logits[2], labels, reduction=self.reduction)
 
         return LossX(infer=loss_infer, retrieved=loss_retrieved, ancestral=loss_ancestral) * self.weight
 
@@ -407,12 +409,12 @@ class GroundedLocationLoss(nn.Module):
 
     Components:
         Abstract ($L_{p,g}$):
-            $0.5 \sum_f ||p_{inf}^f - p_{gen}^f||^2$
-            where $p_{gen}$ is retrieved via grid cells ($g \to p$)
+            $0.5 \sum_f ||p_{inf}^f - p_{gen,gi}^f||^2$
+            where $p_{gen,gi}$ is retrieved via inferred grid cells ($g_{inf} \to p$)
 
         Sensory ($L_{p,x}$):
-            $0.5 \sum_f ||p_{inf}^f - p_{inf,x}^f||^2$
-            where $p_{inf,x}$ is retrieved via sensory input ($x \to p$)
+            $0.5 \sum_f ||p_{inf}^f - p_{xi}^f||^2$
+            where $p_{xi}$ is retrieved via sensory input ($x \to p$)
             (optional, controlled by ``use_x_cued_recall`` flag)
     """
 

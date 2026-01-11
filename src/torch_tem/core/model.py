@@ -585,8 +585,8 @@ class TEMPrediction:
     Contains all predictive outputs used for loss computation.
     """
 
-    o_hat: Sequence[Tensor]  # from (p_gg, p_xi, p_g_inf) - reconstructed sensory observation
-    o_logits: Sequence[Tensor]  # from (p_gg, p_xi, p_g_inf) - logits for loss
+    o_hat: Sequence[Tensor]  # from (p_inf, p_gen_gi, p_gen_gg) - reconstructed sensory observation
+    o_logits: Sequence[Tensor]  # from (p_inf, p_gen_gi, p_gen_gg) - logits for loss
 
 
 @dataclass

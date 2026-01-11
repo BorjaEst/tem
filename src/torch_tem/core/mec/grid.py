@@ -148,9 +148,8 @@ class GridModel(nn.Module):
         return mats
 
     def g_clamp(self, g: List[Tensor]) -> List[Tensor]:
-        """Clamp grid cell activations to [-1, 1] with leaky ReLU for stability."""
-        clamped = [torch.clamp(g_f, min=-1, max=1) for g_f in g]
-        return [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in clamped]
+        """Clamp grid cell activations to [-1, 1]"""
+        return [torch.clamp(g_f, min=-1, max=1) for g_f in g]
 
 
 def grid_connections(f_grid: list[float]) -> list[list[bool]]:

@@ -45,15 +45,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torch.distributions import Normal
 
 from torch_tem import utils
-from torch_tem.core import TEMState
+from torch_tem.core import TEMLabel, TEMPrediction, TEMState
 from torch_tem.settings import AbstractLocationSettings  # fmt: skip
 from torch_tem.settings import GroundedLocationSettings  # fmt: skip
 from torch_tem.settings import LossSettings  # fmt: skip
 from torch_tem.settings import RegularizationSettings  # fmt: skip
 from torch_tem.settings import SensoryReconstructionSettings  # fmt: skip
-from torch_tem.types import AbstractLocation, GroundedLocation, Reduction, Scalar, Transition
+from torch_tem.types import AbstractLocation, GroundedLocation, Reduction, Scalar
 
 
 @dataclass
@@ -68,8 +69,8 @@ class LossX:
             observation directly from inferred grounded location.
         retrieved: Retrieved pathway loss ($g_{inf} \to p \to x$). Predicts via
             grounded location retrieved from inferred abstract location.
-        ancestral: Ancestral/generative pathway loss ($g_{t-1} \to g_t \to p \to x$).
-            Predicts via one-step transition in abstract space.
+        ancestral: Ancestral/generative pathway loss ($g_{gen} \to p \to x$).
+            Predicts via one-state transition in abstract space.
 
     Note:
         Shape is scalar (reduced) or ``(B,)`` depending on reduction mode.
@@ -129,7 +130,7 @@ class SensoryReconstructionLoss(nn.Module):
     Evaluates the model's ability to predict sensory observations through three
     parallel pathways, each testing different aspects of TEM's spatial memory:
 
-    1. **Inference pathway**: Direct prediction from current place cells
+    1. **Inference pathway**: Direct prediction from infered place cells
     2. **Retrieved pathway**: Prediction via grid→place retrieval
     3. **Ancestral pathway**: Prediction via grid transition and retrieval
 
@@ -161,8 +162,7 @@ class SensoryReconstructionLoss(nn.Module):
         Args:
             o_logits: Three logit tensors `[infer, retrieved, ancestral]`, each
                 shaped `(B, n_classes)`.
-            o_labels: Ground-truth observation, each:
-                - one-hot: `(B, n_classes)`
+            o_labels: Ground-truth observation, one-hot encoded `(B, n_classes)`.
 
         Returns:
             LossX: Per-pathway cross-entropy losses.
@@ -170,10 +170,13 @@ class SensoryReconstructionLoss(nn.Module):
         Raises:
             ValueError: If `o_logits` does not contain exactly 3 tensors.
         """
+        # Convert one-hot to class indices (legacy: labels = argmax(o, 1))
+        labels = torch.argmax(o_labels, dim=1)
+
         # Pathway order is fixed to match the legacy implementation.
-        loss_infer = F.cross_entropy(o_logits[0], o_labels, reduction=self.reduction)
-        loss_retrieved = F.cross_entropy(o_logits[1], o_labels, reduction=self.reduction)
-        loss_ancestral = F.cross_entropy(o_logits[2], o_labels, reduction=self.reduction)
+        loss_infer = F.cross_entropy(o_logits[0], labels, reduction=self.reduction)
+        loss_retrieved = F.cross_entropy(o_logits[1], labels, reduction=self.reduction)
+        loss_ancestral = F.cross_entropy(o_logits[2], labels, reduction=self.reduction)
 
         return LossX(infer=loss_infer, retrieved=loss_retrieved, ancestral=loss_ancestral) * self.weight
 
@@ -185,8 +188,8 @@ class LossG:
     Enforces consistency between inferred and predicted abstract locations (grid cells).
 
     Attributes:
-        transition: Transition consistency ($||g_{inf} - g_{gen}||^2$ or KL divergence).
-            Compares inference with one-step prediction from previous timestep.
+        transition: Transition consistency ($||g_{inf} - g_{gen}||^2$ or NLL divergence).
+            Compares inference with one-state prediction from previous timestate.
     """
 
     transition: Tensor
@@ -225,19 +228,23 @@ class LossG:
 class AbstractLocationLoss(nn.Module):
     """Compute abstract location transition consistency ($L_g$).
 
-    Enforces that the inferred abstract location (grid cells from path integration
-    and sensory input) matches the predicted abstract location (from previous
-    grid cells via transition model).
+        Enforces that the inferred abstract location (grid cells from path integration
+        and sensory input) matches the predicted abstract location (from previous
+        grid cells via transition model).
 
-    Modes:
-        mse:
-            Surrogate objective using squared error (legacy):
-            $0.5 sum_f ||g_{inf}^f - g_{gen}^f||^2$
+        Modes:
+            mse:
+                Surrogate objective using squared error (legacy):
+                $0.5 sum_f ||g_{inf}^f - g_{gen}^f||^2$
 
-        kl:
-            Uncertainty-weighted KL divergence. Requires :class:`Transition`
-            input with mean and uncertainty:
-            $sum_f D_{KL}(g_{inf}^f || mathcal{N}(g_{gen}^f, sigma_{gen}^f))$
+            nll:
+                Uncertainty-weighted nll divergence. Requires :class:`Transition`
+                input with mean and uncertainty:
+    <<<<<<< Updated upstream
+                $sum_f D_{KL}(g_{inf}^f || mathcal{N}(g_{gen}^f, sigma_{gen}^f))$
+    =======
+                $\sum_f D_{nll}(g_{inf}^f || \mathcal{N}(g_{gen}^f, \sigma_{gen}^f))$
+    >>>>>>> Stashed changes
     """
 
     def __init__(self, settings: Optional[AbstractLocationSettings] = None):
@@ -261,51 +268,83 @@ class AbstractLocationLoss(nn.Module):
     def weight(self) -> float:
         return self.settings.weight
 
-    def forward(self, g_inf: AbstractLocation, g_gen: AbstractLocation | Transition) -> LossG:
+    def forward(self, g_inf: AbstractLocation, g_gen: AbstractLocation, uncertainty: Optional[list[Tensor]] = None) -> LossG:
         """Compute `LossG` from inferred and generated abstract locations.
 
         Args:
             g_inf: Inferred abstract location (posterior from sensory + path integration).
                 List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
-            g_gen: Generated/predicted abstract location.
-                For MSE mode: List of tensors (same structure as g_inf)
-                For KL mode: Transition dataclass with mean and uncertainty
+            g_gen: Generated abstract location (from previous state via transition).
+                List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
+            uncertainty: Optional uncertainty tensors for nll mode.
+                List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
 
         Returns:
             LossG dataclass with transition loss.
-
-        Raises:
-            ValueError: If `mode='kl'` is used without a `Transition` input.
         """
         if self.mode == "mse":
-            g_gen_list = g_gen.mean if isinstance(g_gen, Transition) else g_gen
-
-            loss_per_env = None
-            for g_i, g_g in zip(g_inf, g_gen_list):
-                se = 0.5 * (g_i - g_g).pow(2).sum(dim=-1)
-                loss_per_env = se if loss_per_env is None else loss_per_env + se
-
-            transition = utils.reduce_per_env(loss_per_env, self.reduction)
-            return LossG(transition=transition) * self.weight
-
-        elif self.mode == "kl":
-            if not isinstance(g_gen, Transition):
-                raise ValueError(f"KL mode requires g_gen to be Transition with uncertainty, got {type(g_gen)}")
-
-            kl_per_env = None
-            for mu_post, mu_prior, sigma_prior in zip(g_inf, g_gen.mean, g_gen.uncertainty):
-                sigma_prior = torch.clamp(sigma_prior, min=1e-6)
-                diff = mu_post - mu_prior
-                mahalanobis = 0.5 * (diff / sigma_prior).pow(2)
-                log_det = torch.log(sigma_prior)
-                kl_f = (mahalanobis + log_det).sum(dim=-1)
-                kl_per_env = kl_f if kl_per_env is None else kl_per_env + kl_f
-
-            transition = utils.reduce_per_env(kl_per_env, self.reduction)
-            return LossG(transition=transition) * self.weight
-
+            transition_loss = self._loss_mse(g_inf, g_gen)
+        elif self.mode == "nll" and uncertainty is None:
+            raise ValueError("Uncertainty tensors must be provided for nll loss mode.")
+        elif self.mode == "nll":
+            transition_loss = self._loss_kl(g_inf, g_gen, uncertainty)
         else:
-            raise ValueError(f"Unknown mode: {self.mode}. Expected 'mse' or 'kl'.")
+            raise ValueError(f"Unknown mode: {self.mode}. Expected 'mse' or 'nll'.")
+        transition_loss = utils.reduce_per_env(transition_loss, self.reduction)
+        return LossG(transition=transition_loss) * self.weight
+
+    # We can move _loss_mse and _loss_kl outside the class as standalone functions if desired.
+
+    def _loss_mse(self, g_inf: AbstractLocation, g_gen: AbstractLocation) -> Tensor:
+        """Compute MSE loss between inferred and generated abstract locations.
+
+        Args:
+            g_inf: Inferred abstract location (posterior from sensory + path integration).
+                List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
+            g_gen: Generated abstract location (from previous state via transition).
+                List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
+
+        Returns:
+            Tensor: Per-environment MSE loss (shape: (B,)).
+        """
+        loss = torch.zeros(g_inf[0].shape[0], device=g_inf[0].device, dtype=g_inf[0].dtype)
+        for g_i, g_g in zip(g_inf, g_gen):
+            loss += 0.5 * (g_i - g_g).pow(2).sum(dim=-1)
+        return loss
+
+    def _loss_kl(self, g_inf: AbstractLocation, g_gen: AbstractLocation, uncertainty: list[Tensor]) -> Tensor:
+        """Compute uncertainty-weighted NLL loss (negative log-likelihood).
+
+        Computes the negative log-likelihood of the inferred abstract location under
+        a Gaussian prior defined by the transition model. This is equivalent to a
+        precision-weighted MSE loss.
+
+        Note:
+            This is NOT a true nll divergence (which would require posterior uncertainty).
+            It computes $-\log p(g_{inf} | g_{gen}, \sigma_{gen})$ where the prior
+            is $\mathcal{N}(g_{gen}, \sigma_{gen})$.
+
+        Args:
+            g_inf: Inferred abstract location (posterior point estimate from sensory + path integration).
+                List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
+            g_gen: Generated abstract location mean (from previous state via transition).
+                List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
+            uncertainty: Standard deviation tensors for generated abstract locations.
+                List of tensors, one per frequency module. Shape: [(B, n_g_f1), (B, n_g_f2), ...]
+
+        Returns:
+            Tensor: Per-environment NLL loss (shape: (B,)).
+        """
+
+        loss = torch.zeros(g_inf[0].shape[0], device=g_inf[0].device, dtype=g_inf[0].dtype)
+        for mu_post, mu_prior, sigma_prior in zip(g_inf, g_gen, uncertainty):
+            # Clamp uncertainty to avoid numerical issues
+            sigma_prior = torch.clamp(sigma_prior, min=1e-6)
+            # Create prior distribution and compute negative log-likelihood
+            prior = Normal(loc=mu_prior, scale=sigma_prior)
+            nll = -prior.log_prob(mu_post).sum(dim=-1)
+            loss += nll
+        return loss
 
 
 @dataclass
@@ -374,12 +413,12 @@ class GroundedLocationLoss(nn.Module):
 
     Components:
         Abstract ($L_{p,g}$):
-            $0.5 \sum_f ||p_{inf}^f - p_{gen}^f||^2$
-            where $p_{gen}$ is retrieved via grid cells ($g \to p$)
+            $0.5 \sum_f ||p_{inf}^f - p_{gen,gi}^f||^2$
+            where $p_{gen,gi}$ is retrieved via inferred grid cells ($g_{inf} to p$)
 
         Sensory ($L_{p,x}$):
-            $0.5 \sum_f ||p_{inf}^f - p_{inf,x}^f||^2$
-            where $p_{inf,x}$ is retrieved via sensory input ($x \to p$)
+            $0.5 \sum_f ||p_{inf}^f - p_{xi}^f||^2$
+            where $p_{xi}$ is retrieved via sensory input ($x to p$)
             (optional, controlled by ``use_x_cued_recall`` flag)
     """
 
@@ -400,18 +439,16 @@ class GroundedLocationLoss(nn.Module):
     def weight(self) -> float:
         return self.settings.weight
 
-    def forward(self, p_inf: GroundedLocation, p_gen: GroundedLocation, p_inf_x: Optional[GroundedLocation] = None, use_x_cued_recall: bool = True) -> LossP:
+    def forward(self, p_inf: GroundedLocation, p_gen_gi: GroundedLocation, p_xi: Optional[GroundedLocation] = None) -> LossP:
         """Compute `LossP` from grounded location codes.
 
         Args:
-            p_inf: Inferred grounded location (conjunctive place cells).
+            p_inf: Inferred grounded location (conjunctive place cells from x_ and g_).
                 List of tensors, one per frequency module. Shape: [(B, n_p_f1), (B, n_p_f2), ...]
-            p_gen: Grounded location retrieved via abstract location (g_inf → p).
+            p_gen_gi: Grounded location retrieved via abstract location (g_inf → p).
                 Required for L_p_g computation.
-            p_inf_x: Grounded location from sensory memory retrieval (x → p).
-                Used for L_p_x if use_x_cued_recall=True.
-            use_x_cued_recall: Whether to compute L_p_x (sensory consistency term).
-                Set to False to disable this term (returns zeros).
+            p_xi: Grounded location from sensory memory retrieval (x → p).
+                Used for L_p_x if settings.use_x_cued_recall=True.
 
         Returns:
             LossP dataclass with abstract and sensory components.
@@ -420,22 +457,18 @@ class GroundedLocationLoss(nn.Module):
             Squared errors include a 0.5 factor by convention. When `use_x_cued_recall`
             is False, the sensory term is zeroed.
         """
-        loss_abstract_per_env = None
-        for p_i, p_g in zip(p_inf, p_gen):
-            se = 0.5 * (p_i - p_g).pow(2).sum(dim=-1)
-            loss_abstract_per_env = se if loss_abstract_per_env is None else loss_abstract_per_env + se
+        batch_size = p_inf[0].shape[0]
+        loss_abstract = torch.zeros(batch_size, device=p_inf[0].device, dtype=p_inf[0].dtype)
+        for p_i, p_g in zip(p_inf, p_gen_gi):
+            loss_abstract += 0.5 * (p_i - p_g).pow(2).sum(dim=-1)
 
-        if use_x_cued_recall and p_inf_x is not None:
-            loss_sensory_per_env = None
-            for p_i, p_x in zip(p_inf, p_inf_x):
-                se = 0.5 * (p_i - p_x).pow(2).sum(dim=-1)
-                loss_sensory_per_env = se if loss_sensory_per_env is None else loss_sensory_per_env + se
-        else:
-            batch_size = p_inf[0].shape[0]
-            loss_sensory_per_env = torch.zeros(batch_size, device=p_inf[0].device, dtype=p_inf[0].dtype)
+        loss_sensory = torch.zeros(batch_size, device=p_inf[0].device, dtype=p_inf[0].dtype)
+        if self.settings.use_x_cued_recall and p_xi is not None:
+            for p_i, p_x in zip(p_inf, p_xi):
+                loss_sensory += 0.5 * (p_i - p_x).pow(2).sum(dim=-1)
 
-        abstract = utils.reduce_per_env(loss_abstract_per_env, self.reduction)
-        sensory = utils.reduce_per_env(loss_sensory_per_env, self.reduction)
+        abstract = utils.reduce_per_env(loss_abstract, self.reduction)
+        sensory = utils.reduce_per_env(loss_sensory, self.reduction)
         return LossP(abstract=abstract, sensory=sensory) * self.weight
 
 
@@ -520,7 +553,7 @@ class RegularizationLoss(nn.Module):
     def reduction(self) -> Reduction:
         return self.settings.reduction
 
-    def forward(self, g: AbstractLocation, p: GroundedLocation) -> LossReg:
+    def forward(self, g_inf: AbstractLocation, p_inf: GroundedLocation) -> LossReg:
         """Compute `LossReg`.
 
         Args:
@@ -533,18 +566,16 @@ class RegularizationLoss(nn.Module):
         Notes:
             This matches legacy behaviour (sum across frequencies and features).
         """
-        reg_g_per_env = None
-        for g_f in g:
-            l2 = (g_f**2).sum(dim=-1)
-            reg_g_per_env = l2 if reg_g_per_env is None else reg_g_per_env + l2
+        loss_g_l2 = torch.zeros(g_inf[0].shape[0], device=g_inf[0].device, dtype=g_inf[0].dtype)
+        for g_f in g_inf:
+            loss_g_l2 += (g_f**2).sum(dim=-1)
 
-        reg_p_per_env = None
-        for p_f in p:
-            l1 = torch.abs(p_f).sum(dim=-1)
-            reg_p_per_env = l1 if reg_p_per_env is None else reg_p_per_env + l1
+        loss_p_l1 = torch.zeros(p_inf[0].shape[0], device=p_inf[0].device, dtype=p_inf[0].dtype)
+        for p_f in p_inf:
+            loss_p_l1 += torch.abs(p_f).sum(dim=-1)
 
-        g_l2 = utils.reduce_per_env(reg_g_per_env, self.reduction)
-        p_l1 = utils.reduce_per_env(reg_p_per_env, self.reduction)
+        g_l2 = utils.reduce_per_env(loss_g_l2, self.reduction)
+        p_l1 = utils.reduce_per_env(loss_p_l1, self.reduction)
         return LossReg(g_l2=g_l2 * self.settings.weight_g_l2, p_l1=p_l1 * self.settings.weight_p_l1)
 
 
@@ -568,9 +599,9 @@ class LossOutput:
         Accumulating losses over a rollout::
 
             accum = LossOutput.zero(device=device)
-            for step in rollout:
-                step_loss = loss_fn(step)
-                accum = accum + step_loss
+            for state in rollout:
+                state_loss = loss_fn(state)
+                accum = accum + state_loss
             mean_loss = accum / len(rollout)
     """
 
@@ -640,7 +671,7 @@ AccumLoss = LossOutput
 class TEMLoss(nn.Module):
     """Top-level TEM loss computation module.
 
-    Orchestrates all loss components for a single timestep, applying configured
+    Orchestrates all loss components for a single timestate, applying configured
     weights and reduction modes. This is the primary interface used by the
     training loop.
 
@@ -673,20 +704,22 @@ class TEMLoss(nn.Module):
         self.loss_g_fn = AbstractLocationLoss(config.g)
         self.loss_reg_fn = RegularizationLoss(config.reg)
 
-    def forward(self, step: TEMState, use_x_cued_recall: bool) -> LossOutput:
+    def forward(self, prediction: TEMPrediction, state: TEMState, label: TEMLabel) -> LossOutput:
+        # Move use_x_cued_recall to GroundedLocationConfig
         """Compute weighted loss components for one timestep.
 
         Args:
-            step: TEMState at current timestep.
-            use_x_cued_recall: Whether to include sensory grounded-location term.
+            prediction: TEMPrediction at current timestep.
+            state: TEMState at current timestep.
+            label: TEMLabel with ground-truth data for current timestep.
 
         Returns:
             LossOutput where each component is already multiplied by settings weights.
         """
         # Raw (possibly per-env) losses
-        lx: LossX = self.loss_x_fn(step.o_logits, step.o)
-        lp: LossP = self.loss_p_fn(step.p_inf, step.p_gen, step.p_inf_x, use_x_cued_recall)
-        lg: LossG = self.loss_g_fn(step.g_inf, step.g_gen)
-        lreg: LossReg = self.loss_reg_fn(step.g_inf, step.p_inf)
+        lx: LossX = self.loss_x_fn(prediction.o_logits, label.o)
+        lg: LossG = self.loss_g_fn(state.g_inf, state.g_gen, state.mec_state.uncertainty)
+        lp: LossP = self.loss_p_fn(state.p_inf, state.p_gen_gi, state.p_xi)
+        lreg: LossReg = self.loss_reg_fn(state.g_inf, state.p_inf)
 
         return LossOutput(x=lx, p=lp, g=lg, reg=lreg)

@@ -318,9 +318,9 @@ class AbstractLocationSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
-    mode: Literal["mse", "kl"] = Field(
+    mode: Literal["mse", "nll"] = Field(
         default="mse",
-        description="Loss mode: 'mse' (legacy surrogate), 'kl' (with uncertainty).",
+        description="Loss mode: 'mse' (legacy surrogate), 'nll' (with uncertainty).",
     )
     reduction: Reduction = Field(
         default="none",
@@ -337,6 +337,11 @@ class GroundedLocationSettings(BaseModel):
     """Settings for grounded location consistency loss ($L_p$)."""
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    use_x_cued_recall: bool = Field(
+        default=True,
+        description="Whether to use inferred grounded location loss.",
+    )
 
     reduction: Reduction = Field(
         default="none",

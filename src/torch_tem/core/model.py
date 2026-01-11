@@ -584,13 +584,12 @@ class TEMPrediction:
     """Prediction outputs from TEM state.
 
     Contains all predictive outputs used for loss computation:
-    - Sensory predictions (o_hat, o_logits) from three pathways
-    - Retrieved place cell representations (p_gen)
+    - o_hat: sensory predictions from the 3 pathways (path integration, generative, and grounded location cued)
+    - o_logits: logits for loss computation from the 3 pathways
     """
 
     o_hat: Sequence[Tensor]  # (x_p, x_g, x_gt) - sensory predictions from 3 pathways
     o_logits: Sequence[Tensor]  # (logits_p, logits_g, logits_gt) - logits for loss
-    p_gen: List[Tensor]  # Place cells retrieved from g_inf (for loss computation)
 
 
 @dataclass
@@ -615,7 +614,6 @@ class TEMState:
     p_inf_x: Optional[List[Tensor]] = None  # Grounded location from sensory input (for loss computation)
 
     # Legacy fields for backward compatibility (mirrors hpc_state.memory when present)
-    lec: Optional[Any] = None
     g: Any = None
     o: Optional[Tensor] = None
     a_prev: Any = None
@@ -682,6 +680,16 @@ class TEMState:
             p_inf=_detach(self.p_inf),
             p_inf_x=_detach(self.p_inf_x),
         )
+
+    @property
+    def p_gen_gi(self) -> Optional[List[Tensor]]:
+        """Return per-frequency generated grounded location p for the current timestep."""
+        return self.p_gen
+
+    @property
+    def p_xi(self) -> Optional[List[Tensor]]:
+        """Return per-frequency inferred grounded location p from sensory input for the current timestep."""
+        return self.p_inf_x
 
 
 @dataclass
@@ -791,7 +799,7 @@ class TEMModel(nn.Module):
         mec_state.g = g_inf
 
         # 3. Predict: Generate predictions from corrected state
-        predictions = self.predict(
+        predictions, p_gen = self.predict(
             p_inf,
             g_inf,
             mec_state.g_gen,
@@ -799,12 +807,14 @@ class TEMModel(nn.Module):
         )
 
         # 4. Update memory (Hebbian write)
-        M = self.update_memory(hpc_state.memory, p_inf, p_inf_x, predictions.p_gen)
+        M = self.update_memory(hpc_state.memory, p_inf, p_inf_x, p_gen)
         hpc_state.memory = M
         state.hpc_state = hpc_state
 
         # Return all iteration values (loss now computed in Lightning module)
-        return hpc_state, mec_state, predictions.p_gen, predictions.o_hat, predictions.o_logits, lec_state, g_inf, p_inf, p_inf_x
+        state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state, g_inf=g_inf, p_inf=p_inf, p_inf_x=p_inf_x, p_gen=p_gen)
+
+        return predictions, state
 
     def transition(self, mec_state: MECState, a_prev, locations, device) -> MECState:
         """Transition: MEC path integration (action-driven, no observation).
@@ -857,7 +867,7 @@ class TEMModel(nn.Module):
             TEMPrediction with o_hat, o_logits, p_gen
         """
         o_hat, o_logits, p_gen = self.generative(p_inf, g_inf, g_gen, state)
-        return TEMPrediction(o_hat=o_hat, o_logits=o_logits, p_gen=p_gen)
+        return TEMPrediction(o_hat=o_hat, o_logits=o_logits), p_gen
 
     def update_memory(self, memory_prev: List[Tensor], p_inf, p_inf_x, p_gen) -> List[Tensor]:
         """Update Hebbian memory matrices.
@@ -1129,26 +1139,17 @@ class Rollout(Iterator[TEMState]):
         self._idx += 1
 
         # Run model forward
-        hpc_state, mec_state, p_gen, x_gen, o_logits, lec_state, g_inf, p_inf, p_inf_x = self.model(o, locations, self._a_prev, self._state)
+        prediction, state = self.model(o, locations, self._a_prev, self._state)
 
         # Build state with updated components
-        state = TEMState(
-            g=locations,
-            o=o,
-            a_prev=a,
-            lec_state=lec_state,
-            mec_state=mec_state,
-            hpc_state=hpc_state,
-            g_inf=g_inf,
-            p_inf=p_inf,
-            p_inf_x=p_inf_x,
-            p_gen=p_gen,
-            x_gen=x_gen,
-            o_logits=o_logits,
-        )
+        state.g = locations
+        state.a_prev = a
 
         # Update prev-values for next iteration
         self._a_prev = a
         self._state = state
 
-        return state
+        # Build labels for current timestep
+        labels = TEMLabel(o=o, locations=locations)
+
+        return prediction, state, labels

@@ -41,6 +41,11 @@ class MECState:
         if self.g is None:
             self.g = list(self.g_path.mean)
 
+    @property
+    def uncertainty(self) -> List[Tensor]:
+        """Return uncertainty (stddev) of inferred location."""
+        return self.g_path.uncertainty
+
 
 class MECModel(nn.Module):
     def __init__(self, n_a: int, shape: List[int], f_init: List[float], settings: MECSettings):

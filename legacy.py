@@ -36,80 +36,80 @@ class Model(torch.nn.Module):
         # The previous iteration may contain walks without action. These are new walks, for which some parameters need to be reset.
         steps = self.init_walks(prev_iter)
         # Forward pass: perform a TEM iteration for each set of [place, observation, action], and produce inferred and generated variables for each step.
-        for g, x, a in walk:
+        for locations, o, a in walk:
             # If there is no previous iteration at all: all walks are new, initialise a whole new iteration object
             if steps is None:
                 # Use an Iteration object to set initial values before any real iterations, initialising M, x_inf as zero. Set actions to None blank to indicate there was no previous action
-                steps = [self.init_iteration(g, x, [None for _ in range(len(a))], prev_M)]
+                steps = [self.init_iteration(locations, o, [None for _ in range(len(a))], prev_M)]
             # Perform TEM iteration using transition from previous iteration
-            L, M, g_gen, p_gen, x_gen, o_logits, x_inf, g_inf, p_inf = self.iteration(x, g, steps[-1].a, steps[-1].M, steps[-1].x_inf, steps[-1].g_inf)
+            L, M, g_gen, p_gen_gi, o_gen, o_logits, x_inf, g_inf, p_inf = self.iteration(o, locations, steps[-1].a, steps[-1].M, steps[-1].x_inf, steps[-1].g_inf)
             # Store this iteration in iteration object in steps list
-            steps.append(Iteration(g, x, a, L, M, g_gen, p_gen, x_gen, o_logits, x_inf, g_inf, p_inf))
+            steps.append(Iteration(locations=locations, o=o, a=a, L=L, M=M, g_gen=g_gen, p_gen_gi=p_gen_gi, o_gen=o_gen, o_logits=o_logits, x_inf=x_inf, g_inf=g_inf, p_inf=p_inf))
         # The first step is either a step from a previous walk or initialisiation rubbish, so remove it
         steps = steps[1:]
         # Return steps, which is a list of Iteration objects
         return steps
 
-    def iteration(self, x, locations, a_prev, M_prev, x_prev, g_prev):
+    def iteration(self, o, locations, a_prev, M_prev, x_prev, g_prev):
         # First, do the transition step, as it will be necessary for both the inference and generative part of the model
         g_gen, g_path = self.gen_g(a_prev, g_prev, locations)
-        # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_inf_x
-        x_inf, g_inf, p_inf_x, p_inf = self.inference(x, locations, M_prev, x_prev, g_path)
+        # Run inference model: infer grounded location p_inf (hippocampus), abstract location g_inf (entorhinal). Also keep filtered sensory observation (x_inf), and retrieved grounded location p_xi
+        x_inf, g_inf, p_xi, p_inf = self.inference(o, locations, M_prev, x_prev, g_path)
         # Run generative model: since generative model is only used for training purposes, it will generate from *inferred* variables instead of *generated* variables (as it would when used for generation)
-        x_gen, o_logits, p_gen = self.generative(M_prev, p_inf, g_inf, g_gen)
+        o_gen, o_logits, p_gen_gi = self.generative(M_prev, p_inf, g_inf, g_gen)
         # Update generative memory with generated and inferred grounded location.
-        M = [self.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+        M = [self.hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen_gi, dim=1))]
         # If using memory for grounded location inference: append inference memory
-        if self.hyper["use_p_inf"]:
+        if self.hyper["use_x_cued_recall"]:
             # Inference memory is identical to generative memory if using common memory, and updated separatedly if not
-            M.append(M[0] if self.hyper["common_memory"] else self.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1), do_hierarchical_connections=False))
+            M.append(M[0] if self.hyper["common_memory"] else self.hebbian(M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_xi, dim=1), do_hierarchical_connections=False))
         # Calculate loss of this step
-        L = self.loss(g_gen, p_gen, o_logits, x, g_inf, p_inf, p_inf_x, M_prev)
+        L = self.loss(g_gen, p_gen_gi, o_logits, o, g_inf, p_inf, p_xi, M_prev)
         # Return all iteration values
-        return L, M, g_gen, p_gen, x_gen, o_logits, x_inf, g_inf, p_inf
+        return L, M, g_gen, p_gen_gi, o_gen, o_logits, x_inf, g_inf, p_inf
 
     def inference(self, o, locations, M_prev, x_prev, g_gen):
         # Compress sensory observation from one-hot to two-hot (or alternatively, whatever an MLP makes of it)
         c = self.f_c(o)
         # Temporally filter sensory observation by mixing it with previous experience
-        x = self.x_prev2x(x_prev, c)
+        x_inf = self.inf_x(x_prev, c)
         # Prepare sensory experience for input to memory by normalisation and weighting
-        x_ = self.x2x_(x)
+        x_ = self.x2x_(x_inf)
         # Retrieve grounded location from memory by doing pattern completion on current sensory experience
-        p_x = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_p_inf"] else None
+        p_xi = self.attractor(x_, M_prev[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
-        g = self.inf_g(p_x, g_gen, o, locations)
+        g_inf = self.inf_g(p_xi, g_gen, o, locations)
         # Prepare abstract location for input to memory by downsampling and weighting
-        g_ = self.g2g_(g)
+        g_ = self.g2g_(g_inf)
         # Infer grounded location from sensory experience and inferred abstract location
-        p = self.inf_p(x_, g_)
+        p_inf = self.inf_p(x_, g_)
         # Return variables in order that they were created
-        return x, g, p_x, p
+        return x_inf, g_inf, p_xi, p_inf
 
     def generative(self, M_prev, p_inf, g_inf, g_gen):
         # Generate observation from inferred grounded location, using only the highest frequency. Also keep non-softmaxed logits which are used in the loss later
-        x_p, x_p_logits = self.gen_x(p_inf[0])
+        o_p_inf, o_p_inf_logits = self.gen_o(p_inf[0])
         # Retrieve grounded location from memory by pattern completion on inferred abstract location
-        p_g_inf = self.gen_p(g_inf, M_prev[0])  # was p_mem_gen
+        p_gen_gi = self.gen_p(g_inf, M_prev[0])
         # And generate observation from the grounded location retrieved from inferred abstract location
-        x_g, x_g_logits = self.gen_x(p_g_inf[0])
+        o_gen_gi, o_gen_gi_logits = self.gen_o(p_gen_gi[0])
         # Retreive grounded location from memory by pattern completion on abstract location by transitioning
-        p_g_gen = self.gen_p(g_gen, M_prev[0])
+        p_gen_gg = self.gen_p(g_gen, M_prev[0])
         # Generate observation from sampled grounded location
-        x_gt, x_gt_logits = self.gen_x(p_g_gen[0])
+        o_gen_gg, o_gen_gg_logits = self.gen_o(p_gen_gg[0])
         # Return all generated observations and their corresponding logits
-        return (x_p, x_g, x_gt), (x_p_logits, x_g_logits, x_gt_logits), p_g_inf
+        return (o_p_inf, o_gen_gi, o_gen_gg), (o_p_inf_logits, o_gen_gi_logits, o_gen_gg_logits), p_gen_gi
 
-    def loss(self, g_gen, p_gen, o_logits, x, g_inf, p_inf, p_inf_x, M_prev):
+    def loss(self, g_gen, p_gen_gi, o_logits, o, g_inf, p_inf, p_xi, M_prev):
         # Calculate loss function, separately for each component because you might want to reweight contributions later
         # L_p_gen is squared error loss between inferred grounded location and grounded location retrieved from inferred abstract location
-        L_p_g = torch.sum(torch.stack(utils.squared_error(p_inf, p_gen), dim=0), dim=0)
+        L_p_g = torch.sum(torch.stack(utils.squared_error(p_inf, p_gen_gi), dim=0), dim=0)
         # L_p_inf is squared error loss between inferred grounded location and grounded location retrieved from sensory experience
-        L_p_x = torch.sum(torch.stack(utils.squared_error(p_inf, p_inf_x), dim=0), dim=0) if self.hyper["use_p_inf"] else torch.zeros_like(L_p_g)
+        L_p_x = torch.sum(torch.stack(utils.squared_error(p_inf, p_xi), dim=0), dim=0) if self.hyper["use_x_cued_recall"] else torch.zeros_like(L_p_g)
         # L_g is squared error loss between generated abstract location and inferred abstract location
         L_g = torch.sum(torch.stack(utils.squared_error(g_inf, g_gen), dim=0), dim=0)
         # L_x is a cross-entropy loss between sensory experience and different model predictions. First get true labels from sensory experience
-        labels = torch.argmax(x, 1)
+        labels = torch.argmax(o, 1)
         # L_x_gen: losses generated by generative model from g_prev -> g -> p -> x
         L_x_gen = utils.cross_entropy(o_logits[2], labels)
         # L_x_g: Losses generated by generative model from g_inf -> p -> x
@@ -203,23 +203,23 @@ class Model(torch.nn.Module):
         # MLP for decompressing highest frequency sensory experience to sensory observation
         self.MLP_c_star = MLP(self.hyper["n_x"][0], self.hyper["n_o"], hidden_dim=20 * self.hyper["n_c"])
 
-    def init_iteration(self, g, x, a, M):
+    def init_iteration(self, locations, o, a, M):
         # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
-        self.hyper["batch_size"] = x.shape[0]
+        self.hyper["batch_size"] = o.shape[0]
         # Initalise hebbian memory connectivity matrix [M_gen, M_inf] if it wasn't initialised yet
         if M is None:
             # Create new empty memory dict for generative network: zero connectivity matrix M_0, then empty list of the memory vectors a and b for each iteration for efficient hebbian memory computation
             M = [torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float)]
             # Append inference memory only if memory is used in grounded location inference
-            if self.hyper["use_p_inf"]:
+            if self.hyper["use_x_cued_recall"]:
                 # If inference and generative network share common memory: reuse same connectivity, and same memory vectors. Else, create a new empty memory list for inference network
                 M.append(M[0] if self.hyper["common_memory"] else torch.zeros((self.hyper["batch_size"], sum(self.hyper["n_p"]), sum(self.hyper["n_p"])), dtype=torch.float))
         # Initialise previous abstract location by stacking abstract location prior
         g_inf = [torch.stack([self.g_init[f] for _ in range(self.hyper["batch_size"])]) for f in range(self.hyper["n_f"])]
         # Initialise previous sensory experience with zeros, as there is no data yet for temporal smoothing
         x_inf = [torch.zeros((self.hyper["batch_size"], self.hyper["n_x"][f])) for f in range(self.hyper["n_f"])]
-        # And construct new iteration for that g, x, a, and M
-        return Iteration(g=g, x=x, a=a, M=M, x_inf=x_inf, g_inf=g_inf)
+        # And construct new iteration for that locations, x, a, and M
+        return Iteration(locations=locations, o=o, a=a, M=M, x_inf=x_inf, g_inf=g_inf)
 
     def init_walks(self, prev_iter):
         # Only reset parameters for previous iteration if a previous iteration was actually provided - if it wasn't, all parameters will be reset when creating a fresh Iteration object in init_iteration
@@ -264,31 +264,31 @@ class Model(torch.nn.Module):
         # Return pattern-completed grounded location p after memory retrieval
         return p
 
-    def gen_x(self, p):
+    def gen_o(self, p):
         # Get categorical distribution over observations from grounded location
         # If you actually want to sample observation, you need a reparaterisation trick for categorical distributions
         # Sampling would be the correct way to do this, since observations are discrete, and it's also what the TEM paper says
         # However, it looks like you could also get away with using categorical distribution directly as an approximation of the one-hot observations
         if self.hyper["do_sample"]:
-            x, logits = self.f_x(
+            x, logits = self.f_o(
                 p
             )  # This is a placeholder! Should be done using reparameterisation trick (like https://blog.evjang.com/2016/11/tutorial-categorical-variational.html)
         else:
-            x, logits = self.f_x(p)
+            x, logits = self.f_o(p)
         # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
         return x, logits
 
     def inf_g(self, p_x, g_path, o, locations):
         # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
-        if self.hyper["use_p_inf"]:
-            # Not in paper, but makes sense from symmetry with f_x: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
+        if self.hyper["use_x_cued_recall"]:
+            # Not in paper, but makes sense from symmetry with f_o: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
             g_downsampled = [torch.matmul(p_x[f], torch.t(self.hyper["W_repeat"][f])) for f in range(self.hyper["n_f"])]
             # Then use abstract location after summing over sensory preferences as input to MLP to obtain the inferred abstract location from memory
             mu_g_mem = self.f_mu_g_mem(g_downsampled)
             # Not in paper, but this greatly improves zero-shot inference: provide the uncertainty function of the inferred abstract location with measures of memory quality
             with torch.no_grad():
                 # For the first measure, use the grounded location inferred from memory to generate an observation
-                o_hat, o_hat_logits = self.gen_x(p_x[0])
+                o_hat, o_hat_logits = self.gen_o(p_x[0])
                 # Then calculate the error between the generated observation and the actual observation: if the memory is working well, this error should be small
                 err = utils.squared_error(o, o_hat)
             # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
@@ -303,7 +303,7 @@ class Model(torch.nn.Module):
         # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
         mu_g, sigma_g = [], []
         for f in range(self.hyper["n_f"]):
-            if self.hyper["use_p_inf"]:
+            if self.hyper["use_x_cued_recall"]:
                 # Then get full gaussian distribution of inferred abstract location by calculating precision weighted mean
                 mu, sigma = utils.inv_var_weight([mu_g_path[f], mu_g_mem[f]], [sigma_g_path[f], sigma_g_mem[f]])
             else:
@@ -352,7 +352,7 @@ class Model(torch.nn.Module):
         # Return new memory constructed from sensory experience and inferred abstract location
         return p
 
-    def x_prev2x(self, x_prev, c):
+    def inf_x(self, x_prev, c):
         # Calculate factor for filtering from sigmoid of learned parameter
         alpha = [torch.nn.Sigmoid()(self.alpha[f]) for f in range(self.hyper["n_f"])]
         # Do exponential temporal filtering for each frequency modulemod
@@ -454,7 +454,7 @@ class Model(torch.nn.Module):
         # Multi layer perceptron to generate standard deviation of grounded location retrieval
         return self.MLP_sigma_p(p)
 
-    def f_x(self, p):
+    def f_o(self, p):
         # Calculate categorical probability distribution over observations for a given ground location
         # p has dimensions n_p[0]. We'll need to transform those to temporally filtered sensory experience, before we can decompress
         # p is the flattened (by concatenating rows - like reading sentences) outer product of g and x (p = g^T * x).
@@ -645,16 +645,16 @@ class LSTM(torch.nn.Module):
 
 
 class Iteration:
-    def __init__(self, g=None, x=None, a=None, L=None, M=None, g_gen=None, p_gen=None, x_gen=None, o_logits=None, x_inf=None, g_inf=None, p_inf=None):
+    def __init__(self, locations=None, o=None, a=None, L=None, M=None, g_gen=None, p_gen_gi=None, o_gen=None, o_logits=None, x_inf=None, g_inf=None, p_inf=None):
         # Copy all inputs
-        self.g = g
-        self.x = x
+        self.locations = locations
+        self.o = o
         self.a = a
         self.L = L
         self.M = M
         self.g_gen = g_gen
-        self.p_gen = p_gen
-        self.x_gen = x_gen
+        self.p_gen_gi = p_gen_gi
+        self.o_gen = o_gen
         self.o_logits = o_logits
         self.x_inf = x_inf
         self.g_inf = g_inf
@@ -662,19 +662,20 @@ class Iteration:
 
     def correct(self):
         # Detach observation and all predictions
-        observation = self.x.detach().numpy()
-        predictions = [tensor.detach().numpy() for tensor in self.x_gen]
+        observation = self.o.detach().numpy()
+        predictions = [tensor.detach().numpy() for tensor in self.o_gen]
         # Did the model predict the right observation in this iteration?
         accuracy = [np.argmax(prediction, axis=-1) == np.argmax(observation, axis=-1) for prediction in predictions]
         return accuracy
 
     def detach(self):
         # Detach all tensors contained in this iteration
+        self.o = self.o.detach()
         self.L = [tensor.detach() for tensor in self.L]
         self.M = [tensor.detach() for tensor in self.M]
         self.g_gen = [tensor.detach() for tensor in self.g_gen]
-        self.p_gen = [tensor.detach() for tensor in self.p_gen]
-        self.x_gen = [tensor.detach() for tensor in self.x_gen]
+        self.p_gen_gi = [tensor.detach() for tensor in self.p_gen_gi]
+        self.o_gen = [tensor.detach() for tensor in self.o_gen]
         self.x_inf = [tensor.detach() for tensor in self.x_inf]
         self.g_inf = [tensor.detach() for tensor in self.g_inf]
         self.p_inf = [tensor.detach() for tensor in self.p_inf]

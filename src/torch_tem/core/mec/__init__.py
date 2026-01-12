@@ -38,13 +38,6 @@ class MECState:
         )
 
 
-@dataclass
-class MECRuntime:
-    """Runtime values injected by training (not architectural parameters)."""
-
-    p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
-
-
 class MECModel(nn.Module):
     def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
         super().__init__()
@@ -53,9 +46,6 @@ class MECModel(nn.Module):
         # Store for backward compatibility with methods that reference self.n_g
         self._n_a = n_a
         self._shape = shape
-
-        # Store runtime values (injected by training loop)
-        self.runtime = MECRuntime()
 
         # Initialize GridModel (path integration for ALL modules)
         self.grid = GridModel(n_a, n_p, shape, f_init, settings=settings.grid_cells)
@@ -72,7 +62,7 @@ class MECModel(nn.Module):
 
     def set_runtime(self, *, p2g_scale_offset: float):
         """Update runtime hyperparameters for MEC module."""
-        self.runtime.p2g_scale_offset = p2g_scale_offset
+        self.grid.set_runtime(p2g_scale_offset=p2g_scale_offset)
 
     @property
     def n_in(self) -> int:
@@ -110,72 +100,41 @@ class MECModel(nn.Module):
         """
         # Shiny envs use no_direc=True (no action-driven transitions)
         no_direc = [loc.get("shiny") is not None for loc in locations]
-        g_gen, transition = self.grid(a, state.g, no_direc=no_direc)
+        g_gen, transition = self.grid.path_integrate(a, state.g, no_direc=no_direc)
 
         return g_gen, MECState(g=transition.mean, uncertainty=transition.uncertainty)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
-        mu_g_mem = self.grid.MLP_mu_g_mem(p_x)
-        err = sum(utils.squared_error(mu_g_mem, state.g))
+        """Infer abstract location from grounded location and path integration.
 
-        # Prepare uncertainty input: [vector norm, reconstruction error]
-        sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err, dim=1)), dim=1) for g in mu_g_mem]
-        # Clamp for stability (recommended by original authors)
-        mu_g_mem = self.grid.g_clamp(mu_g_mem)
-        # Infer abstract location uncertainty from memory quality
-        sigma = self.grid.MLP_sigma_g_mem(sigma_g_input)
-        sigma_g_mem = [sigma[f] + self.runtime.p2g_scale_offset * self._settings.p2g_sig_val for f in range(self.n_freq)]
+        Orchestrates:
+        1. GridModel.infer_from_memory(): memory-cued abstract location
+        2. Precision-weighted fusion of path integration + memory cues
+        3. OVCModel.fuse_shiny(): shiny landmark correction for OVC modules
+        4. Sampling or mean extraction
 
-        mu_g_path = state.g
-        sigma_g_path = state.uncertainty
+        Args:
+            p_x: Grounded location (place cells)
+            locations: Per-environment location dicts
+            state: Current MEC state (g_path, uncertainty)
 
-        # Fuse path integration with memory cues (if provided)
+        Returns:
+            Tuple of (g_inf, updated MECState)
+        """
+        # Step 1: Infer from memory (Grid responsibility)
+        mu_g_mem, sigma_g_mem = self.grid.infer_from_memory(p_x, state.g)
+
+        # Step 2: Fuse path integration with memory cues
         mu_g, sigma_g = [], []
         for f in range(self.n_freq):
-            if mu_g_mem is not None and sigma_g_mem is not None:
-                # Precision-weighted fusion
-                mu, sigma = utils.inv_var_weight(
-                    [mu_g_path[f], mu_g_mem[f]],
-                    [sigma_g_path[f], sigma_g_mem[f]],
-                )
-            else:
-                # Path integration only
-                mu, sigma = mu_g_path[f], sigma_g_path[f]
+            mu, sigma = utils.inv_var_weight([state.g[f], mu_g_mem[f]], [state.uncertainty[f], sigma_g_mem[f]])
             mu_g.append(mu)
             sigma_g.append(sigma)
 
-        # Apply shiny correction (OVC-only modules)
-        shiny_envs = [loc.get("shiny") is not None for loc in locations]
-        if any(shiny_envs) and self.ovc.n_f > 0:
-            # Extract shiny coordinates for environments with shiny objects
-            # Shape: (n_shiny_envs, 4) where 4 = 2 objects × 2 coords
-            shiny_tensor = torch.stack([torch.tensor(loc["shiny"], dtype=torch.float, device=mu_g[0].device) for loc in locations if loc["shiny"] is not None])
-            # Legacy format: add extra dimension at the end
-            shiny_locations = torch.unsqueeze(shiny_tensor, dim=-1)
+        # Step 3: Apply shiny correction (OVC responsibility)
+        mu_g, sigma_g = self.ovc.fuse_shiny(mu_g, sigma_g, locations, self.n_freq)
 
-            # Compute shiny-derived abstract location
-            shiny_input = [shiny_locations for _ in range(self.ovc.n_f)]
-            mu_g_shiny = self.ovc.shiny_mean(shiny_input)
-            sigma_g_shiny = self.ovc.shiny_uncertainty(shiny_input)
-
-            # Determine which modules are OVC (last ovc.n_f modules)
-            module_start = self.n_freq - self.ovc.n_f
-
-            # Fuse shiny information into OVC modules only
-            shiny_mask = torch.tensor(shiny_envs, dtype=torch.bool, device=mu_g[0].device)
-            for f in range(module_start, self.n_freq):
-                f_ovc = f - module_start
-                # Fuse only for shiny environments
-                mu_fused, sigma_fused = utils.inv_var_weight(
-                    [mu_g[f][shiny_mask, :], mu_g_shiny[f_ovc]],
-                    [sigma_g[f][shiny_mask, :], sigma_g_shiny[f_ovc]],
-                )
-                # Scatter fused values back into full batch
-                mask_expanded = shiny_mask.unsqueeze(-1).expand_as(mu_g[f])
-                mu_g[f] = mu_g[f].masked_scatter(mask_expanded, mu_fused)
-                sigma_g[f] = sigma_g[f].masked_scatter(mask_expanded, sigma_fused)
-
-        # Sample or take mean (depending on settings)
+        # Step 4: Sample or take mean
         if self._settings.grid_cells.do_sample:
             g_inf = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
         else:

@@ -7,7 +7,7 @@ Design goal:
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field
@@ -72,6 +72,66 @@ class OVCModel(nn.Module):
         if self.n_f == 0:
             return []
         return self.MLP_sigma_g_shiny(shiny)
+
+    def fuse_shiny(
+        self,
+        mu_g: List[Tensor],
+        sigma_g: List[Tensor],
+        locations: list[dict],
+        n_total_freq: int,
+    ) -> Tuple[List[Tensor], List[Tensor]]:
+        """Fuse shiny landmark information into OVC modules.
+
+        Args:
+            mu_g: Current mean abstract location (all frequencies)
+            sigma_g: Current uncertainty (all frequencies)
+            locations: Per-environment location dicts (with 'shiny' key if present)
+            n_total_freq: Total number of MEC frequency modules
+
+        Returns:
+            Updated (mu_g, sigma_g) with shiny fusion applied to OVC modules
+        """
+        if self.n_f == 0:
+            return mu_g, sigma_g
+
+        # Detect shiny environments
+        shiny_envs = [loc.get("shiny") is not None for loc in locations]
+        if not any(shiny_envs):
+            return mu_g, sigma_g
+
+        # Extract shiny coordinates for environments with shiny objects
+        # Shape: (n_shiny_envs, 4) where 4 = 2 objects × 2 coords
+        device = mu_g[0].device
+        shiny_tensor = torch.stack([torch.tensor(loc["shiny"], dtype=torch.float, device=device) for loc in locations if loc["shiny"] is not None])
+        # Legacy format: add extra dimension at the end
+        shiny_locations = torch.unsqueeze(shiny_tensor, dim=-1)
+
+        # Compute shiny-derived abstract location
+        shiny_input = [shiny_locations for _ in range(self.n_f)]
+        mu_g_shiny = self.shiny_mean(shiny_input)
+        sigma_g_shiny = self.shiny_uncertainty(shiny_input)
+
+        # Determine which modules are OVC (last self.n_f modules)
+        module_start = n_total_freq - self.n_f
+
+        # Fuse shiny information into OVC modules only
+        # Import here to avoid circular dependency
+        from torch_tem import utils
+
+        shiny_mask = torch.tensor(shiny_envs, dtype=torch.bool, device=device)
+        for f in range(module_start, n_total_freq):
+            f_ovc = f - module_start
+            # Fuse only for shiny environments
+            mu_fused, sigma_fused = utils.inv_var_weight(
+                [mu_g[f][shiny_mask, :], mu_g_shiny[f_ovc]],
+                [sigma_g[f][shiny_mask, :], sigma_g_shiny[f_ovc]],
+            )
+            # Scatter fused values back into full batch
+            mask_expanded = shiny_mask.unsqueeze(-1).expand_as(mu_g[f])
+            mu_g[f] = mu_g[f].masked_scatter(mask_expanded, mu_fused)
+            sigma_g[f] = sigma_g[f].masked_scatter(mask_expanded, sigma_fused)
+
+        return mu_g, sigma_g
 
     def clamp_ovc(self, g: List[Tensor]) -> List[Tensor]:
         """Clamp + leaky ReLU (matches legacy f_p-like behavior for OVC)."""

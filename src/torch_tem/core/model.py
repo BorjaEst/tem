@@ -96,10 +96,6 @@ class HPCParameters(BaseModel):
         default=True,
         description="Whether to use inferred ground location while inferring new abstract location",
     )
-    p2g_sig_val: float = Field(
-        default=10000.0,
-        description="Additional value to offset standard deviation of inferred grounded location",
-    )
 
     common_memory: bool = Field(
         default=False,
@@ -204,8 +200,11 @@ class Parameters(BaseModel):
         ):
             pop_into(key, mec)
 
-        for key in ("use_x_cued_recall", "p2g_sig_val", "common_memory", "kappa"):
+        for key in ("use_x_cued_recall", "common_memory", "kappa"):
             pop_into(key, hpc)
+
+        for key in ("p2g_sig_val",):
+            pop_into(key, mec)
 
         if world:
             data["world"] = world
@@ -273,7 +272,7 @@ class Parameters(BaseModel):
 
     @property
     def p2g_sig_val(self) -> float:
-        return self.hpc.p2g_sig_val
+        return self.mec_settings.grid_cells.p2g_sig_val
 
     @property
     def common_memory(self) -> bool:

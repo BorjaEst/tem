@@ -15,6 +15,7 @@ import torch
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
+from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import GridSettings
 
@@ -32,6 +33,9 @@ class GridModel(nn.Module):
         self._n_g = n_g = shape
         self.g_connections = g_conn = grid_connections(f_init)
         n_f = len(shape)
+
+        # Runtime values (injected by training loop)
+        self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
 
         # Prior: learned "default phase" of the grid code at reset
         init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=settings.g_init_std)
@@ -67,6 +71,10 @@ class GridModel(nn.Module):
         uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
         return Transition(mean=mean, uncertainty=uncertainty)
 
+    def set_runtime(self, *, p2g_scale_offset: float):
+        """Update runtime hyperparameters for MEC module."""
+        self.p2g_scale_offset = p2g_scale_offset
+
     @property
     def n_in(self) -> int:
         """Dimensionality of grid cell activations."""
@@ -82,7 +90,10 @@ class GridModel(nn.Module):
         """Number of grid cell frequency modules."""
         return len(self.shape)
 
-    def forward(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Tuple[List[Tensor], Transition]:
+    def forward(self, *, _):
+        raise NotImplementedError("GridModel forward not implemented. Use path_integrate() or infer_from_memory().")
+
+    def path_integrate(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Tuple[List[Tensor], Transition]:
         """Return the transition distribution (mu, sigma) before sampling.
 
         Args:
@@ -107,6 +118,34 @@ class GridModel(nn.Module):
             g_gen = g_path.mean  # transitioned
 
         return g_gen, g_path
+
+    def infer_from_memory(self, p_x: List[Tensor], g: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
+        """Infer abstract location from memory-cued grounded location.
+
+        Args:
+            p_x: Grounded location (place cells)
+            g: Current grid cell state (for error computation)
+            p2g_scale_offset: Runtime scaling for variance offset
+            p2g_sig_val: Base variance offset value
+
+        Returns:
+            Tuple of (mu_g_mem, sigma_g_mem)
+        """
+        # Compute mean from memory
+        mu_g_mem = self.MLP_mu_g_mem(p_x)
+        err = utils.squared_error(mu_g_mem, g)
+
+        # Prepare uncertainty input: [vector norm, reconstruction error]
+        sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, g in enumerate(mu_g_mem)]
+
+        # Clamp for stability
+        mu_g_mem = self.g_clamp(mu_g_mem)
+
+        # Infer uncertainty from memory quality
+        sigma = self.MLP_sigma_g_mem(sigma_g_input)
+        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self._settings.p2g_sig_val for f in range(self.n_freq)]
+
+        return mu_g_mem, sigma_g_mem
 
     # ---------------------------------------------------------------------
     # Mean / uncertainty (legacy f_mu_g_path / f_sigma_g_path)

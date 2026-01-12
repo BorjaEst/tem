@@ -501,6 +501,10 @@ class GridSettings(BaseModel):
         20,
         description="Hidden dimension for transition MLP.",
     )
+    p2g_sig_val: float = Field(
+        default=10000.0,
+        description="Additional value to offset standard deviation of inferred grounded location",
+    )
 
 
 class OVCSettings(BaseModel):
@@ -525,10 +529,6 @@ class MECSettings(BaseModel):
     ovc_cells: OVCSettings = Field(
         default_factory=OVCSettings,
         description="OVC module settings",
-    )
-    p2g_sig_val: float = Field(
-        default=10000.0,
-        description="Additional value to offset standard deviation of inferred grounded location",
     )
 
 

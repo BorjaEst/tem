@@ -651,13 +651,10 @@ class TEMModel(nn.Module):
         # Initialize LEC (Lateral Entorhinal Cortex) component
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
         self.lec = lec = LECModel(n_c, n_x, f_init, params.lec_settings)
-        self.mec = mec = MECModel(n_a, n_g, f_init, params.mec_settings)
+        self.mec = mec = MECModel(n_a, n_p, n_g, f_init, params.mec_settings)
         self.hpc = hpc = HPCModel(params.i_attractor, n_p, f_init, params.hpc_settings)  # i_attactor must be equal to n of frequencies for grid cells
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
         self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
-
-        # Create trainable parameters
-        self.init_trainable()
 
     def set_runtime_hyperparams(self, eta: float, hebbian_decay: float, p2g_scale_offset: float) -> None:
         """Set runtime hyperparameters (called by training loop each step).
@@ -670,6 +667,7 @@ class TEMModel(nn.Module):
         self.runtime.eta = eta
         self.runtime.hebbian_decay = hebbian_decay
         self.runtime.p2g_scale_offset = p2g_scale_offset
+        self.mec.set_runtime(p2g_scale_offset=p2g_scale_offset)
         self.hpc.set_runtime(eta=eta, hebbian_decay=hebbian_decay)
 
     def _apply(self, fn):
@@ -733,7 +731,7 @@ class TEMModel(nn.Module):
         p_gg = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
 
         # Infer abstract location by using state and sensory experience
-        g_inf, mec_state = self.mec_inference(p_xi, o, locations, mec_state)  # Updates g_path.mean with g_inf
+        g_inf, mec_state = self.mec.inference(p_xi, locations=locations, state=mec_state)
         g_ = self.mec_projection(g_inf)
         p_gi = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
 
@@ -792,29 +790,6 @@ class TEMModel(nn.Module):
             M.append(M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_xi, dim=1), do_hierarchical_connections=False))
         return M
 
-    def init_trainable(self):
-        # Initialize LEC (Lateral Entorhinal Cortex) component parameters with proper initial values
-        # Use LEC's init_alpha method to set temporal filtering factors
-        # self.autoencoder.init_trainable() already inits in Autoencoder.__init__
-        # self.lec.init_trainable(self.hyper["f_initial"]) already inits in LECModel __init__
-        # self.lec_projection.init_trainable() already inits in ProjectionModule __init__
-
-        # Initialize MEC (Medial Entorhinal Cortex) component parameters with proper initial values
-        # Use MEC's init_f method to set frequencies
-        # self.mec.init_trainable(self.hyper["f_initial"]) already inits in MECModel __init__
-        # self.mec_projection.init_trainable() already inits in ProjectionModule __init__
-        n_g = self.hyper["n_g"]
-        n_g_subsampled = self.hyper["n_g_subsampled"]
-        g_mem_std = self.hyper["g_mem_std"]
-        n_f = self.hyper["n_f"]
-
-        pass  # We can remove this method if there's nothing to init here
-        self.MLP_mu_g_mem = MLP(n_g_subsampled, n_g, hidden_dim=[2 * g for g in n_g])
-        self.MLP_mu_g_mem.set_weights(
-            -1, [torch.tensor(truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=g_mem_std), dtype=torch.float32) for f in range(n_f)]
-        )
-        self.MLP_sigma_g_mem = MLP([2 for _ in n_g_subsampled], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
-
     def init_iteration(self, o):
         # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
         self.hyper["batch_size"] = o.shape[0]
@@ -863,89 +838,6 @@ class TEMModel(nn.Module):
         # Keep both logits and probabilities
         probability = utils.softmax(logits)
         return probability, logits
-
-    def mec_inference(self, p_xi, o, locations, mec_state: MECState):
-        g_path = Transition(mean=mec_state.g, uncertainty=mec_state.uncertainty)
-        # Infer abstract location from the combination of [grounded location retrieved from memory by sensory experience] ...
-        if self.hyper["use_x_cued_recall"]:
-            # Not in paper, but makes sense from symmetry with f_o: first get g from p by "summing over sensory preferences" g = p * W_repeat^T
-            g_downsampled = [torch.matmul(p_xi[f], torch.t(self.hyper["W_repeat"][f])) for f in range(self.hyper["n_f"])]
-            # Then use abstract location after summing over sensory preferences as input to MLP to obtain the inferred abstract location from memory
-            mu_g_mem = self.f_mu_g_mem(g_downsampled)
-            # Not in paper, but this greatly improves zero-shot inference: provide the uncertainty function of the inferred abstract location with measures of memory quality
-            with torch.no_grad():
-                # For the first measure, use the grounded location inferred from memory to generate an observation
-                o_hat, o_hat_logits = self.gen_o(p_xi)
-                # Then calculate the error between the generated observation and the actual observation: if the memory is working well, this error should be small
-                err = utils.squared_error(o, o_hat)
-            # The second measure is the vector norm of the inferred abstract location; good memories should have similar vector norms. Concatenate the two measures as input for the abstract location uncertainty function
-            sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err, dim=1)), dim=1) for g in mu_g_mem]
-            # Not in paper, but recommended by James for stability: get final mean of inferred abstract location by clamping activations between -1 and 1
-            mu_g_mem = self.mec.grid.g_clamp(mu_g_mem)
-            # And get standard deviation/uncertainty of inferred abstract location by providing uncertainty function with memory quality measures
-            sigma_g_mem = self.f_sigma_g_mem(sigma_g_input)
-        # ... and [previous abstract location and action (path integration)]
-        mu_g_path = g_path.mean
-        sigma_g_path = g_path.uncertainty
-        # Infer abstract location by combining previous abstract location and grounded location retrieved from memory by current sensory experience
-        mu_g, sigma_g = [], []
-        for f in range(self.hyper["n_f"]):
-            if self.hyper["use_x_cued_recall"]:
-                # Then get full gaussian distribution of inferred abstract location by calculating precision weighted mean
-                mu, sigma = utils.inv_var_weight([mu_g_path[f], mu_g_mem[f]], [sigma_g_path[f], sigma_g_mem[f]])
-            else:
-                # Or simply completely ignore the inference memory here, to test if things are working
-                mu, sigma = mu_g_path[f], sigma_g_path[f]
-            # Append mu and sigma to list for all frequency modules
-            mu_g.append(mu)
-            sigma_g.append(sigma)
-        # Finally (though not in paper), also add object vector cell information to inferred abstract location for environments with shiny objects
-        shiny_envs = [location["shiny"] is not None for location in locations]
-        if any(shiny_envs):
-            # Find for which environments the current location has a shiny object
-            shiny_locations = torch.unsqueeze(torch.stack([torch.tensor(location["shiny"], dtype=torch.float) for location in locations if location["shiny"] is not None]), dim=-1)
-            # Get abstract location for environments with shiny objects and feed to each of the object vector cell modules
-            mu_g_shiny = self.f_mu_g_shiny([shiny_locations for _ in range(self.hyper["n_f_g"] if self.hyper["separate_ovc"] else self.hyper["n_f"])])
-            sigma_g_shiny = self.f_sigma_g_shiny([shiny_locations for _ in range(self.hyper["n_f_g"] if self.hyper["separate_ovc"] else self.hyper["n_f"])])
-            # Update only object vector modules with shiny-inferred abstract location: start from offset if object vector modules are separate
-            module_start = self.hyper["n_f_g"] if self.hyper["separate_ovc"] else 0
-            # Inverse variance weighting is associative, so I can just do additional inverse variance weighting to the previously obtained mu and sigma - but only for object vector cell modules!
-            for f in range(module_start, self.hyper["n_f"]):
-                # Add inferred abstract location from shiny objects to previously obtained position, only for environments with shiny objects
-                mu, sigma = utils.inv_var_weight([mu_g[f][shiny_envs, :], mu_g_shiny[f - module_start]], [sigma_g[f][shiny_envs, :], sigma_g_shiny[f - module_start]])
-                # In order to update only the environments with shiny objects, without in-place value assignment, construct a mask of shiny environments
-                mask = torch.zeros_like(mu_g[f], dtype=torch.bool)
-                mask[shiny_envs, :] = True
-                # Use mask to update the shiny environment entries in inferred abstract locations
-                mu_g[f] = mu_g[f].masked_scatter(mask, mu)
-                sigma_g[f] = sigma_g[f].masked_scatter(mask, sigma)
-        # Either sample inferred abstract location from combined (precision weighted) distribution or just take mean
-        g = [mu_g[f] + sigma_g[f] * np.random.randn() if self.hyper["do_sample"] else mu_g[f] for f in range(self.hyper["n_f"])]
-        # Return abstract location inferred from grounded location from memory and previous abstract location
-        return g, MECState(g=g, ovc=mec_state.ovc, uncertainty=sigma_g)
-
-    def f_mu_g_mem(self, g_downsampled):
-        # Multi layer perceptron to generate mean of abstract location from down-sampled abstract location, obtained by summing over sensory dimension of grounded location
-        return self.MLP_mu_g_mem(g_downsampled)
-
-    def f_sigma_g_mem(self, g_downsampled):
-        # Multi layer perceptron to generate standard deviation of abstract location from down-sampled abstract location, obtained by summing over sensory dimension of grounded location
-        sigma = self.MLP_sigma_g_mem(g_downsampled)
-        # Not in paper, but also offset this sigma over training, so you can reduce influence of inferred p early on (from runtime, not hyper)
-        return [sigma[f] + self.runtime.p2g_scale_offset * self.hyper["p2g_sig_val"] for f in range(self.hyper["n_f"])]
-
-    def f_mu_g_shiny(self, shiny):
-        # Multi layer perceptron to generate mean of abstract location from boolean location shiny-ness
-        mu_g = self.mec.ovc.MLP_mu_g_shiny(shiny)
-        # Take absolute because James wants object vector cells to be positive
-        mu_g = [torch.abs(mu) for mu in mu_g]
-        # Then apply clamp and leaky relu to get object vector module activations, like it's done for ground location activations
-        g = self.f_p(mu_g)
-        return g
-
-    def f_sigma_g_shiny(self, shiny):
-        # Multi layer perceptron to generate standard deviation of abstract location from boolean location shiny-ness
-        return self.mec.ovc.MLP_sigma_g_shiny(shiny)
 
 
 Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)

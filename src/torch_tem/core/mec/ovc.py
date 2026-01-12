@@ -42,9 +42,10 @@ class OVCModel(nn.Module):
 
         # Initialize shiny → abstract location MLPs (only if OVC modules exist)
         if self.n_f > 0:
-            # Shiny input dimension (legacy: typically 2 * n_shiny for x,y coords)
-            # This is hardcoded in legacy; we'll make it configurable via settings if needed
-            n_shiny_in = 4  # Legacy default: 2 shiny objects × 2 coords
+            # Shiny input dimension (legacy: 1 per module, receives stacked shiny coords)
+            # The shiny tensor has shape (n_shiny_envs, n_shiny_features, 1)
+            # where n_shiny_features = 2 * n_shiny_objects (x,y coords per object)
+            n_shiny_in = 1  # Legacy: each module gets scalar input after unsqueeze(-1)
             self.MLP_mu_g_shiny = MLP(
                 in_dim=[n_shiny_in] * self.n_f,
                 out_dim=self.n_ovc,

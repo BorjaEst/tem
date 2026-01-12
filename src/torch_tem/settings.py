@@ -493,13 +493,13 @@ class GridSettings(BaseModel):
         0.5,
         description="Standard deviation for initializing grid cell activations.",
     )
+    g_mem_std: float = Field(
+        default=0.1,
+        description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location",
+    )
     n_hidden: int = Field(
         20,
         description="Hidden dimension for transition MLP.",
-    )
-    frequencies_init: str = Field(
-        "linear",
-        description="Method for initializing frequency values.",
     )
 
 
@@ -526,6 +526,10 @@ class MECSettings(BaseModel):
         default_factory=OVCSettings,
         description="OVC module settings",
     )
+    p2g_sig_val: float = Field(
+        default=10000.0,
+        description="Additional value to offset standard deviation of inferred grounded location",
+    )
 
 
 class HPCSettings(BaseModel):
@@ -537,10 +541,7 @@ class HPCSettings(BaseModel):
         default=True,
         description="Whether to use inferred ground location while inferring new abstract location",
     )
-    p2g_sig_val: float = Field(
-        default=10000.0,
-        description="Additional value to offset standard deviation of inferred grounded location",
-    )
+
     common_memory: bool = Field(
         default=False,
         description="Use common memory for generative and inference network",

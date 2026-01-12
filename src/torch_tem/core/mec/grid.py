@@ -23,7 +23,7 @@ from torch_tem.types import Transition
 
 
 class GridModel(nn.Module):
-    def __init__(self, n_a: int, shape: List[int], f_init: List[float], settings: GridSettings):
+    def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: GridSettings):
         super().__init__()
         self._settings = settings  # Protected to avoid modification
 
@@ -54,6 +54,12 @@ class GridModel(nn.Module):
 
         # Transition uncertainty model
         self.MLP_sigma_g_path = MLP(n_g, n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
+
+        # Generative memory models
+        self.MLP_mu_g_mem = MLP(n_p, shape, hidden_dim=[2 * g for g in shape])
+        init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self._settings.g_mem_std)
+        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_f)])
+        self.MLP_sigma_g_mem = MLP([2 for _ in n_p], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
     def g_init(self, batch_size: int, device: torch.device) -> Transition:
         """Return initial grid cell activations as (mean, uncertainty) Transition."""

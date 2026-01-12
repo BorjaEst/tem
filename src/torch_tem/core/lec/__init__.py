@@ -60,7 +60,7 @@ class LECModel(nn.Module):
         self.w_x = torch.nn.Parameter(torch.tensor(1.0))  # For reconstructing c from x
         self.b_x = torch.nn.Parameter(torch.zeros(self._n_c))  # Bias for reconstructing c from x
 
-    def init_state(self, batch_size: int, device: torch.device) -> LECState:
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> LECState:
         """Initialize LEC state with zeros."""
         x0 = [torch.zeros((batch_size, n), device=device) for n in self._n_x]
         return LECState(x=x0, x_filtered=x0)

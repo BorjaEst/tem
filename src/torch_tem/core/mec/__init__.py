@@ -54,7 +54,7 @@ class MECModel(nn.Module):
         # OVCModel is responsible for selecting which modules are OVC based on settings.ovc_cells.
         self.ovc = OVCModel(shape, f_init, settings=settings.ovc_cells)
 
-    def init_state(self, batch_size: int, device: torch.device) -> MECState:
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> MECState:
         """Initialize MEC state with prior grid cell activations."""
         g_init = self.grid.g_init(batch_size, device)
         ovc = None  # TODO: Initialize OVC state if needed

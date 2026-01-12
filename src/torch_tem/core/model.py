@@ -687,18 +687,6 @@ class TEMModel(nn.Module):
             return tuple(self._apply_to_nested_tensors(v, fn) for v in obj)
         return obj
 
-    def _init_memory(self, *, batch_size: int, device: torch.device) -> List[Tensor]:
-        """Create initial Hebbian memory matrices in the legacy [M_gen, M_inf?] format."""
-        m0 = torch.zeros(
-            (batch_size, sum(self.hyper["n_p"]), sum(self.hyper["n_p"])),
-            dtype=torch.float,
-            device=device,
-        )
-        memory = [m0]
-        if self.hyper["use_x_cued_recall"]:
-            memory.append(m0 if self.hyper["common_memory"] else m0.clone())
-        return memory
-
     def forward(self, o, locations, a_prev, state: TEMState) -> tuple[TEMOutput, TEMState]:
         mec_state, lec_state, hpc_state = state.mec_state, state.lec_state, state.hpc_state
         c = self.autoencoder.encode(o)
@@ -789,16 +777,13 @@ class TEMModel(nn.Module):
             M.append(M[0] if self.hyper["common_memory"] else self.hpc.hebbian(memory_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_xi, dim=1), do_hierarchical_connections=False))
         return M
 
-    def init_iteration(self, o):
-        # On the very first iteration, update the batch size based on the data. This is useful when doing analysis on the network with different batch sizes compared to training
-        self.hyper["batch_size"] = o.shape[0]
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> TEMState:
         # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
-        lec_state = self.lec.init_state(batch_size=self.hyper["batch_size"], device=o.device)
+        lec_state = self.lec.init_state(batch_size, device)
         # Initialise previous abstract location by stacking abstract location prior
-        mec_state = self.mec.init_state(batch_size=self.hyper["batch_size"], device=o.device)
+        mec_state = self.mec.init_state(batch_size, device)
         # Create initial HPC state with initialized memory
-        hpc_state = self.hpc.init_state(batch_size=self.hyper["batch_size"], device=o.device)
-        hpc_state.memory = self._init_memory(batch_size=int(self.hyper["batch_size"]), device=o.device)
+        hpc_state = self.hpc.init_state(batch_size, device)
         # And construct new iteration for that g, o, a, and M
         return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
 
@@ -854,7 +839,7 @@ class Rollout(Iterator[TEMState]):
         locations_0, o_0, _ = self.walk[0]
 
         # Determine initial state
-        state = initial or model.init_iteration(o_0)
+        state = initial or model.init_state(batch_size=o_0.shape[0], device=o_0.device)
 
         # Initialize prev-values for first forward pass
         self._a_prev = [None for _ in range(o_0.shape[0])]

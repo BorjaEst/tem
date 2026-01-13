@@ -515,6 +515,10 @@ class OVCSettings(BaseModel):
         default=None,
         description="Number of OVC frequency modules (if None, matches grid cell frequencies).",
     )
+    hidden_dim: int = Field(
+        default=20,
+        description="Number of shiny object input channels.",
+    )
 
 
 class MECSettings(BaseModel):

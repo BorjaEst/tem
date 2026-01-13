@@ -363,26 +363,12 @@ class OVCModel(nn.Module):
 
         # OVC modules can also have hierarchical connections (optional)
         # Legacy: if separate_ovc=True, OVC block has its own hierarchy
-        self.ovc_connections = ovc_conn = connections(f_init_ovc) if self.n_f > 0 else []
+        self.ovc_connections = connections(f_init_ovc) if self.n_f > 0 else []
 
         # Initialize shiny → abstract location MLPs (only if OVC modules exist)
-        if self.n_f > 0:
-            # Shiny input dimension (legacy: 1 per module, receives stacked shiny coords)
-            # The shiny tensor has shape (n_shiny_envs, n_shiny_features, 1)
-            # where n_shiny_features = 2 * n_shiny_objects (x,y coords per object)
-            n_shiny_in = 1  # Legacy: each module gets scalar input after unsqueeze(-1)
-            self.MLP_mu_g_shiny = MLP(
-                in_dim=[n_shiny_in] * self.n_f,
-                out_dim=self.n_ovc,
-                hidden_dim=[20] * self.n_f,
-                activation=[torch.relu, None],
-            )
-            self.MLP_sigma_g_shiny = MLP(
-                in_dim=[n_shiny_in] * self.n_f,
-                out_dim=self.n_ovc,
-                hidden_dim=[20] * self.n_f,
-                activation=[torch.relu, torch.exp],
-            )
+        hidden_dim = [settings.hidden_dim] * self.n_f
+        self.MLP_mu_g_shiny = MLP([1] * self.n_f, self.n_ovc, [torch.relu, None], hidden_dim)
+        self.MLP_sigma_g_shiny = MLP([1] * self.n_f, self.n_ovc, [torch.relu, torch.exp], hidden_dim)
 
     def shiny_mean(self, shiny: Tensor) -> List[Tensor]:
         """Compute mean of abstract location from shiny landmarks (legacy behavior)."""

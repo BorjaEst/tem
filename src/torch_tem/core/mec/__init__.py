@@ -21,6 +21,8 @@ from torch_tem.modules import MLP
 from torch_tem.settings import GridSettings, MECSettings, OVCSettings
 from torch_tem.types import Transition
 
+__all__ = ["MECModel", "MECState"]
+
 
 @dataclass
 class MECState:
@@ -39,72 +41,113 @@ class MECState:
         )
 
 
-class GridModel(nn.Module):
-    def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: GridSettings):
-        super().__init__()
-        self._settings = settings  # Protected to avoid modification
+class OVCModelBase(nn.Module):
+    def __init__(self, shape: List[int], settings: MECSettings):
+        self.__settings = settings.ovc_cells  # Protected to avoid modification
+
+        # Select how many OVC frequency modules to instantiate.
+        n_total = len(shape)
+        n_freq_ovc = n_total if self.__settings.n_freq is None else int(self.__settings.n_freq)
+        if n_freq_ovc < 0 or n_freq_ovc > n_total:
+            raise ValueError(f"OVCSettings.n_freq must be in [0, {n_total}] or None; got {self.__settings.n_freq}")
+        self.__n_ovc = shape[-n_freq_ovc:] if n_freq_ovc > 0 else []
+
+        # Initialize shiny → abstract location MLPs (only if OVC modules exist)
+        hidden_dim = [self.__settings.hidden_dim] * n_freq_ovc
+        self.MLP_mu_g_shiny = MLP([1] * n_freq_ovc, self.n_ovc, [torch.relu, None], hidden_dim)
+        self.MLP_sigma_g_shiny = MLP([1] * n_freq_ovc, self.n_ovc, [torch.relu, torch.exp], hidden_dim)
+
+    @property
+    def n_ovc(self) -> List[int]:
+        """Shape of OVC modules."""
+        return self.__n_ovc
+
+    @property
+    def n_freq_ovc(self) -> int:
+        """Number of OVC frequency modules."""
+        return len(self.n_ovc)
+
+    def shiny_mean(self, shiny: Tensor) -> List[Tensor]:
+        """Compute mean of abstract location from shiny landmarks (legacy behavior)."""
+        mu_g = self.MLP_mu_g_shiny(shiny)
+        mu_g = [torch.abs(mu) for mu in mu_g]
+        return self.clamp_ovc(mu_g)
+
+    def shiny_uncertainty(self, shiny: Tensor) -> List[Tensor]:
+        """Compute uncertainty of abstract location from shiny landmarks."""
+        return self.MLP_sigma_g_shiny(shiny)
+
+    def estimate_shiny(self, shiny_input: List[Tensor]) -> tuple[list[Tensor], list[Tensor]]:
+        mu_g_shiny = self.shiny_mean(shiny_input)
+        sigma_g_shiny = self.shiny_uncertainty(shiny_input)
+        return mu_g_shiny, sigma_g_shiny
+
+    def clamp_ovc(self, g: List[Tensor]) -> List[Tensor]:
+        """Clamp + leaky ReLU (matches legacy f_p-like behavior for OVC)."""
+        g = [torch.clamp(g_f, min=self.__settings.clamp_min, max=self.__settings.clamp_min) for g_f in g]
+        return [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in g]
+
+
+class GridModelBase(nn.Module):
+    def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
+        self.__settings = settings.grid_cells  # Protected to avoid modification
 
         # Store hyperparameters
-        self._n_a = n_a
-        self._n_g = n_g = shape
+        self.__n_a = n_a
+        self.__n_g = n_g = shape
         self.g_connections = g_conn = connections(f_init)
-        n_f = len(shape)
+        n_freq_gird = len(shape)
 
         # Runtime values (injected by training loop)
         self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
 
         # Prior: learned "default phase" of the grid code at reset
-        init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=settings.g_init_std)
-        self.g_init_mean = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_f)])
-        self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_f)])
+        init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=self.__settings.g_init_std)
+        self.g_init_mean = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_freq_gird)])
+        self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_freq_gird)])
 
         # Transition weights (action-conditioned)
         self.MLP_D_a = MLP(
-            in_dim=[n_a for _ in range(n_f)],  # Multiplex through all frequencies
-            out_dim=[sum(n_g[fb] for fb in range(n_f) if g_conn[fa][fb]) * n_g[fa] for fa in range(n_f)],
+            in_dim=[n_a for _ in range(n_freq_gird)],  # Multiplex through all frequencies
+            out_dim=[sum(n_g[fb] for fb in range(n_freq_gird) if g_conn[fa][fb]) * n_g[fa] for fa in range(n_freq_gird)],
             activation=[torch.tanh, None],
-            hidden_dim=[settings.n_hidden for _ in range(n_f)],
+            hidden_dim=[self.__settings.n_hidden for _ in range(n_freq_gird)],
             bias=[True, False],
         )
         self.MLP_D_a.set_weights(1, 0.0)
 
         # Non-directional transition weights (used for shiny generative branch)
-        f_no_a = lambda f_to: torch.zeros(sum(n_g[f_from] for f_from in range(n_f) if g_conn[f_to][f_from]) * n_g[f_to])
-        self.D_no_a = nn.ParameterList([nn.Parameter(f_no_a(f_to)) for f_to in range(n_f)])
+        f_no_a = lambda f_to: torch.zeros(sum(n_g[f_from] for f_from in range(n_freq_gird) if g_conn[f_to][f_from]) * n_g[f_to])
+        self.D_no_a = nn.ParameterList([nn.Parameter(f_no_a(f_to)) for f_to in range(n_freq_gird)])
 
         # Transition uncertainty model
         self.MLP_sigma_g_path = MLP(n_g, n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
         # Generative memory models
         self.MLP_mu_g_mem = MLP(n_p, shape, hidden_dim=[2 * g for g in shape])
-        init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self._settings.g_mem_std)
-        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_f)])
+        init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self.__settings.g_mem_std)
+        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_freq_gird)])
         self.MLP_sigma_g_mem = MLP([2 for _ in n_p], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
+
+    @property
+    def n_grid(self) -> List[int]:
+        """Shape of grid cell modules."""
+        return self.__n_g
+
+    @property
+    def n_freq_grid(self) -> int:
+        """Number of grid cell frequency modules."""
+        return len(self.n_grid)
 
     def g_init(self, batch_size: int, device: torch.device) -> Transition:
         """Return initial grid cell activations as (mean, uncertainty) Transition."""
-        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
-        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq)]
+        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)]
+        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)]
         return Transition(mean=mean, uncertainty=uncertainty)
 
     def set_runtime(self, *, p2g_scale_offset: float):
         """Update runtime hyperparameters for MEC module."""
         self.p2g_scale_offset = p2g_scale_offset
-
-    @property
-    def n_in(self) -> int:
-        """Dimensionality of grid cell activations."""
-        return self._n_a
-
-    @property
-    def shape(self) -> List[int]:
-        """Shape of grid cell modules."""
-        return self._n_g
-
-    @property
-    def n_freq(self) -> int:
-        """Number of grid cell frequency modules."""
-        return len(self.shape)
 
     def forward(self, *, _):
         raise NotImplementedError("GridModel forward not implemented. Use path_integrate() or infer_from_memory().")
@@ -157,7 +200,7 @@ class GridModel(nn.Module):
 
         # Infer uncertainty from memory quality
         sigma = self.MLP_sigma_g_mem(sigma_g_input)
-        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self._settings.p2g_sig_val for f in range(self.n_freq)]
+        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self.__settings.p2g_sig_val for f in range(self.n_freq_grid)]
 
         return mu_g_mem, sigma_g_mem
 
@@ -170,7 +213,7 @@ class GridModel(nn.Module):
 
         mats = self.transition_matrices(a, no_direc)
 
-        g_in = [torch.cat([g[f_from] for f_from in range(self.n_freq) if self.g_connections[f_to][f_from]], dim=1).unsqueeze(1) for f_to in range(self.n_freq)]
+        g_in = [torch.cat([g[f_from] for f_from in range(self.n_freq_grid) if self.g_connections[f_to][f_from]], dim=1).unsqueeze(1) for f_to in range(self.n_freq_grid)]
         delta = [torch.bmm(g_in_f, mat_f).squeeze(1) for g_in_f, mat_f in zip(g_in, mats)]
         g_next = [g_f + delta_f for g_f, delta_f in zip(g, delta)]
 
@@ -187,26 +230,26 @@ class GridModel(nn.Module):
 
     def sample_g(self, mu, sigma) -> Transition:
         """Sample g from (mu, sigma) if enabled (legacy behavior)."""
-        if not self._settings.do_sample:
+        if not self.__settings.do_sample:
             return Transition(mean=mu, uncertainty=sigma)
         mu = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu, sigma)]
         return Transition(mean=mu, uncertainty=sigma)
 
     def transition_matrices(self, a: Tensor, no_direc: list[bool]) -> List[Tensor]:
         """Compute per-frequency transition matrices, applying no-direction rows."""
-        d_flat = self.MLP_D_a([a for _ in range(self.n_freq)])
+        d_flat = self.MLP_D_a([a for _ in range(self.n_freq_grid)])
         if no_direc is None:
             no_direc = [False] * a.shape[0]  # batch_size
 
         no_direc_mask = torch.tensor(no_direc, device=a.device, dtype=torch.bool)
         if torch.any(no_direc_mask):
-            for f in range(self.n_freq):
+            for f in range(self.n_freq_grid):
                 d_no_a = self.D_no_a[f].unsqueeze(0).expand_as(d_flat[f])
                 d_flat[f] = torch.where(no_direc_mask.unsqueeze(1), d_no_a, d_flat[f])
 
         mats: List[Tensor] = []
-        for f_to in range(self.n_freq):
-            in_dim = sum(self.shape[f_from] for f_from in range(self.n_freq) if self.g_connections[f_to][f_from])
+        for f_to in range(self.n_freq_grid):
+            in_dim = sum(self.shape[f_from] for f_from in range(self.n_freq_grid) if self.g_connections[f_to][f_from])
             mats.append(d_flat[f_to].reshape(-1, in_dim, self.shape[f_to]))
         return mats
 
@@ -215,75 +258,22 @@ class GridModel(nn.Module):
         return [torch.clamp(g_f, min=-1, max=1) for g_f in g]
 
 
-class OVCModel(nn.Module):
-    def __init__(self, shape: List[int], settings: OVCSettings):
-        super().__init__()
-        self.__settings = settings
-
-        # Select how many OVC frequency modules to instantiate.
-        n_total = len(shape)
-        n_freq_ovc = n_total if settings.n_freq is None else int(settings.n_freq)
-        if n_freq_ovc < 0 or n_freq_ovc > n_total:
-            raise ValueError(f"OVCSettings.n_freq must be in [0, {n_total}] or None; got {settings.n_freq}")
-        self.__n_ovc = shape[-n_freq_ovc:] if n_freq_ovc > 0 else []
-
-        # Initialize shiny → abstract location MLPs (only if OVC modules exist)
-        hidden_dim = [settings.hidden_dim] * n_freq_ovc
-        self.MLP_mu_g_shiny = MLP([1] * n_freq_ovc, self.n_ovc, [torch.relu, None], hidden_dim)
-        self.MLP_sigma_g_shiny = MLP([1] * n_freq_ovc, self.n_ovc, [torch.relu, torch.exp], hidden_dim)
-
-    @property
-    def n_ovc(self) -> List[int]:
-        """Shape of OVC modules."""
-        return self.__n_ovc
-
-    @property
-    def n_freq_ovc(self) -> int:
-        """Number of OVC frequency modules."""
-        return len(self.n_ovc)
-
-    def shiny_mean(self, shiny: Tensor) -> List[Tensor]:
-        """Compute mean of abstract location from shiny landmarks (legacy behavior)."""
-        mu_g = self.MLP_mu_g_shiny(shiny)
-        mu_g = [torch.abs(mu) for mu in mu_g]
-        return self.clamp_ovc(mu_g)
-
-    def shiny_uncertainty(self, shiny: Tensor) -> List[Tensor]:
-        """Compute uncertainty of abstract location from shiny landmarks."""
-        return self.MLP_sigma_g_shiny(shiny)
-
-    def estimate_shiny(self, shiny_input: List[Tensor]) -> tuple[list[Tensor], list[Tensor]]:
-        mu_g_shiny = self.shiny_mean(shiny_input)
-        sigma_g_shiny = self.shiny_uncertainty(shiny_input)
-        return mu_g_shiny, sigma_g_shiny
-
-    def clamp_ovc(self, g: List[Tensor]) -> List[Tensor]:
-        """Clamp + leaky ReLU (matches legacy f_p-like behavior for OVC)."""
-        g = [torch.clamp(g_f, min=self.__settings.clamp_min, max=self.__settings.clamp_min) for g_f in g]
-        return [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in g]
-
-
-class MECModel(OVCModel, nn.Module):
+class MECModel(GridModelBase, OVCModelBase):
     def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
-        OVCModel.__init__(self, shape, settings=settings.ovc_cells)
+        nn.Module.__init__(self)
+        GridModelBase.__init__(self, n_a, n_p, shape, f_init, settings)
+        OVCModelBase.__init__(self, shape, settings)
         self._settings = settings
 
         # Store for backward compatibility with methods that reference self.n_g
         self._n_a = n_a
         self._shape = shape
 
-        # Initialize GridModel (path integration for ALL modules)
-        self.grid = GridModel(n_a, n_p, shape, f_init, settings=settings.grid_cells)
-
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> MECState:
         """Initialize MEC state with prior grid cell activations."""
-        g_init = self.grid.g_init(batch_size, device)
+        g_init = self.g_init(batch_size, device)
         ovc = None  # TODO: Initialize OVC state if needed
         return MECState(g=g_init.mean, uncertainty=g_init.uncertainty, ovc=ovc)
-
-    def set_runtime(self, *, p2g_scale_offset: float):
-        """Update runtime hyperparameters for MEC module."""
-        self.grid.set_runtime(p2g_scale_offset=p2g_scale_offset)
 
     @property
     def n_in(self) -> int:
@@ -321,7 +311,7 @@ class MECModel(OVCModel, nn.Module):
         """
         # Shiny envs use no_direc=True (no action-driven transitions)
         no_direc = [loc.get("shiny") is not None for loc in locations]
-        g_gen, transition = self.grid.path_integrate(a, state.g, no_direc=no_direc)
+        g_gen, transition = self.path_integrate(a, state.g, no_direc=no_direc)
 
         return g_gen, MECState(g=transition.mean, uncertainty=transition.uncertainty)
 
@@ -343,7 +333,7 @@ class MECModel(OVCModel, nn.Module):
             Tuple of (g_inf, updated MECState)
         """
         # Step 1: Infer from memory (Grid responsibility)
-        mu_g_mem, sigma_g_mem = self.grid.infer_from_memory(p_x, state.g)
+        mu_g_mem, sigma_g_mem = self.infer_from_memory(p_x, state.g)
 
         # Step 2: Fuse path integration with memory cues
         mu_g, sigma_g = [], []

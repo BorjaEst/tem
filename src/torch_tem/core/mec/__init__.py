@@ -9,6 +9,7 @@ Design goal:
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -88,8 +89,8 @@ class OVCModelBase(nn.Module):
         return [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in g]
 
 
-class GridModelBase(nn.Module):
-    def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
+class PathInegratorBase(nn.Module):
+    def __init__(self, n_a: int, shape: List[int], f_init: List[float], settings: MECSettings):
         self.__settings = settings.grid_cells  # Protected to avoid modification
 
         # Store hyperparameters
@@ -119,15 +120,7 @@ class GridModelBase(nn.Module):
         # Non-directional transition weights (used for shiny generative branch)
         f_no_a = lambda f_to: torch.zeros(sum(n_g[f_from] for f_from in range(n_freq_gird) if g_conn[f_to][f_from]) * n_g[f_to])
         self.D_no_a = nn.ParameterList([nn.Parameter(f_no_a(f_to)) for f_to in range(n_freq_gird)])
-
-        # Transition uncertainty model
         self.MLP_sigma_g_path = MLP(n_g, n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
-
-        # Generative memory models
-        self.MLP_mu_g_mem = MLP(n_p, shape, hidden_dim=[2 * g for g in shape])
-        init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self.__settings.g_mem_std)
-        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_freq_gird)])
-        self.MLP_sigma_g_mem = MLP([2 for _ in n_p], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
     @property
     def n_grid(self) -> List[int]:
@@ -148,9 +141,6 @@ class GridModelBase(nn.Module):
     def set_runtime(self, *, p2g_scale_offset: float):
         """Update runtime hyperparameters for MEC module."""
         self.p2g_scale_offset = p2g_scale_offset
-
-    def forward(self, *, _):
-        raise NotImplementedError("GridModel forward not implemented. Use path_integrate() or infer_from_memory().")
 
     def path_integrate(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Tuple[List[Tensor], Transition]:
         """Return the transition distribution (mu, sigma) before sampling.
@@ -177,32 +167,6 @@ class GridModelBase(nn.Module):
             g_gen = g_path.mean  # transitioned
 
         return g_gen, g_path
-
-    def infer_from_memory(self, p_x: List[Tensor], g: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
-        """Infer abstract location from memory-cued grounded location.
-
-        Args:
-            p_x: Grounded location (place cells)
-            g: Current grid cell state (for error computation)
-
-        Returns:
-            Tuple of (mu_g_mem, sigma_g_mem)
-        """
-        # Compute mean from memory
-        mu_g_mem = self.MLP_mu_g_mem(p_x)
-        err = utils.squared_error(mu_g_mem, g)
-
-        # Prepare uncertainty input: [vector norm, reconstruction error]
-        sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, g in enumerate(mu_g_mem)]
-
-        # Clamp for stability
-        mu_g_mem = self.g_clamp(mu_g_mem)
-
-        # Infer uncertainty from memory quality
-        sigma = self.MLP_sigma_g_mem(sigma_g_input)
-        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self.__settings.p2g_sig_val for f in range(self.n_freq_grid)]
-
-        return mu_g_mem, sigma_g_mem
 
     # ---------------------------------------------------------------------
     # Mean / uncertainty (legacy f_mu_g_path / f_sigma_g_path)
@@ -258,10 +222,85 @@ class GridModelBase(nn.Module):
         return [torch.clamp(g_f, min=-1, max=1) for g_f in g]
 
 
-class MECModel(GridModelBase, OVCModelBase):
+class PathMemoryBase(nn.Module):
+    def __init__(self, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
+        self.__settings = settings.grid_cells  # Protected to avoid modification
+
+        # Store hyperparameters
+        self.__n_g = n_g = shape
+        self.g_connections = g_conn = connections(f_init)
+        n_freq_gird = len(shape)
+
+        # Runtime values (injected by training loop)
+        self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
+
+        # Prior: learned "default phase" of the grid code at reset
+        init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=self.__settings.g_init_std)
+        self.g_init_mean = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_freq_gird)])
+        self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_freq_gird)])
+
+        # Generative memory models
+        self.MLP_mu_g_mem = MLP(n_p, shape, hidden_dim=[2 * g for g in shape])
+        init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self.__settings.g_mem_std)
+        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_freq_gird)])
+        self.MLP_sigma_g_mem = MLP([2 for _ in n_p], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
+
+    @property
+    def n_grid(self) -> List[int]:
+        """Shape of grid cell modules."""
+        return self.__n_g
+
+    @property
+    def n_freq_grid(self) -> int:
+        """Number of grid cell frequency modules."""
+        return len(self.n_grid)
+
+    def g_init(self, batch_size: int, device: torch.device) -> Transition:
+        """Return initial grid cell activations as (mean, uncertainty) Transition."""
+        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)]
+        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)]
+        return Transition(mean=mean, uncertainty=uncertainty)
+
+    def set_runtime(self, *, p2g_scale_offset: float):
+        """Update runtime hyperparameters for MEC module."""
+        self.p2g_scale_offset = p2g_scale_offset
+
+    def infer_from_memory(self, p_x: List[Tensor], g: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
+        """Infer abstract location from memory-cued grounded location.
+
+        Args:
+            p_x: Grounded location (place cells)
+            g: Current grid cell state (for error computation)
+
+        Returns:
+            Tuple of (mu_g_mem, sigma_g_mem)
+        """
+        # Compute mean from memory
+        mu_g_mem = self.MLP_mu_g_mem(p_x)
+        err = utils.squared_error(mu_g_mem, g)
+
+        # Prepare uncertainty input: [vector norm, reconstruction error]
+        sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, g in enumerate(mu_g_mem)]
+
+        # Clamp for stability
+        mu_g_mem = self.g_clamp(mu_g_mem)
+
+        # Infer uncertainty from memory quality
+        sigma = self.MLP_sigma_g_mem(sigma_g_input)
+        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self.__settings.p2g_sig_val for f in range(self.n_freq_grid)]
+
+        return mu_g_mem, sigma_g_mem
+
+    def g_clamp(self, g: List[Tensor]) -> List[Tensor]:
+        """Clamp grid cell activations to [-1, 1] for stability."""
+        return [torch.clamp(g_f, min=-1, max=1) for g_f in g]
+
+
+class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
     def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
         nn.Module.__init__(self)
-        GridModelBase.__init__(self, n_a, n_p, shape, f_init, settings)
+        PathInegratorBase.__init__(self, n_a, shape, f_init, settings)
+        PathMemoryBase.__init__(self, n_p, shape, f_init, settings)
         OVCModelBase.__init__(self, shape, settings)
         self._settings = settings
 

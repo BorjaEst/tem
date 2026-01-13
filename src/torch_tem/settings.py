@@ -519,6 +519,14 @@ class OVCSettings(BaseModel):
         default=20,
         description="Number of shiny object input channels.",
     )
+    clamp_min: float = Field(
+        default=-1.0,
+        description="Minimum activation clamp for OVC cells.",
+    )
+    clamp_max: float = Field(
+        default=1.0,
+        description="Maximum activation clamp for OVC cells.",
+    )
 
 
 class MECSettings(BaseModel):

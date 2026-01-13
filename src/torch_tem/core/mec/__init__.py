@@ -39,133 +39,6 @@ class MECState:
         )
 
 
-class MECModel(nn.Module):
-    def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
-        super().__init__()
-        self._settings = settings
-
-        # Store for backward compatibility with methods that reference self.n_g
-        self._n_a = n_a
-        self._shape = shape
-
-        # Initialize GridModel (path integration for ALL modules)
-        self.grid = GridModel(n_a, n_p, shape, f_init, settings=settings.grid_cells)
-
-        # Initialize OVCModel (shiny landmark heads).
-        # OVCModel is responsible for selecting which modules are OVC based on settings.ovc_cells.
-        self.ovc = OVCModel(shape, f_init, settings=settings.ovc_cells)
-
-    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> MECState:
-        """Initialize MEC state with prior grid cell activations."""
-        g_init = self.grid.g_init(batch_size, device)
-        ovc = None  # TODO: Initialize OVC state if needed
-        return MECState(g=g_init.mean, uncertainty=g_init.uncertainty, ovc=ovc)
-
-    def set_runtime(self, *, p2g_scale_offset: float):
-        """Update runtime hyperparameters for MEC module."""
-        self.grid.set_runtime(p2g_scale_offset=p2g_scale_offset)
-
-    @property
-    def n_in(self) -> int:
-        """Dimensionality of action input."""
-        return self._n_a
-
-    @property
-    def shape(self) -> List[int]:
-        """Shape of grid cell modules."""
-        return self._shape
-
-    @property
-    def n_freq(self) -> int:
-        """Number of grid cell frequency modules."""
-        return len(self.shape)
-
-    def forward(self, *, _) -> Tuple[List[Tensor], MECState]:
-        raise NotImplementedError("MEC forward not implemented. Use generative() or inference().")
-
-    def generative(self, a: Tensor, locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
-        """Compute next MEC state from action-driven transition.
-
-        Args:
-            a: One-hot encoded actions (B, n_a). With has_static_action=True,
-               action 0 (stand still) is encoded as all-zeros.
-            locations: Per-env location dicts (for shiny detection)
-            state: Current MEC state
-
-        Returns:
-            New MECState with updated g_gen and g_path.
-
-        Note:
-            Caller is responsible for resetting state.g to g_init at episode boundaries.
-            This module always applies transition dynamics from the provided state.
-        """
-        # Shiny envs use no_direc=True (no action-driven transitions)
-        no_direc = [loc.get("shiny") is not None for loc in locations]
-        g_gen, transition = self.grid.path_integrate(a, state.g, no_direc=no_direc)
-
-        return g_gen, MECState(g=transition.mean, uncertainty=transition.uncertainty)
-
-    def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
-        """Infer abstract location from grounded location and path integration.
-
-        Orchestrates:
-        1. GridModel.infer_from_memory(): memory-cued abstract location
-        2. Precision-weighted fusion of path integration + memory cues
-        3. OVCModel.fuse_shiny(): shiny landmark correction for OVC modules
-        4. Sampling or mean extraction
-
-        Args:
-            p_x: Grounded location (place cells)
-            locations: Per-environment location dicts
-            state: Current MEC state (g_path, uncertainty)
-
-        Returns:
-            Tuple of (g_inf, updated MECState)
-        """
-        # Step 1: Infer from memory (Grid responsibility)
-        mu_g_mem, sigma_g_mem = self.grid.infer_from_memory(p_x, state.g)
-
-        # Step 2: Fuse path integration with memory cues
-        mu_g, sigma_g = [], []
-        for f in range(self.n_freq):
-            mu, sigma = utils.inv_var_weight([state.g[f], mu_g_mem[f]], [state.uncertainty[f], sigma_g_mem[f]])
-            mu_g.append(mu)
-            sigma_g.append(sigma)
-
-        # Step 3: Apply shiny correction (MEC responsibility; OVC predicts only)
-        if self.ovc.n_f > 0:
-            device = mu_g[0].device
-            shiny_envs = [loc.get("shiny") is not None for loc in locations]
-            shiny_mask = torch.tensor(shiny_envs, dtype=torch.bool, device=device)
-
-            if torch.any(shiny_mask):
-                # Prepare shiny input for OVC modules
-                shiny_tensor = torch.stack([torch.tensor(loc["shiny"], dtype=torch.float, device=device) for loc in locations if loc.get("shiny") is not None])
-                shiny_input = [torch.unsqueeze(shiny_tensor, dim=-1) for _ in range(self.ovc.n_f)]
-
-                # Get shiny predictions and fuse into OVC modules
-                mu_g_shiny, sigma_g_shiny = self.ovc.estimate_shiny(shiny_input)
-                module_start = self.n_freq - self.ovc.n_f
-
-                for f in range(module_start, self.n_freq):
-                    f_ovc = f - module_start
-                    mu_fused, sigma_fused = utils.inv_var_weight(
-                        [mu_g[f][shiny_mask, :], mu_g_shiny[f_ovc]],
-                        [sigma_g[f][shiny_mask, :], sigma_g_shiny[f_ovc]],
-                    )
-                    mask_expanded = shiny_mask.unsqueeze(-1).expand_as(mu_g[f])
-                    mu_g[f] = mu_g[f].masked_scatter(mask_expanded, mu_fused)
-                    sigma_g[f] = sigma_g[f].masked_scatter(mask_expanded, sigma_fused)
-
-        # Step 4: Sample or take mean
-        if self._settings.grid_cells.do_sample:
-            g_inf = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
-        else:
-            g_inf = mu_g
-
-        return g_inf, MECState(g=g_inf, ovc=state.ovc, uncertainty=sigma_g)
-
-
 class GridModel(nn.Module):
     def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: GridSettings):
         super().__init__()
@@ -343,32 +216,31 @@ class GridModel(nn.Module):
 
 
 class OVCModel(nn.Module):
-    def __init__(self, shape: List[int], f_init: List[float], settings: OVCSettings):
+    def __init__(self, shape: List[int], settings: OVCSettings):
         super().__init__()
-        self._settings = settings
+        self.__settings = settings
 
         # Select how many OVC frequency modules to instantiate.
-        # Convention: OVC modules occupy the *tail* of the MEC module list.
-        # - If settings.n_freq is None: all modules have shiny heads.
-        # - If settings.n_freq == 0: no OVC heads.
-        # - If settings.n_freq == k: only last k modules have shiny heads.
         n_total = len(shape)
-        n_ovc_freq = n_total if settings.n_freq is None else int(settings.n_freq)
-        if n_ovc_freq < 0 or n_ovc_freq > n_total:
+        n_freq_ovc = n_total if settings.n_freq is None else int(settings.n_freq)
+        if n_freq_ovc < 0 or n_freq_ovc > n_total:
             raise ValueError(f"OVCSettings.n_freq must be in [0, {n_total}] or None; got {settings.n_freq}")
-
-        self.n_f = n_ovc_freq
-        self.n_ovc = shape[-n_ovc_freq:] if n_ovc_freq > 0 else []
-        f_init_ovc = f_init[-n_ovc_freq:] if n_ovc_freq > 0 else []
-
-        # OVC modules can also have hierarchical connections (optional)
-        # Legacy: if separate_ovc=True, OVC block has its own hierarchy
-        self.ovc_connections = connections(f_init_ovc) if self.n_f > 0 else []
+        self.__n_ovc = shape[-n_freq_ovc:] if n_freq_ovc > 0 else []
 
         # Initialize shiny → abstract location MLPs (only if OVC modules exist)
-        hidden_dim = [settings.hidden_dim] * self.n_f
-        self.MLP_mu_g_shiny = MLP([1] * self.n_f, self.n_ovc, [torch.relu, None], hidden_dim)
-        self.MLP_sigma_g_shiny = MLP([1] * self.n_f, self.n_ovc, [torch.relu, torch.exp], hidden_dim)
+        hidden_dim = [settings.hidden_dim] * n_freq_ovc
+        self.MLP_mu_g_shiny = MLP([1] * n_freq_ovc, self.n_ovc, [torch.relu, None], hidden_dim)
+        self.MLP_sigma_g_shiny = MLP([1] * n_freq_ovc, self.n_ovc, [torch.relu, torch.exp], hidden_dim)
+
+    @property
+    def n_ovc(self) -> List[int]:
+        """Shape of OVC modules."""
+        return self.__n_ovc
+
+    @property
+    def n_freq_ovc(self) -> int:
+        """Number of OVC frequency modules."""
+        return len(self.n_ovc)
 
     def shiny_mean(self, shiny: Tensor) -> List[Tensor]:
         """Compute mean of abstract location from shiny landmarks (legacy behavior)."""
@@ -387,8 +259,131 @@ class OVCModel(nn.Module):
 
     def clamp_ovc(self, g: List[Tensor]) -> List[Tensor]:
         """Clamp + leaky ReLU (matches legacy f_p-like behavior for OVC)."""
-        g = [torch.clamp(g_f, min=-1, max=1) for g_f in g]
+        g = [torch.clamp(g_f, min=self.__settings.clamp_min, max=self.__settings.clamp_min) for g_f in g]
         return [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in g]
+
+
+class MECModel(OVCModel, nn.Module):
+    def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
+        OVCModel.__init__(self, shape, settings=settings.ovc_cells)
+        self._settings = settings
+
+        # Store for backward compatibility with methods that reference self.n_g
+        self._n_a = n_a
+        self._shape = shape
+
+        # Initialize GridModel (path integration for ALL modules)
+        self.grid = GridModel(n_a, n_p, shape, f_init, settings=settings.grid_cells)
+
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> MECState:
+        """Initialize MEC state with prior grid cell activations."""
+        g_init = self.grid.g_init(batch_size, device)
+        ovc = None  # TODO: Initialize OVC state if needed
+        return MECState(g=g_init.mean, uncertainty=g_init.uncertainty, ovc=ovc)
+
+    def set_runtime(self, *, p2g_scale_offset: float):
+        """Update runtime hyperparameters for MEC module."""
+        self.grid.set_runtime(p2g_scale_offset=p2g_scale_offset)
+
+    @property
+    def n_in(self) -> int:
+        """Dimensionality of action input."""
+        return self._n_a
+
+    @property
+    def shape(self) -> List[int]:
+        """Shape of grid cell modules."""
+        return self._shape
+
+    @property
+    def n_freq(self) -> int:
+        """Number of grid cell frequency modules."""
+        return len(self.shape)
+
+    def forward(self, *, _) -> Tuple[List[Tensor], MECState]:
+        raise NotImplementedError("MEC forward not implemented. Use generative() or inference().")
+
+    def generative(self, a: Tensor, locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
+        """Compute next MEC state from action-driven transition.
+
+        Args:
+            a: One-hot encoded actions (B, n_a). With has_static_action=True,
+               action 0 (stand still) is encoded as all-zeros.
+            locations: Per-env location dicts (for shiny detection)
+            state: Current MEC state
+
+        Returns:
+            New MECState with updated g_gen and g_path.
+
+        Note:
+            Caller is responsible for resetting state.g to g_init at episode boundaries.
+            This module always applies transition dynamics from the provided state.
+        """
+        # Shiny envs use no_direc=True (no action-driven transitions)
+        no_direc = [loc.get("shiny") is not None for loc in locations]
+        g_gen, transition = self.grid.path_integrate(a, state.g, no_direc=no_direc)
+
+        return g_gen, MECState(g=transition.mean, uncertainty=transition.uncertainty)
+
+    def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
+        """Infer abstract location from grounded location and path integration.
+
+        Orchestrates:
+        1. GridModel.infer_from_memory(): memory-cued abstract location
+        2. Precision-weighted fusion of path integration + memory cues
+        3. OVCModel.fuse_shiny(): shiny landmark correction for OVC modules
+        4. Sampling or mean extraction
+
+        Args:
+            p_x: Grounded location (place cells)
+            locations: Per-environment location dicts
+            state: Current MEC state (g_path, uncertainty)
+
+        Returns:
+            Tuple of (g_inf, updated MECState)
+        """
+        # Step 1: Infer from memory (Grid responsibility)
+        mu_g_mem, sigma_g_mem = self.grid.infer_from_memory(p_x, state.g)
+
+        # Step 2: Fuse path integration with memory cues
+        mu_g, sigma_g = [], []
+        for f in range(self.n_freq):
+            mu, sigma = utils.inv_var_weight([state.g[f], mu_g_mem[f]], [state.uncertainty[f], sigma_g_mem[f]])
+            mu_g.append(mu)
+            sigma_g.append(sigma)
+
+        # Step 3: Apply shiny correction (MEC responsibility; OVC predicts only)
+        if self.n_freq_ovc > 0:
+            device = mu_g[0].device
+            shiny_envs = [loc.get("shiny") is not None for loc in locations]
+            shiny_mask = torch.tensor(shiny_envs, dtype=torch.bool, device=device)
+
+            if torch.any(shiny_mask):
+                # Prepare shiny input for OVC modules
+                shiny_tensor = torch.stack([torch.tensor(loc["shiny"], dtype=torch.float, device=device) for loc in locations if loc.get("shiny") is not None])
+                shiny_input = [torch.unsqueeze(shiny_tensor, dim=-1) for _ in range(self.n_freq_ovc)]
+
+                # Get shiny predictions and fuse into OVC modules
+                mu_g_shiny, sigma_g_shiny = self.estimate_shiny(shiny_input)
+                module_start = self.n_freq - self.n_freq
+
+                for f in range(module_start, self.n_freq):
+                    f_ovc = f - module_start
+                    mu_fused, sigma_fused = utils.inv_var_weight(
+                        [mu_g[f][shiny_mask, :], mu_g_shiny[f_ovc]],
+                        [sigma_g[f][shiny_mask, :], sigma_g_shiny[f_ovc]],
+                    )
+                    mask_expanded = shiny_mask.unsqueeze(-1).expand_as(mu_g[f])
+                    mu_g[f] = mu_g[f].masked_scatter(mask_expanded, mu_fused)
+                    sigma_g[f] = sigma_g[f].masked_scatter(mask_expanded, sigma_fused)
+
+        # Step 4: Sample or take mean
+        if self._settings.grid_cells.do_sample:
+            g_inf = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
+        else:
+            g_inf = mu_g
+
+        return g_inf, MECState(g=g_inf, ovc=state.ovc, uncertainty=sigma_g)
 
 
 def connections(f_grid: list[float]) -> list[list[bool]]:

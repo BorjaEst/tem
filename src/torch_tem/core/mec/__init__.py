@@ -94,18 +94,12 @@ class PathInegratorBase(nn.Module):
         self.__settings = settings.grid_cells  # Protected to avoid modification
 
         # Store hyperparameters
-        self.__n_a = n_a
         self.__n_g = n_g = shape
         self.g_connections = g_conn = connections(f_init)
         n_freq_gird = len(shape)
 
         # Runtime values (injected by training loop)
         self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
-
-        # Prior: learned "default phase" of the grid code at reset
-        init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=self.__settings.g_init_std)
-        self.g_init_mean = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_freq_gird)])
-        self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_freq_gird)])
 
         # Transition weights (action-conditioned)
         self.MLP_D_a = MLP(
@@ -131,12 +125,6 @@ class PathInegratorBase(nn.Module):
     def n_freq_grid(self) -> int:
         """Number of grid cell frequency modules."""
         return len(self.n_grid)
-
-    def g_init(self, batch_size: int, device: torch.device) -> Transition:
-        """Return initial grid cell activations as (mean, uncertainty) Transition."""
-        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)]
-        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)]
-        return Transition(mean=mean, uncertainty=uncertainty)
 
     def set_runtime(self, *, p2g_scale_offset: float):
         """Update runtime hyperparameters for MEC module."""
@@ -234,11 +222,6 @@ class PathMemoryBase(nn.Module):
         # Runtime values (injected by training loop)
         self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
 
-        # Prior: learned "default phase" of the grid code at reset
-        init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=self.__settings.g_init_std)
-        self.g_init_mean = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_freq_gird)])
-        self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(n_freq_gird)])
-
         # Generative memory models
         self.MLP_mu_g_mem = MLP(n_p, shape, hidden_dim=[2 * g for g in shape])
         init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self.__settings.g_mem_std)
@@ -254,12 +237,6 @@ class PathMemoryBase(nn.Module):
     def n_freq_grid(self) -> int:
         """Number of grid cell frequency modules."""
         return len(self.n_grid)
-
-    def g_init(self, batch_size: int, device: torch.device) -> Transition:
-        """Return initial grid cell activations as (mean, uncertainty) Transition."""
-        mean = [self.g_init_mean[f].unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)]
-        uncertainty = [torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)]
-        return Transition(mean=mean, uncertainty=uncertainty)
 
     def set_runtime(self, *, p2g_scale_offset: float):
         """Update runtime hyperparameters for MEC module."""
@@ -307,12 +284,20 @@ class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
         # Store for backward compatibility with methods that reference self.n_g
         self._n_a = n_a
         self._shape = shape
+        n_g = self.n_grid
+
+        # Prior: learned "default phase" of the grid code at reset
+        init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=settings.g_init_std)
+        self.g_init_mean = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(self.n_freq_grid)])
+        self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(self.n_freq_grid)])
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> MECState:
         """Initialize MEC state with prior grid cell activations."""
-        g_init = self.g_init(batch_size, device)
-        ovc = None  # TODO: Initialize OVC state if needed
-        return MECState(g=g_init.mean, uncertainty=g_init.uncertainty, ovc=ovc)
+        return MECState(
+            g=[g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.g_init_mean],
+            uncertainty=[torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)],
+            ovc=None,  # TODO: Initialize OVC state if needed
+        )
 
     @property
     def n_in(self) -> int:

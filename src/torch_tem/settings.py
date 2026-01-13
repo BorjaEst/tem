@@ -489,10 +489,7 @@ class GridSettings(BaseModel):
         default=False,
         description="Whether to sample, or assume no noise and simply take mean of all distributions",
     )
-    g_init_std: float = Field(
-        0.5,
-        description="Standard deviation for initializing grid cell activations.",
-    )
+
     g_mem_std: float = Field(
         default=0.1,
         description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location",
@@ -541,6 +538,10 @@ class MECSettings(BaseModel):
     ovc_cells: OVCSettings = Field(
         default_factory=OVCSettings,
         description="OVC module settings",
+    )
+    g_init_std: float = Field(
+        0.5,
+        description="Standard deviation for initializing grid cell activations.",
     )
 
 

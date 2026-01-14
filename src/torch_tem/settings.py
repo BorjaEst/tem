@@ -480,8 +480,8 @@ class MECProjectionSettings(ProjectionSettings):
     )
 
 
-class GridSettings(BaseModel):
-    """Settings for grid cell modules."""
+class MECSettings(BaseModel):
+    """Settings for MEC modules."""
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
@@ -489,32 +489,29 @@ class GridSettings(BaseModel):
         default=False,
         description="Whether to sample, or assume no noise and simply take mean of all distributions",
     )
-
-    g_mem_std: float = Field(
+    std_grid_mem: float = Field(
         default=0.1,
         description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location",
     )
-    n_hidden: int = Field(
+    std_grid_init: float = Field(
+        0.5,
+        description="Standard deviation for initializing grid cell activations.",
+    )
+    hidden_dim_grid: int = Field(
         20,
         description="Hidden dimension for transition MLP.",
+    )
+    hidden_dim_ovc: int = Field(
+        default=20,
+        description="Number of shiny object input channels.",
+    )
+    n_freq_ovc: Optional[int] = Field(
+        default=None,
+        description="Number of OVC frequency modules (if None, matches grid cell frequencies).",
     )
     p2g_sig_val: float = Field(
         default=10000.0,
         description="Additional value to offset standard deviation of inferred grounded location",
-    )
-
-
-class OVCSettings(BaseModel):
-
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-
-    n_freq: Optional[int] = Field(
-        default=None,
-        description="Number of OVC frequency modules (if None, matches grid cell frequencies).",
-    )
-    hidden_dim: int = Field(
-        default=20,
-        description="Number of shiny object input channels.",
     )
     clamp_min: float = Field(
         default=-1.0,
@@ -523,25 +520,6 @@ class OVCSettings(BaseModel):
     clamp_max: float = Field(
         default=1.0,
         description="Maximum activation clamp for OVC cells.",
-    )
-
-
-class MECSettings(BaseModel):
-    """Settings for MEC modules."""
-
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-
-    grid_cells: GridSettings = Field(
-        default_factory=GridSettings,
-        description="Grid cell module settings",
-    )
-    ovc_cells: OVCSettings = Field(
-        default_factory=OVCSettings,
-        description="OVC module settings",
-    )
-    g_init_std: float = Field(
-        0.5,
-        description="Standard deviation for initializing grid cell activations.",
     )
 
 

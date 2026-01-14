@@ -59,11 +59,11 @@ class MECParameters(BaseModel):
         default=False,
         description="Whether to use separate grid modules that receive shiny information for object vector cells",
     )
-    g_init_std: float = Field(
+    std_grid_init: float = Field(
         default=0.5,
         description="Standard deviation for initial g (which will then be learned)",
     )
-    g_mem_std: float = Field(
+    std_grid_mem: float = Field(
         default=0.1,
         description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location",
     )
@@ -191,8 +191,8 @@ class Parameters(BaseModel):
         for key in (
             "do_sample",
             "separate_ovc",
-            "g_init_std",
-            "g_mem_std",
+            "std_grid_init",
+            "std_grid_mem",
             "d_hidden_dim",
             "n_g_subsampled_base",
             "n_ovc_base",
@@ -243,12 +243,12 @@ class Parameters(BaseModel):
         return self.mec.separate_ovc
 
     @property
-    def g_init_std(self) -> float:
-        return self.mec.g_init_std
+    def std_grid_init(self) -> float:
+        return self.mec.std_grid_init
 
     @property
-    def g_mem_std(self) -> float:
-        return self.mec.g_mem_std
+    def std_grid_mem(self) -> float:
+        return self.mec.std_grid_mem
 
     @property
     def d_hidden_dim(self) -> int:
@@ -272,7 +272,7 @@ class Parameters(BaseModel):
 
     @property
     def p2g_sig_val(self) -> float:
-        return self.mec_settings.grid_cells.p2g_sig_val
+        return self.mec_settings.p2g_sig_val
 
     @property
     def common_memory(self) -> bool:
@@ -493,8 +493,8 @@ class Parameters(BaseModel):
             # MEC
             "do_sample": self.do_sample,
             "separate_ovc": self.separate_ovc,
-            "g_init_std": self.g_init_std,
-            "g_mem_std": self.g_mem_std,
+            "std_grid_init": self.std_grid_init,
+            "std_grid_mem": self.std_grid_mem,
             "d_hidden_dim": self.d_hidden_dim,
             "n_g_subsampled_base": self.n_g_subsampled_base,
             "n_ovc_base": self.n_ovc_base,

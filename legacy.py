@@ -138,14 +138,14 @@ class Model(torch.nn.Module):
         # Initial activity of abstract location cells when entering a new environment, like a prior on g. Initialise with truncated normal
         self.g_init = torch.nn.ParameterList(
             [
-                torch.nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=self.hyper["n_g"][f], loc=0, scale=self.hyper["g_init_std"]), dtype=torch.float))
+                torch.nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=self.hyper["n_g"][f], loc=0, scale=self.hyper["std_grid_init"]), dtype=torch.float))
                 for f in range(self.hyper["n_f"])
             ]
         )
         # Log of standard deviation of abstract location cells when entering a new environment; standard deviation of the prior on g. Initialise with truncated normal
         self.logsig_g_init = torch.nn.ParameterList(
             [
-                torch.nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=self.hyper["n_g"][f], loc=0, scale=self.hyper["g_init_std"]), dtype=torch.float))
+                torch.nn.Parameter(torch.tensor(truncnorm.rvs(-2, 2, size=self.hyper["n_g"][f], loc=0, scale=self.hyper["std_grid_init"]), dtype=torch.float))
                 for f in range(self.hyper["n_f"])
             ]
         )
@@ -181,7 +181,7 @@ class Model(torch.nn.Module):
         self.MLP_mu_g_mem.set_weights(
             -1,
             [
-                torch.tensor(truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self.hyper["g_mem_std"]), dtype=torch.float)
+                torch.tensor(truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self.hyper["std_grid_mem"]), dtype=torch.float)
                 for f in range(self.hyper["n_f"])
             ],
         )

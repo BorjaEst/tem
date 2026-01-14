@@ -19,7 +19,7 @@ from torch import Tensor, nn
 
 from torch_tem import utils
 from torch_tem.modules import MLP
-from torch_tem.settings import GridSettings, MECSettings, OVCSettings
+from torch_tem.settings import MECSettings
 from torch_tem.types import Transition
 
 __all__ = ["MECModel", "MECState"]
@@ -42,21 +42,15 @@ class MECState:
         )
 
 
-class OVCModelBase(nn.Module):
-    def __init__(self, shape: List[int], settings: MECSettings):
-        self.__settings = settings.ovc_cells  # Protected to avoid modification
-
-        # Select how many OVC frequency modules to instantiate.
-        n_total = len(shape)
-        n_freq_ovc = n_total if self.__settings.n_freq is None else int(self.__settings.n_freq)
-        if n_freq_ovc < 0 or n_freq_ovc > n_total:
-            raise ValueError(f"OVCSettings.n_freq must be in [0, {n_total}] or None; got {self.__settings.n_freq}")
-        self.__n_ovc = shape[-n_freq_ovc:] if n_freq_ovc > 0 else []
+class OVCModelBase(nn.Module, ABC):
+    def __init__(self, n_ovc: List[int], settings: MECSettings):
+        self.__n_ovc = n_ovc
+        self.__n_freq_ovc = len(n_ovc)
 
         # Initialize shiny → abstract location MLPs (only if OVC modules exist)
-        hidden_dim = [self.__settings.hidden_dim] * n_freq_ovc
-        self.MLP_mu_g_shiny = MLP([1] * n_freq_ovc, self.n_ovc, [torch.relu, None], hidden_dim)
-        self.MLP_sigma_g_shiny = MLP([1] * n_freq_ovc, self.n_ovc, [torch.relu, torch.exp], hidden_dim)
+        hidden_dim = [settings.hidden_dim_ovc] * self.n_freq_ovc
+        self.MLP_mu_g_shiny = MLP([1] * self.n_freq_ovc, self.n_ovc, [torch.relu, None], hidden_dim)
+        self.MLP_sigma_g_shiny = MLP([1] * self.n_freq_ovc, self.n_ovc, [torch.relu, torch.exp], hidden_dim)
 
     @property
     def n_ovc(self) -> List[int]:
@@ -66,13 +60,12 @@ class OVCModelBase(nn.Module):
     @property
     def n_freq_ovc(self) -> int:
         """Number of OVC frequency modules."""
-        return len(self.n_ovc)
+        return self.__n_freq_ovc
 
     def shiny_mean(self, shiny: Tensor) -> List[Tensor]:
         """Compute mean of abstract location from shiny landmarks (legacy behavior)."""
-        mu_g = self.MLP_mu_g_shiny(shiny)
-        mu_g = [torch.abs(mu) for mu in mu_g]
-        return self.clamp_ovc(mu_g)
+        mu_g = [torch.abs(mu) for mu in self.MLP_mu_g_shiny(shiny)]
+        return [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in self.clamp(mu_g)]
 
     def shiny_uncertainty(self, shiny: Tensor) -> List[Tensor]:
         """Compute uncertainty of abstract location from shiny landmarks."""
@@ -83,20 +76,18 @@ class OVCModelBase(nn.Module):
         sigma_g_shiny = self.shiny_uncertainty(shiny_input)
         return mu_g_shiny, sigma_g_shiny
 
-    def clamp_ovc(self, g: List[Tensor]) -> List[Tensor]:
-        """Clamp + leaky ReLU (matches legacy f_p-like behavior for OVC)."""
-        g = [torch.clamp(g_f, min=self.__settings.clamp_min, max=self.__settings.clamp_min) for g_f in g]
-        return [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in g]
+    @abstractmethod
+    def clamp(self, g: List[Tensor]) -> List[Tensor]:
+        raise NotImplementedError("OVCModelBase.clamp must be implemented in derived classes.")
 
 
-class PathInegratorBase(nn.Module):
+class PathInegratorBase(nn.Module, ABC):
     def __init__(self, n_a: int, shape: List[int], f_init: List[float], settings: MECSettings):
-        self.__settings = settings.grid_cells  # Protected to avoid modification
-
         # Store hyperparameters
         self.__n_g = n_g = shape
         self.g_connections = g_conn = connections(f_init)
         n_freq_gird = len(shape)
+        self.__settings = settings  # TODO: remove after refactoring
 
         # Runtime values (injected by training loop)
         self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
@@ -106,7 +97,7 @@ class PathInegratorBase(nn.Module):
             in_dim=[n_a for _ in range(n_freq_gird)],  # Multiplex through all frequencies
             out_dim=[sum(n_g[fb] for fb in range(n_freq_gird) if g_conn[fa][fb]) * n_g[fa] for fa in range(n_freq_gird)],
             activation=[torch.tanh, None],
-            hidden_dim=[self.__settings.n_hidden for _ in range(n_freq_gird)],
+            hidden_dim=[settings.hidden_dim_grid for _ in range(n_freq_gird)],
             bias=[True, False],
         )
         self.MLP_D_a.set_weights(1, 0.0)
@@ -210,21 +201,20 @@ class PathInegratorBase(nn.Module):
         return [torch.clamp(g_f, min=-1, max=1) for g_f in g]
 
 
-class PathMemoryBase(nn.Module):
+class PathMemoryBase(nn.Module, ABC):
     def __init__(self, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
-        self.__settings = settings.grid_cells  # Protected to avoid modification
-
         # Store hyperparameters
         self.__n_g = n_g = shape
         self.g_connections = g_conn = connections(f_init)
         n_freq_gird = len(shape)
+        self.__p2g_sig_val = settings.p2g_sig_val
 
         # Runtime values (injected by training loop)
         self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
 
         # Generative memory models
         self.MLP_mu_g_mem = MLP(n_p, shape, hidden_dim=[2 * g for g in shape])
-        init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=self.__settings.g_mem_std)
+        init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=settings.std_grid_mem)
         self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_freq_gird)])
         self.MLP_sigma_g_mem = MLP([2 for _ in n_p], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
@@ -264,7 +254,7 @@ class PathMemoryBase(nn.Module):
 
         # Infer uncertainty from memory quality
         sigma = self.MLP_sigma_g_mem(sigma_g_input)
-        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self.__settings.p2g_sig_val for f in range(self.n_freq_grid)]
+        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self.__p2g_sig_val for f in range(self.n_freq_grid)]
 
         return mu_g_mem, sigma_g_mem
 
@@ -276,9 +266,18 @@ class PathMemoryBase(nn.Module):
 class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
     def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
         nn.Module.__init__(self)
+
+        # Select how many OVC frequency modules to instantiate.
+        n_total = len(shape)
+        n_freq_ovc = n_total if settings.n_freq_ovc is None else int(settings.n_freq_ovc)
+        if n_freq_ovc < 0 or n_freq_ovc > n_total:
+            raise ValueError(f"MECSettings.n_freq_ovc must be in [0, {n_total}] or None; got {settings.n_freq_ovc}")
+        n_grid = shape[:-n_freq_ovc] if n_freq_ovc > 0 else shape
+        n_ovc = shape[-n_freq_ovc:] if n_freq_ovc > 0 else []
+
         PathInegratorBase.__init__(self, n_a, shape, f_init, settings)
         PathMemoryBase.__init__(self, n_p, shape, f_init, settings)
-        OVCModelBase.__init__(self, shape, settings)
+        OVCModelBase.__init__(self, n_ovc, settings)
         self._settings = settings
 
         # Store for backward compatibility with methods that reference self.n_g
@@ -287,7 +286,7 @@ class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
         n_g = self.n_grid
 
         # Prior: learned "default phase" of the grid code at reset
-        init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=settings.g_init_std)
+        init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=settings.std_grid_init)
         self.g_init_mean = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(self.n_freq_grid)])
         self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(self.n_freq_grid)])
 
@@ -392,14 +391,29 @@ class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
                     sigma_g[f] = sigma_g[f].masked_scatter(mask_expanded, sigma_fused)
 
         # Step 4: Sample or take mean
-        if self._settings.grid_cells.do_sample:
+        if self._settings.do_sample:
             g_inf = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
         else:
             g_inf = mu_g
 
         return g_inf, MECState(g=g_inf, ovc=state.ovc, uncertainty=sigma_g)
 
+    def clamp(self, g: List[Tensor]) -> List[Tensor]:
+        """Clamp grid cell activations to [-1, 1] for stability."""
+        return [torch.clamp(g_f, min=self._settings.clamp_min, max=self._settings.clamp_min) for g_f in g]
+
 
 def connections(f_grid: list[float]) -> list[list[bool]]:
     n = len(f_grid)
     return [[f_grid[f1] <= f_grid[f2] for f1 in range(n)] for f2 in range(n)]
+
+
+def shapes(n_total: List[int], settings: MECSettings) -> Tuple[List[int], List[int]]:
+    """Split total module shapes into grid cell and OVC module shapes."""
+    n_freq_total = len(n_total)
+    n_freq_ovc = n_freq_total if settings.n_freq_ovc is None else int(settings.n_freq_ovc)
+    if n_freq_ovc < 0 or n_freq_ovc > n_freq_total:
+        raise ValueError(f"MECSettings.n_freq_ovc must be in [0, {n_freq_total}] or None; got {settings.n_freq_ovc}")
+    n_grid = n_total[:-n_freq_ovc] if n_freq_ovc > 0 else n_total
+    n_ovc = n_total[-n_freq_ovc:] if n_freq_ovc > 0 else []
+    return n_grid, n_ovc

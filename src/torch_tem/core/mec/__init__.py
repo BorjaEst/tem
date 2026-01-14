@@ -86,25 +86,20 @@ class PathInegratorBase(nn.Module, ABC):
         # Store hyperparameters
         self.__n_g = n_g = shape
         self.g_connections = g_conn = connections(f_init)
-        n_freq_gird = len(shape)
+        n_f = len(shape)
         self.__settings = settings  # TODO: remove after refactoring
 
         # Runtime values (injected by training loop)
         self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
 
         # Transition weights (action-conditioned)
-        self.MLP_D_a = MLP(
-            in_dim=[n_a for _ in range(n_freq_gird)],  # Multiplex through all frequencies
-            out_dim=[sum(n_g[fb] for fb in range(n_freq_gird) if g_conn[fa][fb]) * n_g[fa] for fa in range(n_freq_gird)],
-            activation=[torch.tanh, None],
-            hidden_dim=[settings.hidden_dim_grid for _ in range(n_freq_gird)],
-            bias=[True, False],
-        )
+        out_dim = [sum(n_g[fb] for fb in range(n_f) if g_conn[fa][fb]) * n_g[fa] for fa in range(n_f)]
+        self.MLP_D_a = MLP([n_a] * n_f, out_dim, activation=[torch.tanh, None], hidden_dim=[settings.hidden_dim_grid] * n_f, bias=[True, False])
         self.MLP_D_a.set_weights(1, 0.0)
 
         # Non-directional transition weights (used for shiny generative branch)
-        f_no_a = lambda f_to: torch.zeros(sum(n_g[f_from] for f_from in range(n_freq_gird) if g_conn[f_to][f_from]) * n_g[f_to])
-        self.D_no_a = nn.ParameterList([nn.Parameter(f_no_a(f_to)) for f_to in range(n_freq_gird)])
+        f_no_a = lambda f_to: torch.zeros(sum(n_g[f_from] for f_from in range(n_f) if g_conn[f_to][f_from]) * n_g[f_to])
+        self.D_no_a = nn.ParameterList([nn.Parameter(f_no_a(f_to)) for f_to in range(n_f)])
         self.MLP_sigma_g_path = MLP(n_g, n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
     @property
@@ -206,7 +201,7 @@ class PathMemoryBase(nn.Module, ABC):
         # Store hyperparameters
         self.__n_g = n_g = shape
         self.g_connections = g_conn = connections(f_init)
-        n_freq_gird = len(shape)
+        n_f = len(shape)
         self.__p2g_sig_val = settings.p2g_sig_val
 
         # Runtime values (injected by training loop)
@@ -215,7 +210,7 @@ class PathMemoryBase(nn.Module, ABC):
         # Generative memory models
         self.MLP_mu_g_mem = MLP(n_p, shape, hidden_dim=[2 * g for g in shape])
         init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=settings.std_grid_mem)
-        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_freq_gird)])
+        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_f)])
         self.MLP_sigma_g_mem = MLP([2 for _ in n_p], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
     @property
@@ -267,14 +262,7 @@ class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
     def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
         nn.Module.__init__(self)
 
-        # Select how many OVC frequency modules to instantiate.
-        n_total = len(shape)
-        n_freq_ovc = n_total if settings.n_freq_ovc is None else int(settings.n_freq_ovc)
-        if n_freq_ovc < 0 or n_freq_ovc > n_total:
-            raise ValueError(f"MECSettings.n_freq_ovc must be in [0, {n_total}] or None; got {settings.n_freq_ovc}")
-        n_grid = shape[:-n_freq_ovc] if n_freq_ovc > 0 else shape
-        n_ovc = shape[-n_freq_ovc:] if n_freq_ovc > 0 else []
-
+        n_grid, n_ovc = shapes(shape, settings)
         PathInegratorBase.__init__(self, n_a, shape, f_init, settings)
         PathMemoryBase.__init__(self, n_p, shape, f_init, settings)
         OVCModelBase.__init__(self, n_ovc, settings)

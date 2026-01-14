@@ -503,7 +503,7 @@ class MECSettings(BaseModel):
     )
     hidden_dim_ovc: int = Field(
         default=20,
-        description="Number of shiny object input channels.",
+        description="Hidden dimension for shiny object input channels.",
     )
     n_freq_ovc: Optional[int] = Field(
         default=None,

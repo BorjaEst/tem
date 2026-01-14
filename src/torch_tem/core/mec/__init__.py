@@ -29,168 +29,132 @@ __all__ = ["MECModel", "MECState"]
 class MECState:
     """State container for MEC dynamics."""
 
-    g: List[Tensor]  # Grid cell activations
-    ovc: Optional[List[Tensor]] = None  # OVC activations
+    cells: List[Tensor]  # MEC cell activations (grid and OVC)
     uncertainty: Optional[List[Tensor]] = None  # Grid cell uncertainty
 
     def detach(self) -> "MECState":
         """Return a detached copy suitable for storing as `prev_iter`."""
         return MECState(
-            g=[v.detach() for v in self.g] if self.g is not None else None,
-            ovc=[v.detach() for v in self.ovc] if self.ovc is not None else None,
+            cells=[v.detach() for v in self.cells] if self.cells is not None else None,
             uncertainty=[v.detach() for v in self.uncertainty] if self.uncertainty is not None else None,
         )
 
 
 class ShinyModelBase(nn.Module, ABC):
-    def __init__(self, n_ovc: List[int], settings: MECSettings):
-        self.__n_ovc = n_ovc
-        self.__n_freq_ovc = len(n_ovc)
+    def __init__(self, shiny_out_sizes: List[int], settings: MECSettings):
+        self.__shiny_sizes = shiny_out_sizes
+        n_shiny = len(shiny_out_sizes)
 
-        # Initialize shiny → abstract location MLPs (only if OVC modules exist)
-        hidden_dim = [settings.hidden_dim_ovc] * self.n_freq_ovc
-        self.MLP_mu_g_shiny = MLP([1] * self.n_freq_ovc, self.n_ovc, [torch.relu, None], hidden_dim)
-        self.MLP_sigma_g_shiny = MLP([1] * self.n_freq_ovc, self.n_ovc, [torch.relu, torch.exp], hidden_dim)
-
-    @property
-    def n_ovc(self) -> List[int]:
-        """Shape of OVC modules."""
-        return self.__n_ovc
+        hidden_dim = [settings.hidden_dim_ovc] * n_shiny
+        self.MLP_mu_g_shiny = MLP([1] * n_shiny, shiny_out_sizes, [torch.relu, None], hidden_dim)
+        self.MLP_sigma_g_shiny = MLP([1] * n_shiny, shiny_out_sizes, [torch.relu, torch.exp], hidden_dim)
 
     @property
-    def n_freq_ovc(self) -> int:
-        """Number of OVC frequency modules."""
-        return self.__n_freq_ovc
+    def n_shiny_modules(self) -> int:
+        """Number of shiny-corrected modules."""
+        return len(self.__shiny_sizes)
 
-    def shiny_mean(self, shiny: Tensor) -> List[Tensor]:
+    def shiny_mean(self, shiny: List[Tensor]) -> List[Tensor]:
         """Compute mean of abstract location from shiny landmarks (legacy behavior)."""
         mu_g = [torch.abs(mu) for mu in self.MLP_mu_g_shiny(shiny)]
         return [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in self.clamp(mu_g)]
 
-    def shiny_uncertainty(self, shiny: Tensor) -> List[Tensor]:
+    def shiny_uncertainty(self, shiny: List[Tensor]) -> List[Tensor]:
         """Compute uncertainty of abstract location from shiny landmarks."""
         return self.MLP_sigma_g_shiny(shiny)
 
     def estimate_shiny(self, shiny_input: List[Tensor]) -> tuple[list[Tensor], list[Tensor]]:
+        """Estimate shiny correction (returns empty lists if no shiny modules)."""
         mu_g_shiny = self.shiny_mean(shiny_input)
         sigma_g_shiny = self.shiny_uncertainty(shiny_input)
         return mu_g_shiny, sigma_g_shiny
 
     @abstractmethod
     def clamp(self, g: List[Tensor]) -> List[Tensor]:
-        raise NotImplementedError("OVCModelBase.clamp must be implemented in derived classes.")
+        raise NotImplementedError("ShinyModelBase.clamp must be implemented in derived classes.")
 
 
 class PathInegratorBase(nn.Module, ABC):
-    def __init__(self, n_a: int, shape: List[int], f_init: List[float], settings: MECSettings):
+    def __init__(self, n_a: int, n_g: List[int], f_init: List[float], settings: MECSettings):
         # Store hyperparameters
-        self.__n_g = n_g = shape
+        self.__n_g, n_freq = n_g, len(n_g)
+        self.__do_sample = settings.do_sample
         self.g_connections = g_conn = connections(f_init)
-        n_f = len(shape)
-        self.__settings = settings  # TODO: remove after refactoring
 
         # Transition weights (action-conditioned)
-        out_dim = [sum(n_g[fb] for fb in range(n_f) if g_conn[fa][fb]) * n_g[fa] for fa in range(n_f)]
-        self.MLP_D_a = MLP([n_a] * n_f, out_dim, activation=[torch.tanh, None], hidden_dim=[settings.hidden_dim_grid] * n_f, bias=[True, False])
+        out_dim = [sum(nb for fb, nb in enumerate(n_g) if g_conn[fa][fb]) * na for fa, na in enumerate(n_g)]
+        self.MLP_D_a = MLP([n_a] * n_freq, out_dim, activation=[torch.tanh, None], hidden_dim=[settings.hidden_dim_grid] * n_freq, bias=[True, False])
         self.MLP_D_a.set_weights(1, 0.0)
 
         # Non-directional transition weights (used for shiny generative branch)
-        f_no_a = lambda f_to: torch.zeros(sum(n_g[f_from] for f_from in range(n_f) if g_conn[f_to][f_from]) * n_g[f_to])
-        self.D_no_a = nn.ParameterList([nn.Parameter(f_no_a(f_to)) for f_to in range(n_f)])
+        f_no_a = lambda f_to: torch.zeros(sum(n_g[f_from] for f_from in range(n_freq) if g_conn[f_to][f_from]) * n_g[f_to])
+        self.D_no_a = nn.ParameterList([nn.Parameter(f_no_a(f_to)) for f_to in range(n_freq)])
         self.MLP_sigma_g_path = MLP(n_g, n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
     def path_integrate(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Tuple[List[Tensor], Transition]:
         mu = self.g_mean(a, g, no_direc=no_direc)
         sigma = self.g_uncertainty(g)
-
         # Sample g from (mu, sigma) if enabled (legacy behavior)
         g_path = self.sample_g(mu, sigma)
-
         # if ANY shiny env exists, recompute g_gen for ALL envs from PREVIOUS g (not transitioned)
         shiny_envs = no_direc if no_direc is not None else [False] * a.size(0)
         if any(shiny_envs):
             g_gen = self.g_mean(a, g, no_direc=shiny_envs)  # from previous g
         else:
             g_gen = g_path.mean  # transitioned
-
-        return g_gen, g_path
-
-    # ---------------------------------------------------------------------
-    # Mean / uncertainty (legacy f_mu_g_path / f_sigma_g_path)
-    # ---------------------------------------------------------------------
+        return g_gen, Transition(mean=g_path.mean, uncertainty=g_path.uncertainty)
 
     def g_mean(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> List[Tensor]:
-        """Compute transition mean: g_next = g + action_delta."""
-
-        mats = self.transition_matrices(a, no_direc)
-
-        g_in = [torch.cat([g[f_from] for f_from in range(self.n_freq_grid) if self.g_connections[f_to][f_from]], dim=1).unsqueeze(1) for f_to in range(self.n_freq_grid)]
+        mats, n_freq = self.transition_matrices(a, no_direc), len(self.__n_g)
+        g_in = [torch.cat([g[f_from] for f_from in range(n_freq) if self.g_connections[f_to][f_from]], dim=1).unsqueeze(1) for f_to in range(n_freq)]
         delta = [torch.bmm(g_in_f, mat_f).squeeze(1) for g_in_f, mat_f in zip(g_in, mats)]
         g_next = [g_f + delta_f for g_f, delta_f in zip(g, delta)]
-
-        # Clamp activations for stability
         return self.clamp(g_next)
 
     def g_uncertainty(self, g: List[Tensor]) -> List[Tensor]:
-        """Compute transition uncertainty from current state."""
         return self.MLP_sigma_g_path(g)
 
-    # ---------------------------------------------------------------------
-    # Helper functions (small + explicit)
-    # ---------------------------------------------------------------------
-
     def sample_g(self, mu, sigma) -> Transition:
-        if not self.__settings.do_sample:
+        if not self.__do_sample:
             return Transition(mean=mu, uncertainty=sigma)
         mu = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu, sigma)]
         return Transition(mean=mu, uncertainty=sigma)
 
     def transition_matrices(self, a: Tensor, no_direc: list[bool]) -> List[Tensor]:
-        d_flat = self.MLP_D_a([a for _ in range(self.n_freq_grid)])
+        n_freq = len(self.__n_g)
+        d_flat = self.MLP_D_a([a for _ in range(n_freq)])
         if no_direc is None:
             no_direc = [False] * a.shape[0]  # batch_size
 
         no_direc_mask = torch.tensor(no_direc, device=a.device, dtype=torch.bool)
         if torch.any(no_direc_mask):
-            for f in range(self.n_freq_grid):
+            for f in range(n_freq):
                 d_no_a = self.D_no_a[f].unsqueeze(0).expand_as(d_flat[f])
                 d_flat[f] = torch.where(no_direc_mask.unsqueeze(1), d_no_a, d_flat[f])
 
         mats: List[Tensor] = []
-        for f_to in range(self.n_freq_grid):
-            in_dim = sum(self.shape[f_from] for f_from in range(self.n_freq_grid) if self.g_connections[f_to][f_from])
-            mats.append(d_flat[f_to].reshape(-1, in_dim, self.shape[f_to]))
+        for f_to in range(n_freq):
+            in_dim = sum(self.__n_g[f] for f in range(n_freq) if self.g_connections[f_to][f])
+            mats.append(d_flat[f_to].reshape(-1, in_dim, self.__n_g[f_to]))
         return mats
 
     @abstractmethod
     def clamp(self, g: List[Tensor]) -> List[Tensor]:
-        raise NotImplementedError("OVCModelBase.clamp must be implemented in derived classes.")
+        raise NotImplementedError("PathInegratorBase.clamp must be implemented in derived classes.")
 
 
 class PathMemoryBase(nn.Module, ABC):
-    def __init__(self, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
+    def __init__(self, n_p: List[int], n_g: List[int], settings: MECSettings):
         # Store hyperparameters
-        self.__n_g = n_g = shape
-        self.g_connections = g_conn = connections(f_init)
-        n_f = len(shape)
+        self.__n_g, n_freq = n_g, len(n_g)
         self.__p2g_sig_val = settings.p2g_sig_val
-
-        # Runtime values (injected by training loop)
         self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
 
         # Generative memory models
-        self.MLP_mu_g_mem = MLP(n_p, shape, hidden_dim=[2 * g for g in shape])
+        self.MLP_mu_g_mem = MLP(n_p, n_g, hidden_dim=[2 * g for g in n_g])
         init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=settings.std_grid_mem)
-        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_f)])
+        self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(n_freq)])
         self.MLP_sigma_g_mem = MLP([2 for _ in n_p], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
-
-    @property
-    def n_grid(self) -> List[int]:
-        return self.__n_g
-
-    @property
-    def n_freq_grid(self) -> int:
-        return len(self.n_grid)
 
     def set_runtime(self, *, p2g_scale_offset: float):
         self.p2g_scale_offset = p2g_scale_offset
@@ -199,58 +163,53 @@ class PathMemoryBase(nn.Module, ABC):
         # Compute mean from memory
         mu_g_mem = self.MLP_mu_g_mem(p_x)
         err = utils.squared_error(mu_g_mem, g)
-
         # Prepare uncertainty input: [vector norm, reconstruction error]
         sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, g in enumerate(mu_g_mem)]
-
         # Clamp for stability
         mu_g_mem = self.clamp(mu_g_mem)
-
         # Infer uncertainty from memory quality
         sigma = self.MLP_sigma_g_mem(sigma_g_input)
-        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self.__p2g_sig_val for f in range(self.n_freq_grid)]
+        sigma_g_mem = [sigma[f] + self.p2g_scale_offset * self.__p2g_sig_val for f, _ in enumerate(self.__n_g)]
 
         return mu_g_mem, sigma_g_mem
 
     @abstractmethod
     def clamp(self, g: List[Tensor]) -> List[Tensor]:
-        raise NotImplementedError("OVCModelBase.clamp must be implemented in derived classes.")
+        raise NotImplementedError("PathMemoryBase.clamp must be implemented in derived classes.")
 
 
 class MECModel(PathInegratorBase, PathMemoryBase, ShinyModelBase):
-    def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
+    def __init__(self, n_a: int, n_p: List[int], n_cells: List[int], f_init: List[float], settings: MECSettings):
         nn.Module.__init__(self)
+        self.__n_a, self.__n_cells = n_a, n_cells
 
-        n_grid, n_ovc = shapes(shape, settings)
-        PathInegratorBase.__init__(self, n_a, shape, f_init, settings)
-        PathMemoryBase.__init__(self, n_p, shape, f_init, settings)
-        ShinyModelBase.__init__(self, n_ovc, settings)
+        # Determine which modules receive shiny correction
+        self._shiny_start, self._n_shiny = resolve_shiny_slice(len(n_cells), settings.n_freq_ovc)
+        shiny_out_sizes = n_cells[self._shiny_start : self._shiny_start + self._n_shiny]
+
+        PathInegratorBase.__init__(self, n_a, n_cells, f_init, settings)
+        PathMemoryBase.__init__(self, n_p, n_cells, settings)
+        ShinyModelBase.__init__(self, shiny_out_sizes, settings)
         self._settings = settings
-
-        # Store for backward compatibility with methods that reference self.n_g
-        self._n_a = n_a
-        self._shape = shape
-        n_g = self.n_grid
 
         # Prior: learned "default phase" of the grid code at reset
         init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=settings.std_grid_init)
-        self.g_init_mean = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(self.n_freq_grid)])
-        self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(self.n_freq_grid)])
+        self.cells_init = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n), dtype=torch.float32)) for n in n_cells])
+        self.uncertainty_init = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n), dtype=torch.float32)) for n in n_cells])
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> MECState:
         return MECState(
-            g=[g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.g_init_mean],
-            uncertainty=[torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)],
-            ovc=None,  # TODO: Initialize OVC state if needed
+            cells=[g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.cells_init],
+            uncertainty=[torch.exp(std).unsqueeze(0).expand(batch_size, -1).to(device) for std in self.uncertainty_init],
         )
 
     @property
     def n_in(self) -> int:
-        return self._n_a
+        return self.__n_a
 
     @property
     def shape(self) -> List[int]:
-        return self._shape
+        return self.__n_cells
 
     @property
     def n_freq(self) -> int:
@@ -262,53 +221,56 @@ class MECModel(PathInegratorBase, PathMemoryBase, ShinyModelBase):
     def generative(self, a: Tensor, locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         # Shiny envs use no_direc=True (no action-driven transitions)
         no_direc = [loc.get("shiny") is not None for loc in locations]
-        g_gen, transition = self.path_integrate(a, state.g, no_direc=no_direc)
-
-        return g_gen, MECState(g=transition.mean, uncertainty=transition.uncertainty)
+        g_gen, transition = self.path_integrate(a, state.cells, no_direc=no_direc)
+        return g_gen, MECState(cells=transition.mean, uncertainty=transition.uncertainty)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         # Step 1: Infer from memory (Grid responsibility)
-        mu_g_mem, sigma_g_mem = self.infer_from_memory(p_x, state.g)
+        mu_g_mem, sigma_g_mem = self.infer_from_memory(p_x, state.cells)
 
         # Step 2: Fuse path integration with memory cues
-        mu_g, sigma_g = [], []
+        mu_mec, sigma_mec = [], []
         for f in range(self.n_freq):
-            mu, sigma = utils.inv_var_weight([state.g[f], mu_g_mem[f]], [state.uncertainty[f], sigma_g_mem[f]])
-            mu_g.append(mu)
-            sigma_g.append(sigma)
+            mu, sigma = utils.inv_var_weight([state.cells[f], mu_g_mem[f]], [state.uncertainty[f], sigma_g_mem[f]])
+            mu_mec.append(mu)
+            sigma_mec.append(sigma)
 
-        # Step 3: Apply shiny correction (MEC responsibility; OVC predicts only)
-        if self.n_freq_ovc > 0:
-            device = mu_g[0].device
+        # Step 3: Apply shiny correction (if enabled and shiny envs present)
+        if self._n_shiny > 0:
+            # Identify which environments have shiny landmarks
             shiny_envs = [loc.get("shiny") is not None for loc in locations]
-            shiny_mask = torch.tensor(shiny_envs, dtype=torch.bool, device=device)
+            if any(shiny_envs):
+                device = mu_mec[0].device
+                shiny_mask = torch.tensor(shiny_envs, dtype=torch.bool, device=device)
 
-            if torch.any(shiny_mask):
-                # Prepare shiny input for OVC modules
-                shiny_tensor = torch.stack([torch.tensor(loc["shiny"], dtype=torch.float, device=device) for loc in locations if loc.get("shiny") is not None])
-                shiny_input = [torch.unsqueeze(shiny_tensor, dim=-1) for _ in range(self.n_freq_ovc)]
+                # Extract shiny values (scalar per env in legacy)
+                shiny_vals = [loc["shiny"] for loc in locations if loc.get("shiny") is not None]
+                shiny_tensor = torch.as_tensor(shiny_vals, dtype=torch.float32, device=device).unsqueeze(-1)  # (N_shiny, 1)
 
-                # Get shiny predictions and fuse into OVC modules
-                mu_g_shiny, sigma_g_shiny = self.estimate_shiny(shiny_input)
-                module_start = self.n_freq - self.n_freq
+                # Prepare input for shiny MLPs (list of tensors, one per shiny module)
+                shiny_input = [shiny_tensor for _ in range(self._n_shiny)]
 
-                for f in range(module_start, self.n_freq):
-                    f_ovc = f - module_start
+                # Predict shiny correction
+                mu_shiny, sigma_shiny = self.estimate_shiny(shiny_input)
+
+                # Fuse shiny correction into affected modules
+                for f in range(self._shiny_start, self._shiny_start + self._n_shiny):
+                    f_shiny = f - self._shiny_start
                     mu_fused, sigma_fused = utils.inv_var_weight(
-                        [mu_g[f][shiny_mask, :], mu_g_shiny[f_ovc]],
-                        [sigma_g[f][shiny_mask, :], sigma_g_shiny[f_ovc]],
+                        [mu_mec[f][shiny_mask], mu_shiny[f_shiny]],
+                        [sigma_mec[f][shiny_mask], sigma_shiny[f_shiny]],
                     )
-                    mask_expanded = shiny_mask.unsqueeze(-1).expand_as(mu_g[f])
-                    mu_g[f] = mu_g[f].masked_scatter(mask_expanded, mu_fused)
-                    sigma_g[f] = sigma_g[f].masked_scatter(mask_expanded, sigma_fused)
+                    # Write back fused values
+                    mu_mec[f][shiny_mask] = mu_fused
+                    sigma_mec[f][shiny_mask] = sigma_fused
 
         # Step 4: Sample or take mean
         if self._settings.do_sample:
-            g_inf = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_g, sigma_g)]
+            mec_inf = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_mec, sigma_mec)]
         else:
-            g_inf = mu_g
+            mec_inf = mu_mec
 
-        return g_inf, MECState(g=g_inf, ovc=state.ovc, uncertainty=sigma_g)
+        return mec_inf, MECState(cells=mec_inf, uncertainty=sigma_mec)
 
     def clamp(self, g: List[Tensor]) -> List[Tensor]:
         """Clamp grid cell activations to [-1, 1] for stability."""
@@ -320,12 +282,27 @@ def connections(f_grid: list[float]) -> list[list[bool]]:
     return [[f_grid[f1] <= f_grid[f2] for f1 in range(n)] for f2 in range(n)]
 
 
-def shapes(n_total: List[int], settings: MECSettings) -> Tuple[List[int], List[int]]:
-    """Split total module shapes into grid cell and OVC module shapes."""
-    n_freq_total = len(n_total)
-    n_freq_ovc = n_freq_total if settings.n_freq_ovc is None else int(settings.n_freq_ovc)
+def resolve_shiny_slice(n_freq_total: int, n_freq_ovc: Optional[int]) -> Tuple[int, int]:
+    """Determine which modules receive shiny correction.
+
+    Args:
+        n_freq_total: Total number of MEC modules
+        n_freq_ovc: User setting (None/0/k)
+
+    Returns:
+        (start_index, count): slice range for shiny-corrected modules
+    """
+    if n_freq_ovc is None:
+        # Apply to all modules (legacy separate_ovc=False)
+        return 0, n_freq_total
+
+    n_freq_ovc = int(n_freq_ovc)
     if n_freq_ovc < 0 or n_freq_ovc > n_freq_total:
-        raise ValueError(f"MECSettings.n_freq_ovc must be in [0, {n_freq_total}] or None; got {settings.n_freq_ovc}")
-    n_grid = n_total[:-n_freq_ovc] if n_freq_ovc > 0 else n_total
-    n_ovc = n_total[-n_freq_ovc:] if n_freq_ovc > 0 else []
-    return n_grid, n_ovc
+        raise ValueError(f"MECSettings.n_freq_ovc must be in [0, {n_freq_total}] or None; got {n_freq_ovc}")
+
+    if n_freq_ovc == 0:
+        # No shiny correction
+        return n_freq_total, 0
+
+    # Apply to last k modules (legacy separate_ovc=True)
+    return n_freq_total - n_freq_ovc, n_freq_ovc

@@ -697,8 +697,8 @@ class TEMModel(nn.Module):
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
             # Reset g to priors for envs with no previous action
-            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.g_init_mean[f].unsqueeze(0), mec_state.g[f]) for f in range(self.hyper["n_f"])]
-            mec_state.g = g_reset
+            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.cells_init[f].unsqueeze(0), mec_state.cells[f]) for f in range(self.hyper["n_f"])]
+            mec_state.cells = g_reset
 
         # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
         if self.hyper["has_static_action"]:

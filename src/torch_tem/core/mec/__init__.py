@@ -161,7 +161,7 @@ class PathInegratorBase(nn.Module, ABC):
         g_next = [g_f + delta_f for g_f, delta_f in zip(g, delta)]
 
         # Clamp activations for stability
-        return self.g_clamp(g_next)
+        return self.clamp(g_next)
 
     def g_uncertainty(self, g: List[Tensor]) -> List[Tensor]:
         """Compute transition uncertainty from current state."""
@@ -196,9 +196,9 @@ class PathInegratorBase(nn.Module, ABC):
             mats.append(d_flat[f_to].reshape(-1, in_dim, self.shape[f_to]))
         return mats
 
-    def g_clamp(self, g: List[Tensor]) -> List[Tensor]:
-        """Clamp grid cell activations to [-1, 1] for stability."""
-        return [torch.clamp(g_f, min=-1, max=1) for g_f in g]
+    @abstractmethod
+    def clamp(self, g: List[Tensor]) -> List[Tensor]:
+        raise NotImplementedError("OVCModelBase.clamp must be implemented in derived classes.")
 
 
 class PathMemoryBase(nn.Module, ABC):
@@ -250,7 +250,7 @@ class PathMemoryBase(nn.Module, ABC):
         sigma_g_input = [torch.cat((torch.sum(g**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, g in enumerate(mu_g_mem)]
 
         # Clamp for stability
-        mu_g_mem = self.g_clamp(mu_g_mem)
+        mu_g_mem = self.clamp(mu_g_mem)
 
         # Infer uncertainty from memory quality
         sigma = self.MLP_sigma_g_mem(sigma_g_input)
@@ -258,9 +258,9 @@ class PathMemoryBase(nn.Module, ABC):
 
         return mu_g_mem, sigma_g_mem
 
-    def g_clamp(self, g: List[Tensor]) -> List[Tensor]:
-        """Clamp grid cell activations to [-1, 1] for stability."""
-        return [torch.clamp(g_f, min=-1, max=1) for g_f in g]
+    @abstractmethod
+    def clamp(self, g: List[Tensor]) -> List[Tensor]:
+        raise NotImplementedError("OVCModelBase.clamp must be implemented in derived classes.")
 
 
 class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
@@ -400,7 +400,7 @@ class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
 
     def clamp(self, g: List[Tensor]) -> List[Tensor]:
         """Clamp grid cell activations to [-1, 1] for stability."""
-        return [torch.clamp(g_f, min=self._settings.clamp_min, max=self._settings.clamp_min) for g_f in g]
+        return [torch.clamp(g_f, min=self._settings.clamp_min, max=self._settings.clamp_max) for g_f in g]
 
 
 def connections(f_grid: list[float]) -> list[list[bool]]:

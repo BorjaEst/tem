@@ -42,7 +42,7 @@ class MECState:
         )
 
 
-class OVCModelBase(nn.Module, ABC):
+class ShinyModelBase(nn.Module, ABC):
     def __init__(self, n_ovc: List[int], settings: MECSettings):
         self.__n_ovc = n_ovc
         self.__n_freq_ovc = len(n_ovc)
@@ -89,9 +89,6 @@ class PathInegratorBase(nn.Module, ABC):
         n_f = len(shape)
         self.__settings = settings  # TODO: remove after refactoring
 
-        # Runtime values (injected by training loop)
-        self.p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
-
         # Transition weights (action-conditioned)
         out_dim = [sum(n_g[fb] for fb in range(n_f) if g_conn[fa][fb]) * n_g[fa] for fa in range(n_f)]
         self.MLP_D_a = MLP([n_a] * n_f, out_dim, activation=[torch.tanh, None], hidden_dim=[settings.hidden_dim_grid] * n_f, bias=[True, False])
@@ -102,31 +99,7 @@ class PathInegratorBase(nn.Module, ABC):
         self.D_no_a = nn.ParameterList([nn.Parameter(f_no_a(f_to)) for f_to in range(n_f)])
         self.MLP_sigma_g_path = MLP(n_g, n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
 
-    @property
-    def n_grid(self) -> List[int]:
-        """Shape of grid cell modules."""
-        return self.__n_g
-
-    @property
-    def n_freq_grid(self) -> int:
-        """Number of grid cell frequency modules."""
-        return len(self.n_grid)
-
-    def set_runtime(self, *, p2g_scale_offset: float):
-        """Update runtime hyperparameters for MEC module."""
-        self.p2g_scale_offset = p2g_scale_offset
-
     def path_integrate(self, a: Tensor, g: List[Tensor], no_direc: list[bool] | None = None) -> Tuple[List[Tensor], Transition]:
-        """Return the transition distribution (mu, sigma) before sampling.
-
-        Args:
-            a: One-hot encoded actions (B, n_a)
-            g: Current grid cell activations (previous g)
-            no_direc: Per-batch boolean mask for non-directional transitions
-
-        Returns:
-            Transition with mean and uncertainty
-        """
         mu = self.g_mean(a, g, no_direc=no_direc)
         sigma = self.g_uncertainty(g)
 
@@ -167,14 +140,12 @@ class PathInegratorBase(nn.Module, ABC):
     # ---------------------------------------------------------------------
 
     def sample_g(self, mu, sigma) -> Transition:
-        """Sample g from (mu, sigma) if enabled (legacy behavior)."""
         if not self.__settings.do_sample:
             return Transition(mean=mu, uncertainty=sigma)
         mu = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu, sigma)]
         return Transition(mean=mu, uncertainty=sigma)
 
     def transition_matrices(self, a: Tensor, no_direc: list[bool]) -> List[Tensor]:
-        """Compute per-frequency transition matrices, applying no-direction rows."""
         d_flat = self.MLP_D_a([a for _ in range(self.n_freq_grid)])
         if no_direc is None:
             no_direc = [False] * a.shape[0]  # batch_size
@@ -215,28 +186,16 @@ class PathMemoryBase(nn.Module, ABC):
 
     @property
     def n_grid(self) -> List[int]:
-        """Shape of grid cell modules."""
         return self.__n_g
 
     @property
     def n_freq_grid(self) -> int:
-        """Number of grid cell frequency modules."""
         return len(self.n_grid)
 
     def set_runtime(self, *, p2g_scale_offset: float):
-        """Update runtime hyperparameters for MEC module."""
         self.p2g_scale_offset = p2g_scale_offset
 
     def infer_from_memory(self, p_x: List[Tensor], g: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
-        """Infer abstract location from memory-cued grounded location.
-
-        Args:
-            p_x: Grounded location (place cells)
-            g: Current grid cell state (for error computation)
-
-        Returns:
-            Tuple of (mu_g_mem, sigma_g_mem)
-        """
         # Compute mean from memory
         mu_g_mem = self.MLP_mu_g_mem(p_x)
         err = utils.squared_error(mu_g_mem, g)
@@ -258,14 +217,14 @@ class PathMemoryBase(nn.Module, ABC):
         raise NotImplementedError("OVCModelBase.clamp must be implemented in derived classes.")
 
 
-class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
+class MECModel(PathInegratorBase, PathMemoryBase, ShinyModelBase):
     def __init__(self, n_a: int, n_p: List[int], shape: List[int], f_init: List[float], settings: MECSettings):
         nn.Module.__init__(self)
 
         n_grid, n_ovc = shapes(shape, settings)
         PathInegratorBase.__init__(self, n_a, shape, f_init, settings)
         PathMemoryBase.__init__(self, n_p, shape, f_init, settings)
-        OVCModelBase.__init__(self, n_ovc, settings)
+        ShinyModelBase.__init__(self, n_ovc, settings)
         self._settings = settings
 
         # Store for backward compatibility with methods that reference self.n_g
@@ -279,7 +238,6 @@ class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
         self.g_init_logstd = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n_g[f]), dtype=torch.float32)) for f in range(self.n_freq_grid)])
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> MECState:
-        """Initialize MEC state with prior grid cell activations."""
         return MECState(
             g=[g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.g_init_mean],
             uncertainty=[torch.exp(self.g_init_logstd[f]).unsqueeze(0).expand(batch_size, -1).to(device) for f in range(self.n_freq_grid)],
@@ -288,38 +246,20 @@ class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
 
     @property
     def n_in(self) -> int:
-        """Dimensionality of action input."""
         return self._n_a
 
     @property
     def shape(self) -> List[int]:
-        """Shape of grid cell modules."""
         return self._shape
 
     @property
     def n_freq(self) -> int:
-        """Number of grid cell frequency modules."""
         return len(self.shape)
 
     def forward(self, *, _) -> Tuple[List[Tensor], MECState]:
         raise NotImplementedError("MEC forward not implemented. Use generative() or inference().")
 
     def generative(self, a: Tensor, locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
-        """Compute next MEC state from action-driven transition.
-
-        Args:
-            a: One-hot encoded actions (B, n_a). With has_static_action=True,
-               action 0 (stand still) is encoded as all-zeros.
-            locations: Per-env location dicts (for shiny detection)
-            state: Current MEC state
-
-        Returns:
-            New MECState with updated g_gen and g_path.
-
-        Note:
-            Caller is responsible for resetting state.g to g_init at episode boundaries.
-            This module always applies transition dynamics from the provided state.
-        """
         # Shiny envs use no_direc=True (no action-driven transitions)
         no_direc = [loc.get("shiny") is not None for loc in locations]
         g_gen, transition = self.path_integrate(a, state.g, no_direc=no_direc)
@@ -327,22 +267,6 @@ class MECModel(PathInegratorBase, PathMemoryBase, OVCModelBase):
         return g_gen, MECState(g=transition.mean, uncertainty=transition.uncertainty)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
-        """Infer abstract location from grounded location and path integration.
-
-        Orchestrates:
-        1. GridModel.infer_from_memory(): memory-cued abstract location
-        2. Precision-weighted fusion of path integration + memory cues
-        3. OVCModel.fuse_shiny(): shiny landmark correction for OVC modules
-        4. Sampling or mean extraction
-
-        Args:
-            p_x: Grounded location (place cells)
-            locations: Per-environment location dicts
-            state: Current MEC state (g_path, uncertainty)
-
-        Returns:
-            Tuple of (g_inf, updated MECState)
-        """
         # Step 1: Infer from memory (Grid responsibility)
         mu_g_mem, sigma_g_mem = self.infer_from_memory(p_x, state.g)
 

@@ -503,11 +503,11 @@ class MECSettings(BaseModel):
     )
     hidden_dim_ovc: int = Field(
         default=20,
-        description="Hidden dimension for shiny object input channels.",
+        description="Hidden dimension for shiny landmark cue processing (OVC correction).",
     )
     n_freq_ovc: Optional[int] = Field(
         default=None,
-        description="Number of OVC frequency modules (if None, matches grid cell frequencies).",
+        description="Number of OVC modules receiving shiny correction. None: all modules, 0: disable OVC, k>0: last k modules.",
     )
     p2g_sig_val: float = Field(
         default=10000.0,

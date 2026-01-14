@@ -40,19 +40,21 @@ class MECState:
         )
 
 
-class ShinyModelBase(nn.Module, ABC):
-    def __init__(self, shiny_out_sizes: List[int], settings: MECSettings):
-        self.__shiny_sizes = shiny_out_sizes
-        n_shiny = len(shiny_out_sizes)
+class OVCCueModelBase(nn.Module, ABC):
+    """OVC modules that process shiny landmark cues for location correction."""
 
-        hidden_dim = [settings.hidden_dim_ovc] * n_shiny
-        self.MLP_mu_g_shiny = MLP([1] * n_shiny, shiny_out_sizes, [torch.relu, None], hidden_dim)
-        self.MLP_sigma_g_shiny = MLP([1] * n_shiny, shiny_out_sizes, [torch.relu, torch.exp], hidden_dim)
+    def __init__(self, ovc_out_sizes: List[int], settings: MECSettings):
+        self.__ovc_sizes = ovc_out_sizes
+        n_ovc = len(ovc_out_sizes)
+
+        hidden_dim = [settings.hidden_dim_ovc] * n_ovc
+        self.MLP_mu_g_shiny = MLP([1] * n_ovc, ovc_out_sizes, [torch.relu, None], hidden_dim)
+        self.MLP_sigma_g_shiny = MLP([1] * n_ovc, ovc_out_sizes, [torch.relu, torch.exp], hidden_dim)
 
     @property
-    def n_shiny_modules(self) -> int:
-        """Number of shiny-corrected modules."""
-        return len(self.__shiny_sizes)
+    def n_ovc_modules(self) -> int:
+        """Number of OVC modules (receive shiny correction)."""
+        return len(self.__ovc_sizes)
 
     def shiny_mean(self, shiny: List[Tensor]) -> List[Tensor]:
         """Compute mean of abstract location from shiny landmarks (legacy behavior)."""
@@ -64,14 +66,21 @@ class ShinyModelBase(nn.Module, ABC):
         return self.MLP_sigma_g_shiny(shiny)
 
     def estimate_shiny(self, shiny_input: List[Tensor]) -> tuple[list[Tensor], list[Tensor]]:
-        """Estimate shiny correction (returns empty lists if no shiny modules)."""
+        """Estimate OVC correction from shiny landmark cues.
+
+        Args:
+            shiny_input: List of shiny cue tensors (one per OVC module)
+
+        Returns:
+            (mu_g_shiny, sigma_g_shiny): Mean and uncertainty for OVC modules
+        """
         mu_g_shiny = self.shiny_mean(shiny_input)
         sigma_g_shiny = self.shiny_uncertainty(shiny_input)
         return mu_g_shiny, sigma_g_shiny
 
     @abstractmethod
     def clamp(self, g: List[Tensor]) -> List[Tensor]:
-        raise NotImplementedError("ShinyModelBase.clamp must be implemented in derived classes.")
+        raise NotImplementedError("OVCCueModelBase.clamp must be implemented in derived classes.")
 
 
 class PathInegratorBase(nn.Module, ABC):
@@ -178,18 +187,19 @@ class PathMemoryBase(nn.Module, ABC):
         raise NotImplementedError("PathMemoryBase.clamp must be implemented in derived classes.")
 
 
-class MECModel(PathInegratorBase, PathMemoryBase, ShinyModelBase):
+class MECModel(PathInegratorBase, PathMemoryBase, OVCCueModelBase):
     def __init__(self, n_a: int, n_p: List[int], n_cells: List[int], f_init: List[float], settings: MECSettings):
         nn.Module.__init__(self)
         self.__n_a, self.__n_cells = n_a, n_cells
 
-        # Determine which modules receive shiny correction
-        self._shiny_start, self._n_shiny = resolve_shiny_slice(len(n_cells), settings.n_freq_ovc)
-        shiny_out_sizes = n_cells[self._shiny_start : self._shiny_start + self._n_shiny]
+        # Determine which modules are OVC (receive shiny landmark correction)
+        self._ovc_start, self._n_ovc = resolve_ovc_slice(len(n_cells), settings.n_freq_ovc)
+        ovc_out_sizes = n_cells[self._ovc_start : self._ovc_start + self._n_ovc]
 
+        # Initialize all parent classes using cooperative multiple inheritance
         PathInegratorBase.__init__(self, n_a, n_cells, f_init, settings)
         PathMemoryBase.__init__(self, n_p, n_cells, settings)
-        ShinyModelBase.__init__(self, shiny_out_sizes, settings)
+        OVCCueModelBase.__init__(self, ovc_out_sizes, settings)
         self._settings = settings
 
         # Prior: learned "default phase" of the grid code at reset
@@ -235,8 +245,8 @@ class MECModel(PathInegratorBase, PathMemoryBase, ShinyModelBase):
             mu_mec.append(mu)
             sigma_mec.append(sigma)
 
-        # Step 3: Apply shiny correction (if enabled and shiny envs present)
-        if self._n_shiny > 0:
+        # Step 3: Apply OVC correction from shiny landmarks (if enabled and shiny envs present)
+        if self._n_ovc > 0:
             # Identify which environments have shiny landmarks
             shiny_envs = [loc.get("shiny") is not None for loc in locations]
             if any(shiny_envs):
@@ -247,20 +257,20 @@ class MECModel(PathInegratorBase, PathMemoryBase, ShinyModelBase):
                 shiny_vals = [loc["shiny"] for loc in locations if loc.get("shiny") is not None]
                 shiny_tensor = torch.as_tensor(shiny_vals, dtype=torch.float32, device=device).unsqueeze(-1)  # (N_shiny, 1)
 
-                # Prepare input for shiny MLPs (list of tensors, one per shiny module)
-                shiny_input = [shiny_tensor for _ in range(self._n_shiny)]
+                # Prepare input for OVC cue processing (list of tensors, one per OVC module)
+                shiny_input = [shiny_tensor for _ in range(self._n_ovc)]
 
-                # Predict shiny correction
+                # Predict OVC correction from shiny cues
                 mu_shiny, sigma_shiny = self.estimate_shiny(shiny_input)
 
-                # Fuse shiny correction into affected modules
-                for f in range(self._shiny_start, self._shiny_start + self._n_shiny):
-                    f_shiny = f - self._shiny_start
+                # Fuse shiny correction into OVC modules only
+                for f in range(self._ovc_start, self._ovc_start + self._n_ovc):
+                    f_ovc = f - self._ovc_start
                     mu_fused, sigma_fused = utils.inv_var_weight(
-                        [mu_mec[f][shiny_mask], mu_shiny[f_shiny]],
-                        [sigma_mec[f][shiny_mask], sigma_shiny[f_shiny]],
+                        [mu_mec[f][shiny_mask], mu_shiny[f_ovc]],
+                        [sigma_mec[f][shiny_mask], sigma_shiny[f_ovc]],
                     )
-                    # Write back fused values
+                    # Write back fused values (only for shiny environments)
                     mu_mec[f][shiny_mask] = mu_fused
                     sigma_mec[f][shiny_mask] = sigma_fused
 
@@ -282,15 +292,26 @@ def connections(f_grid: list[float]) -> list[list[bool]]:
     return [[f_grid[f1] <= f_grid[f2] for f1 in range(n)] for f2 in range(n)]
 
 
-def resolve_shiny_slice(n_freq_total: int, n_freq_ovc: Optional[int]) -> Tuple[int, int]:
-    """Determine which modules receive shiny correction.
+def resolve_ovc_slice(n_freq_total: int, n_freq_ovc: Optional[int]) -> Tuple[int, int]:
+    """Determine which MEC modules are OVC (receive shiny landmark correction).
 
     Args:
         n_freq_total: Total number of MEC modules
-        n_freq_ovc: User setting (None/0/k)
+        n_freq_ovc: User setting for OVC module count:
+            - None: all modules are OVC (legacy separate_ovc=False)
+            - 0: no OVC modules (disable shiny correction)
+            - k>0: last k modules are OVC (legacy separate_ovc=True, n_f_ovc=k)
 
     Returns:
-        (start_index, count): slice range for shiny-corrected modules
+        (ovc_start, ovc_count): slice range [ovc_start:ovc_start+ovc_count] for OVC modules
+
+    Examples:
+        >>> resolve_ovc_slice(5, None)  # All modules are OVC
+        (0, 5)
+        >>> resolve_ovc_slice(5, 0)     # No OVC modules
+        (5, 0)
+        >>> resolve_ovc_slice(5, 2)     # Last 2 modules are OVC
+        (3, 2)
     """
     if n_freq_ovc is None:
         # Apply to all modules (legacy separate_ovc=False)
@@ -301,7 +322,7 @@ def resolve_shiny_slice(n_freq_total: int, n_freq_ovc: Optional[int]) -> Tuple[i
         raise ValueError(f"MECSettings.n_freq_ovc must be in [0, {n_freq_total}] or None; got {n_freq_ovc}")
 
     if n_freq_ovc == 0:
-        # No shiny correction
+        # No OVC correction
         return n_freq_total, 0
 
     # Apply to last k modules (legacy separate_ovc=True)

@@ -517,6 +517,10 @@ class OVCSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    do_sample: bool = Field(
+        default=False,
+        description="Whether to sample from OVC correction distribution or use mean only.",
+    )
     n_freq: Optional[int] = Field(
         default=None,
         frozen=True,
@@ -534,10 +538,6 @@ class MECSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    do_sample: bool = Field(
-        default=False,
-        description="Whether to sample, or assume no noise and simply take mean of all distributions",
-    )
     sigma_init: float = Field(
         default=0.5,
         frozen=True,

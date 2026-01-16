@@ -164,18 +164,13 @@ class MECModel(nn.Module):
             sigma_mec.append(sigma)
 
         # Step 3: Apply OVC correction from shiny landmarks (if enabled)
-        mu_mec, sigma_mec = self.ovc(locations, mu_mec, sigma_mec)
-
-        # Step 4: Sample or take mean (controlled by settings)
-        if self._settings.do_sample:
-            g_inf = [mu + sigma * torch.randn_like(mu) for mu, sigma in zip(mu_mec, sigma_mec)]
-        else:
-            g_inf = mu_mec
+        if self.ovc.n_ovc > 0:
+            mu_mec, sigma_mec = self.ovc(locations, mu_mec, sigma_mec)
 
         # Clamp for stability
-        g_inf = self._clamp(g_inf)
+        g_inf = mu_mec = self._clamp(mu_mec)
 
-        return g_inf, MECState(cells=g_inf, uncertainty=sigma_mec)
+        return g_inf, MECState(cells=mu_mec, uncertainty=sigma_mec)
 
     def _clamp(self, g: List[Tensor]) -> List[Tensor]:
         """Clamp grid cell activations for stability."""

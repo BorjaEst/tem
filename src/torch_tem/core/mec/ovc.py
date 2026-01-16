@@ -67,7 +67,7 @@ class OVCCorrection(nn.Module):
             return transition
 
         shiny_input = self._extract_shiny_cues(locations, shiny_mask, transition.mean[0].device)
-        freqs = range(self._ovc_start, self._ovc_start + self._n_ovc)
+        freqs = range(self.start, self.start + self.n_freq)
 
         correction = self._predict_correction(shiny_input)
         return utils.inv_var_trans(transition, correction, shiny_mask, freqs)
@@ -100,7 +100,7 @@ class OVCCorrection(nn.Module):
         """
         shiny_vals = [loc["shiny"] for loc in locations if loc.get("shiny") is not None]
         shiny_tensor = torch.as_tensor(shiny_vals, dtype=torch.float32, device=device).unsqueeze(-1)
-        return [shiny_tensor] * self._n_ovc
+        return [shiny_tensor] * self.n_freq
 
     def _predict_correction(self, shiny_input: List[Tensor]) -> Transition:
         """Predict OVC correction mean and uncertainty from shiny landmark cues.

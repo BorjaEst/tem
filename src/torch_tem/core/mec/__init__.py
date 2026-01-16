@@ -188,7 +188,7 @@ class MECModel(nn.Module):
 
         # Apply central sampling policy (legacy parity: g_inf is sampled when do_sample=True)
         cells_next = self._sample(transition.mean, transition.uncertainty)
-        g_inf = cells_next = self._clamp(cells_next)
+        g_inf = self._clamp(cells_next)
 
         return g_inf, state.new(cells=cells_next, uncertainty=transition.uncertainty)
 

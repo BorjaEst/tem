@@ -272,7 +272,7 @@ class Parameters(BaseModel):
 
     @property
     def p2g_sig_val(self) -> float:
-        return self.mec_settings.p2g_sig_val
+        return self.mec_settings.p2g.curriculum_sigma
 
     @property
     def common_memory(self) -> bool:

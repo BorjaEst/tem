@@ -480,6 +480,55 @@ class MECProjectionSettings(ProjectionSettings):
     )
 
 
+class PathSettings(BaseModel):
+    """Settings for path integration modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    do_sample: bool = Field(
+        default=False,
+        description="Whether to sample, or assume no noise and simply take mean of all distributions",
+    )
+    hidden_dim: int = Field(
+        default=20,
+        frozen=True,
+        description="Hidden dimension for transition MLP.",
+    )
+
+
+class P2GMemSettings(BaseModel):
+    """Settings for MEC memory inference modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    curriculum_sigma: float = Field(
+        default=10000.0,
+        description="Additional value to offset standard deviation of inferred grounded location",
+    )
+    sigma_init: float = Field(
+        default=0.1,
+        frozen=True,
+        description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location",
+    )
+
+
+class OVCSettings(BaseModel):
+    """Settings for OVC modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    n_freq: Optional[int] = Field(
+        default=None,
+        frozen=True,
+        description="Number of OVC modules receiving shiny correction. None: all modules, 0: disable OVC, k>0: last k modules.",
+    )
+    hidden_dim: int = Field(
+        default=20,
+        frozen=True,
+        description="Hidden dimension for shiny landmark cue processing (OVC correction).",
+    )
+
+
 class MECSettings(BaseModel):
     """Settings for MEC modules."""
 
@@ -489,29 +538,10 @@ class MECSettings(BaseModel):
         default=False,
         description="Whether to sample, or assume no noise and simply take mean of all distributions",
     )
-    std_grid_mem: float = Field(
-        default=0.1,
-        description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location",
-    )
-    std_grid_init: float = Field(
-        0.5,
+    sigma_init: float = Field(
+        default=0.5,
+        frozen=True,
         description="Standard deviation for initializing grid cell activations.",
-    )
-    hidden_dim_grid: int = Field(
-        20,
-        description="Hidden dimension for transition MLP.",
-    )
-    hidden_dim_ovc: int = Field(
-        default=20,
-        description="Hidden dimension for shiny landmark cue processing (OVC correction).",
-    )
-    n_freq_ovc: Optional[int] = Field(
-        default=None,
-        description="Number of OVC modules receiving shiny correction. None: all modules, 0: disable OVC, k>0: last k modules.",
-    )
-    p2g_sig_val: float = Field(
-        default=10000.0,
-        description="Additional value to offset standard deviation of inferred grounded location",
     )
     clamp_min: float = Field(
         default=-1.0,
@@ -520,6 +550,18 @@ class MECSettings(BaseModel):
     clamp_max: float = Field(
         default=1.0,
         description="Maximum activation clamp for OVC cells.",
+    )
+    path: PathSettings = Field(
+        default_factory=PathSettings,
+        description="Path integration module settings.",
+    )
+    p2g: P2GMemSettings = Field(
+        default_factory=P2GMemSettings,
+        description="Place-to-grid memory inference module settings.",
+    )
+    ovc: OVCSettings = Field(
+        default_factory=OVCSettings,
+        description="OVC module settings.",
     )
 
 

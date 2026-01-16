@@ -57,10 +57,9 @@ class OVCCorrection(nn.Module):
             return transition
 
         shiny_input = self._extract_shiny_cues(locations, shiny_mask, transition.mean[0].device)
-        correction = self._predict_correction(shiny_input)
-
-        # Always return fused distribution; parent decides sampling
         freqs = range(self._ovc_start, self._ovc_start + self._n_ovc)
+
+        correction = self._predict_correction(shiny_input)
         return utils.inv_var_trans(transition, correction, shiny_mask, freqs)
 
     def _identify_shiny_envs(self, locations: list[dict], device: torch.device) -> Tensor | None:

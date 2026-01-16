@@ -141,7 +141,7 @@ class MECModel(nn.Module):
 
         # Apply clamping for stability
         g_gen = self._clamp(g_gen)  # Clamp after sampling too
-        cells_next = self._clamp(cells_next)  # Clamp after sampling too
+        cells_next = self._clamp(cells_next)
 
         return g_gen, MECState(cells=cells_next, uncertainty=transition.uncertainty)
 
@@ -157,24 +157,15 @@ class MECModel(nn.Module):
             g_inf: Inferred grid code (sampled if do_sample=True, legacy parity)
             new_state: Updated MEC state
         """
-        # Step 1: Infer from memory (p_x → g correction)
-        g_inf, transition = self.memory(p_x, state.cells)
+        # Step 1: Correct path integration with memory-based inference
+        transition = self.memory(p_x, state.transition)
 
-        # Step 2: Fuse path integration with memory cues (precision weighting)
-        transition = utils.inv_var_trans(state.transition, transition)
-
-        # Step 3: Apply OVC correction from shiny landmarks (if enabled)
-        if self.ovc.n_ovc > 0:
-            transition = self.ovc(locations, transition)
-
-        # Clamp mean for stability
-        mu_mec = self._clamp(transition.mean)
-        transition = Transition(mean=mu_mec, uncertainty=transition.uncertainty)
+        # Step 2: Apply OVC correction from shiny landmarks (if enabled)
+        transition = self.ovc(locations, transition) if self.ovc.n_ovc > 0 else transition
 
         # Apply central sampling policy (legacy parity: g_inf is sampled when do_sample=True)
-        cells_next = self._sample(mu_mec, transition.uncertainty)
-        cells_next = self._clamp(cells_next)  # Clamp after sampling too
-        g_inf = cells_next
+        cells_next = self._sample(transition.mean, transition.uncertainty)
+        g_inf = cells_next = self._clamp(cells_next)
 
         return g_inf, MECState(cells=cells_next, uncertainty=transition.uncertainty)
 

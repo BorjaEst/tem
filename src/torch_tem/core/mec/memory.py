@@ -45,25 +45,22 @@ class P2GMemoryModel(nn.Module):
         """Place-to-grid memory inference settings."""
         return self._settings
 
-    def forward(self, p_x: List[Tensor], g_ref: List[Tensor]) -> Tuple[List[Tensor], Transition]:
+    def forward(self, p_x: List[Tensor], transition: Transition) -> Tuple[List[Tensor], Transition]:
         """Infer grid code from place cells with uncertainty estimation.
 
         Args:
             p_x: Retrieved place cell activations per frequency
-            g_ref: Reference grid code for computing reconstruction error
 
         Returns:
-            g_inf: Inferred grid cell means per frequency
             transition: Inferred grid cell distribution (mean, uncertainty)
         """
+        g_ref, sigma_ref = transition.mean, transition.uncertainty  # Unpack for clarity
+
         mu = self._inference_mean(p_x)
         sigma = self._inference_uncertainty(g_ref, err=utils.squared_error(mu, g_ref))
 
-        # Always return full distribution; sampling decided by parent MEC module
-        transition = Transition(mean=mu, uncertainty=sigma)
-        g_inf = mu
-
-        return g_inf, transition
+        correction = Transition(mean=mu, uncertainty=sigma)
+        return utils.inv_var_trans(transition, correction)
 
     def _inference_mean(self, p_x: List[Tensor]) -> List[Tensor]:
         """Infer grid cell means from place cells."""

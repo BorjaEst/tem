@@ -1,4 +1,8 @@
-"""MEC OVC (Object Vector Cell) correction from shiny landmark cues."""
+"""MEC OVC correction.
+
+This module uses shiny landmark cues to compute corrections for a subset of
+frequency modules (OVC modules) and fuses them with a reference transition.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +18,10 @@ from torch_tem.types import Transition
 
 
 class OVCCorrection(nn.Module):
-    """OVC landmark correction: fuse shiny object cues into selected frequency modules.
+    """Fuse shiny landmark cues into selected frequency modules.
 
-    Processes scalar shiny cues to predict grid cell corrections, then fuses them
-    into only the designated OVC modules using precision weighting.
+    The correction is applied only to the configured OVC frequency slice and
+    combined using inverse-variance weighting.
     """
 
     def __init__(self, mec_shape: List[int], settings: OVCSettings):
@@ -33,34 +37,35 @@ class OVCCorrection(nn.Module):
 
     @property
     def settings(self) -> OVCSettings:
-        """OVC correction settings."""
+        """Return the OVC settings."""
         return self._settings
 
     @property
     def shape(self) -> List[int]:
-        """Shape of OVC modules."""
+        """Return OVC module sizes per frequency."""
         return self._ovc_shape
 
     @property
     def start(self) -> int:
-        """Starting frequency index of OVC modules."""
+        """Return the starting frequency index of OVC modules."""
         return self._ovc_start
 
     @property
     def n_freq(self) -> int:
-        """Number of OVC modules."""
+        """Return the number of OVC frequency modules."""
         return self._ovc_count
 
     def forward(self, locations: list[dict], transition: Transition) -> Transition:
-        """Apply OVC correction to shiny environments.
+        """Apply OVC correction to environments with shiny cues.
 
         Args:
-            locations: Per-env metadata (shiny key indicates landmark presence)
-            mu: Grid cell means per frequency
-            sigma: Grid cell uncertainties per frequency
+            locations: Per-environment metadata. A non-`None` `"shiny"` value
+                indicates a landmark cue is present.
+            transition: Reference transition to correct.
 
         Returns:
-            transition: Corrected grid cell distribution (mean, uncertainty)
+            A corrected `Transition`. If no shiny cues are present, returns the
+            input transition unchanged.
         """
         shiny_mask = self._identify_shiny_envs(locations, transition.mean[0].device)
         if shiny_mask is None:  # No shiny envs present
@@ -73,14 +78,15 @@ class OVCCorrection(nn.Module):
         return utils.inv_var_trans(transition, correction, shiny_mask, freqs)
 
     def _identify_shiny_envs(self, locations: list[dict], device: torch.device) -> Tensor | None:
-        """Identify which environments have shiny landmarks.
+        """Return a mask selecting environments with shiny cues.
 
         Args:
-            locations: Per-env metadata (shiny key indicates landmark presence)
-            device: Device for tensor allocation
+            locations: Per-environment metadata.
+            device: Device for the returned tensor.
 
         Returns:
-            Boolean mask (batch,) for shiny envs, or None if no shiny envs present
+            A boolean mask of shape `(batch,)`, or `None` if no shiny cues are
+            present.
         """
         shiny_envs = [loc.get("shiny") is not None for loc in locations]
         if not any(shiny_envs):
@@ -88,29 +94,29 @@ class OVCCorrection(nn.Module):
         return torch.tensor(shiny_envs, dtype=torch.bool, device=device)
 
     def _extract_shiny_cues(self, locations: list[dict], shiny_mask: Tensor, device: torch.device) -> List[Tensor]:
-        """Extract shiny cue values as tensor inputs for OVC modules.
+        """Extract shiny cue values as inputs for the OVC MLPs.
 
         Args:
-            locations: Per-env metadata
-            shiny_mask: Boolean mask indicating shiny environments
-            device: Device for tensor allocation
+            locations: Per-environment metadata.
+            shiny_mask: Boolean mask indicating which batch items have cues.
+            device: Device for returned tensors.
 
         Returns:
-            List of shiny cue tensors (one per OVC module)
+            A list of cue tensors (one per OVC module). Each tensor has shape
+            `(n_shiny, 1)`.
         """
         shiny_vals = [loc["shiny"] for loc in locations if loc.get("shiny") is not None]
         shiny_tensor = torch.as_tensor(shiny_vals, dtype=torch.float32, device=device).unsqueeze(-1)
         return [shiny_tensor] * self.n_freq
 
     def _predict_correction(self, shiny_input: List[Tensor]) -> Transition:
-        """Predict OVC correction mean and uncertainty from shiny landmark cues.
+        """Predict mean and uncertainty for the OVC correction.
 
         Args:
-            shiny_input: List of shiny cue tensors (one per OVC module)
+            shiny_input: List of cue tensors (one per OVC module).
 
         Returns:
-            mu_g_shiny: Mean predictions for OVC modules
-            sigma_g_shiny: Uncertainty predictions for OVC modules
+            A `Transition` containing OVC correction mean and uncertainty.
         """
         # Predict mean with legacy nonlinearity (abs → leaky_relu)
         mu_g = [torch.abs(mu) for mu in self.MLP_mu_g_shiny(shiny_input)]

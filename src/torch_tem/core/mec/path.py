@@ -1,4 +1,8 @@
-"""MEC path integration: action-driven grid cell transitions."""
+"""MEC path integration.
+
+This module implements action-conditioned transitions for grid-cell activations
+and estimates transition uncertainty.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +18,11 @@ from torch_tem.types import Transition
 
 
 class PathIntegrator(nn.Module):
-    """Path integration module: action-conditioned transitions with optional no-direction override.
+    """Action-conditioned grid-code transition model.
 
-    Implements grid cell path integration via learned action-driven transition matrices.
-    Supports "shiny env" semantics where transitions are disabled (D_no_a used instead).
+    The model predicts per-frequency transition matrices conditioned on the
+    agent action. Optionally, a subset of environments can use a non-directional
+    transition (`D_no_a`) via `no_direc_mask`.
     """
 
     def __init__(self, n_a: int, mec_shape: List[int], f_init: List[float], settings: PathSettings):
@@ -40,31 +45,52 @@ class PathIntegrator(nn.Module):
 
     @property
     def settings(self) -> PathSettings:
-        """Path integration settings."""
+        """Return the path integration settings."""
         return self._settings
 
     @property
-    def n_actions(self) -> List[int]:
-        """Input dimensions (connected grid cell counts) per frequency module."""
+    def n_actions(self) -> int:
+        """Return the number of actions."""
         return self._n_a
 
     @property
     def shape(self) -> List[int]:
-        """Flattened transition sizes per frequency module."""
+        """Return flattened transition sizes per frequency module."""
         return [in_dim * out_dim for in_dim, out_dim in self._mat_shape]
 
     @property
     def n_freq(self) -> int:
-        """Number of grid cell frequency modules."""
+        """Return the number of frequency modules."""
         return self._n_freq
 
     def forward(self, a: Tensor, g_prev: List[Tensor], no_direc_mask: Tensor | None = None) -> Transition:
+        """Compute the transition distribution for a single step.
+
+        Args:
+            a: One-hot action tensor of shape `(batch, n_a)`.
+            g_prev: Previous grid-code activations per frequency.
+            no_direc_mask: Optional boolean mask of shape `(batch,)` indicating
+                environments that should use the non-directional transition.
+
+        Returns:
+            A `Transition` with mean and uncertainty per frequency.
+        """
         mu = self.mean(a, g_prev, no_direc_mask)
         sigma = self.MLP_sigma_g_path(g_prev)
         return Transition(mean=mu, uncertainty=sigma)
 
     def mean(self, a: Tensor, g: List[Tensor], no_direc_mask: Tensor | None) -> List[Tensor]:
-        """Compute mean of transitioned grid cells."""
+        """Compute the mean transition update.
+
+        Args:
+            a: One-hot action tensor of shape `(batch, n_a)`.
+            g: Current grid-code activations per frequency.
+            no_direc_mask: Optional boolean mask selecting environments that
+                should use the non-directional transition.
+
+        Returns:
+            Mean grid-code activations after applying the transition.
+        """
         mats = self._transition_matrices(a, no_direc_mask)
 
         # Build input by concatenating connected frequencies
@@ -75,7 +101,16 @@ class PathIntegrator(nn.Module):
         return [g_f + delta_f for g_f, delta_f in zip(g, delta)]
 
     def _transition_matrices(self, a: Tensor, no_direc_mask: Tensor | None) -> List[Tensor]:
-        """Build per-frequency transition matrices, optionally overriding with D_no_a."""
+        """Build per-frequency transition matrices.
+
+        Args:
+            a: One-hot action tensor of shape `(batch, n_a)`.
+            no_direc_mask: Optional boolean mask selecting environments that
+                should use `D_no_a`.
+
+        Returns:
+            A list of transition matrices, one per frequency module.
+        """
         d_flat = self.MLP_D_a([a] * self.n_freq)
         mats = [d[f].reshape(-1, *self._mat_shape[f]) for f, d in enumerate(d_flat)]
 

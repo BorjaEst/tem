@@ -1,4 +1,9 @@
-"""MEC memory inference: p→g correction from hippocampal place cells."""
+"""MEC memory inference (p→g).
+
+This module predicts grid-cell activations from hippocampal place-cell patterns
+and fuses that prediction with a reference transition using inverse-variance
+weighting.
+"""
 
 from __future__ import annotations
 
@@ -15,10 +20,11 @@ from torch_tem.types import Transition
 
 
 class P2GMemoryModel(nn.Module):
-    """Memory-based inference: infer grid code from retrieved place cells.
+    """Infer grid-cell code from retrieved place-cell activity.
 
-    Predicts grid cell activations from hippocampal place cell patterns,
-    with uncertainty modulated by memory quality (reconstruction error + norm).
+    The model predicts a grid-code mean from `p_x` and estimates uncertainty
+    using memory-quality features. The result is fused with a reference
+    `Transition` (typically from path integration).
     """
 
     def __init__(self, n_p: List[int], mec_shape: List[int], settings: P2GMemSettings):
@@ -39,37 +45,42 @@ class P2GMemoryModel(nn.Module):
         self.MLP_sigma_g_mem = MLP([2 for _ in n_p], mec_shape, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in mec_shape])
 
     def scale_curriculum_sigma(self, scale: float):
-        """Set runtime variance offset for curriculum training."""
+        """Update the curriculum variance offset.
+
+        Args:
+            scale: Multiplier applied to `settings.curriculum_sigma`.
+        """
         self._uncertainty_constant = scale * self.settings.curriculum_sigma
 
     @property
     def settings(self) -> P2GMemSettings:
-        """Place-to-grid memory inference settings."""
+        """Return the P2G memory settings."""
         return self._settings
 
     @property
     def in_dims(self) -> List[int]:
-        """Input dimensions (place cell counts) per frequency module."""
+        """Return input dimensions (place-cell counts) per frequency."""
         return self._n_p
 
     @property
     def shape(self) -> List[int]:
-        """Shape of grid cell frequency modules."""
+        """Return grid-cell module sizes per frequency."""
         return self._mec_shape
 
     @property
     def n_freq(self) -> int:
-        """Number of grid cell frequency modules."""
+        """Return the number of frequency modules."""
         return self._n_freq
 
     def forward(self, p_x: List[Tensor], transition: Transition) -> Transition:
-        """Infer grid code from place cells with uncertainty estimation.
+        """Infer a corrected grid-code transition from place cells.
 
         Args:
-            p_x: Retrieved place cell activations per frequency
+            p_x: Retrieved place-cell activations per frequency.
+            transition: Reference transition to correct (e.g., path integration).
 
         Returns:
-            transition: Inferred grid cell distribution (mean, uncertainty)
+            A fused `Transition` after memory-based correction.
         """
         g_ref, sigma_ref = transition.mean, transition.uncertainty  # Unpack for clarity
 
@@ -80,11 +91,26 @@ class P2GMemoryModel(nn.Module):
         return utils.inv_var_trans(transition, correction)
 
     def _inference_mean(self, p_x: List[Tensor]) -> List[Tensor]:
-        """Infer grid cell means from place cells."""
+        """Predict grid-code means from place cells.
+
+        Args:
+            p_x: Place-cell activations per frequency.
+
+        Returns:
+            Predicted grid-code means per frequency.
+        """
         return self.MLP_mu_g_mem(p_x)
 
     def _inference_uncertainty(self, g: List[Tensor], err: List[Tensor]) -> List[Tensor]:
-        """Infer grid cell uncertainties from place cells and reconstruction error."""
+        """Estimate uncertainty from grid-code magnitude and reconstruction error.
+
+        Args:
+            g: Reference grid-code activations per frequency.
+            err: Per-frequency reconstruction error features.
+
+        Returns:
+            Estimated uncertainty per frequency.
+        """
         sigma_g_input = [torch.cat((torch.sum(mu_f**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, mu_f in enumerate(g)]
         sigma = self.MLP_sigma_g_mem(sigma_g_input)
         return [sigma[f] + self._uncertainty_constant for f in range(self._n_freq)]

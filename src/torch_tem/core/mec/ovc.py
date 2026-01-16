@@ -7,11 +7,10 @@ from typing import List, Tuple
 import torch
 from torch import Tensor, nn
 
-from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import OVCSettings
 
-from .utils import resolve_ovc_slice
+from .utils import fuse_inv_var, resolve_ovc_slice
 
 
 class OVCCorrection(nn.Module):
@@ -60,7 +59,14 @@ class OVCCorrection(nn.Module):
 
         shiny_input = self._extract_shiny_cues(locations, shiny_mask, mu[0].device)
         mu_shiny, sigma_shiny = self._predict_correction(shiny_input)
-        mu_fused, sigma_fused = self._fuse_correction(mu, sigma, mu_shiny, sigma_shiny, shiny_mask)
+        mu_fused, sigma_fused = fuse_inv_var(
+            mu,
+            sigma,
+            mu_shiny,
+            sigma_shiny,
+            mask=shiny_mask,
+            freqs=range(self._ovc_start, self._ovc_start + self._n_ovc),
+        )
 
         if self.settings.do_sample:  # Sample if enabled (legacy behavior)
             mu_corrected = [mu_f + sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu_fused, sigma_fused)]
@@ -117,32 +123,3 @@ class OVCCorrection(nn.Module):
         sigma_g_shiny = self.MLP_sigma_g_shiny(shiny_input)
 
         return mu_g_shiny, sigma_g_shiny
-
-    def _fuse_correction(self, mu: List[Tensor], sigma: List[Tensor], mu_shiny: List[Tensor], sigma_shiny: List[Tensor], shiny_mask: Tensor) -> Tuple[List[Tensor], List[Tensor]]:
-        """Fuse OVC correction into designated frequency modules using precision weighting.
-
-        Args:
-            mu: Grid cell means per frequency
-            sigma: Grid cell uncertainties per frequency
-            mu_shiny: OVC correction means
-            sigma_shiny: OVC correction uncertainties
-            shiny_mask: Boolean mask indicating shiny environments
-
-        Returns:
-            mu_fused: Fused means for all frequencies
-            sigma_fused: Fused uncertainties for all frequencies
-        """
-        mu_out, sigma_out = list(mu), list(sigma)
-        for f in range(self._ovc_start, self._ovc_start + self._n_ovc):
-            f_ovc = f - self._ovc_start
-            mu_fused, sigma_fused = utils.inv_var_weight(
-                [mu[f][shiny_mask], mu_shiny[f_ovc]],
-                [sigma[f][shiny_mask], sigma_shiny[f_ovc]],
-            )
-            # Write back fused values (only for shiny environments)
-            mu_out[f] = mu[f].clone()
-            sigma_out[f] = sigma[f].clone()
-            mu_out[f][shiny_mask] = mu_fused
-            sigma_out[f][shiny_mask] = sigma_fused
-
-        return mu_out, sigma_out

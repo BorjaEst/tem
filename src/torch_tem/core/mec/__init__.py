@@ -29,17 +29,9 @@ from torch_tem.settings import MECSettings
 from .memory import P2GMemoryModel
 from .ovc import OVCCorrection
 from .path import PathIntegrator
-from .utils import connections, resolve_ovc_slice
+from .utils import fuse_inv_var
 
-__all__ = [
-    "MECModel",
-    "MECState",
-    "MECPathIntegrator",
-    "MECMemoryInference",
-    "MECOVCCorrection",
-    "connections",
-    "resolve_ovc_slice",
-]
+__all__ = ["MECModel", "MECState", "MECPathIntegrator", "MECMemoryInference", "MECOVCCorrection"]
 
 
 @dataclass
@@ -157,11 +149,7 @@ class MECModel(nn.Module):
         mu_g_mem, sigma_g_mem = self.memory(p_x, state.cells)
 
         # Step 2: Fuse path integration with memory cues (precision weighting)
-        mu_mec, sigma_mec = [], []
-        for f in range(self.n_freq):
-            mu, sigma = tem_utils.inv_var_weight([state.cells[f], mu_g_mem[f]], [state.uncertainty[f], sigma_g_mem[f]])
-            mu_mec.append(mu)
-            sigma_mec.append(sigma)
+        mu_mec, sigma_mec = fuse_inv_var(state.cells, state.uncertainty, mu_g_mem, sigma_g_mem)
 
         # Step 3: Apply OVC correction from shiny landmarks (if enabled)
         if self.ovc.n_ovc > 0:

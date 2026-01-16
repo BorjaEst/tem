@@ -505,6 +505,10 @@ class P2GMemSettings(BaseModel):
         default=10000.0,
         description="Additional value to offset standard deviation of inferred grounded location",
     )
+    do_sample: bool = Field(
+        default=False,
+        description="Whether to sample, or assume no noise and simply take mean of all distributions",
+    )
     sigma_init: float = Field(
         default=0.1,
         frozen=True,

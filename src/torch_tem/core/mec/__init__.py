@@ -129,18 +129,23 @@ class MECModel(nn.Module):
         """
         # Build no-direction mask for shiny environments
         shiny_envs = [loc.get("shiny") is not None for loc in locations]
-        no_direc_mask = torch.tensor(shiny_envs, device=a.device, dtype=torch.bool) if any(shiny_envs) else None
+        any_shiny = any(shiny_envs)
+        no_direc_mask = torch.tensor(shiny_envs, device=a.device, dtype=torch.bool) if any_shiny else None
 
-        # Path integrate (returns distribution: mean + uncertainty)
+        # 1) Action-driven transition for the state (legacy g_path)
         transition = self.path(a, state.cells, no_direc_mask=None)
-        cells_next = g_gen = self._sample(transition.mean, transition.uncertainty)
+        mu, sigma = self._clamp(transition.mean), transition.uncertainty
+        cells_next = self._sample(mu, sigma)  # sampled iff do_sample
 
-        # Calculate the generative position from sampling and shiny
-        if not self.settings.do_sample or any(shiny_envs):
-            g_gen = self.path.mean(a, state.cells, no_direc_mask)
-            g_gen = self._clamp(g_gen)
+        # 2) g_gen: reuse mu when possible, only compute no_direc when needed
+        if any_shiny:
+            g_gen = self._clamp(self.path.mean(a, state.cells, no_direc_mask))
+        elif self.settings.do_sample:
+            g_gen = cells_next  # legacy: g_gen == sampled g when no shiny
+        else:
+            g_gen = mu  # legacy: g_gen == mean when do_sample=False
 
-        return g_gen, MECState(cells=cells_next, uncertainty=transition.uncertainty)
+        return g_gen, MECState(cells=cells_next, uncertainty=sigma)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         """Execute inference step: fuse path integration with memory and OVC cues.

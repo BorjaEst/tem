@@ -24,8 +24,9 @@ class P2GMemoryModel(nn.Module):
     def __init__(self, n_p: List[int], mec_shape: List[int], settings: P2GMemSettings):
         super().__init__()
         self._mec_shape, self._n_freq = mec_shape, len(mec_shape)
-        self._settings = settings
+        self._n_p = n_p
         self._uncertainty_constant = settings.curriculum_sigma
+        self._settings = settings
 
         # Mean prediction from place cells
         self.MLP_mu_g_mem = MLP(n_p, mec_shape, hidden_dim=[2 * g for g in mec_shape])
@@ -45,6 +46,11 @@ class P2GMemoryModel(nn.Module):
     def settings(self) -> P2GMemSettings:
         """Place-to-grid memory inference settings."""
         return self._settings
+
+    @property
+    def in_dims(self) -> List[int]:
+        """Input dimensions (place cell counts) per frequency module."""
+        return self._n_p
 
     @property
     def shape(self) -> List[int]:

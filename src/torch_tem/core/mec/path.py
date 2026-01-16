@@ -22,7 +22,7 @@ class PathIntegrator(nn.Module):
 
     def __init__(self, n_a: int, mec_shape: List[int], f_init: List[float], settings: PathSettings):
         super().__init__()
-        self._mec_shape, self._n_freq = mec_shape, len(mec_shape)
+        self._n_a, self._mec_shape, self._n_freq = n_a, mec_shape, len(mec_shape)
         self._connections = conn = utils.connections(f_init)
         self._conn_indices = [[f_from for f_from in range(self.n_freq) if conn[f_to][f_from]] for f_to in range(self.n_freq)]
         self._in_dims = [sum(mec_shape[f_from] for f_from in self._conn_indices[f_to]) for f_to in range(self.n_freq)]
@@ -42,6 +42,11 @@ class PathIntegrator(nn.Module):
     def settings(self) -> PathSettings:
         """Path integration settings."""
         return self._settings
+
+    @property
+    def n_actions(self) -> List[int]:
+        """Input dimensions (connected grid cell counts) per frequency module."""
+        return self._n_a
 
     @property
     def shape(self) -> List[int]:

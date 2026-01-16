@@ -44,33 +44,12 @@ class PathIntegrator(nn.Module):
         """Path integration settings."""
         return self._settings
 
-    def forward(self, a: Tensor, g_prev: List[Tensor], no_direc_mask: Tensor | None = None) -> Tuple[List[Tensor], Transition]:
-        """Execute path integration step.
+    def forward(self, a: Tensor, g_prev: List[Tensor], no_direc_mask: Tensor | None = None) -> Transition:
+        mu = self.mean(a, g_prev, no_direc_mask)
+        sigma = self.MLP_sigma_g_path(g_prev)
+        return Transition(mean=mu, uncertainty=sigma)
 
-        Args:
-            a: Action tensor (batch, n_a) one-hot encoded
-            g_prev: Previous grid cell activations per frequency
-            no_direc_mask: Boolean mask (batch,) indicating envs without action-driven transitions
-
-        Returns:
-            g_gen: Grid code for generative branch (previous g for shiny envs)
-            transition: New path-integrated state (mean, uncertainty)
-        """
-        mu = self._transition_mean(a, g_prev, no_direc_mask)
-        sigma = self._transition_uncertainty(g_prev)
-
-        # Always return distribution (mean + uncertainty); parent decides sampling
-        transition = Transition(mean=mu, uncertainty=sigma)
-
-        # Legacy shiny behavior: g_gen uses no-direction transition for shiny envs
-        if no_direc_mask is not None and torch.any(no_direc_mask):
-            g_gen = self._transition_mean(a, g_prev, no_direc_mask)
-        else:
-            g_gen = mu
-
-        return g_gen, transition
-
-    def _transition_mean(self, a: Tensor, g: List[Tensor], no_direc_mask: Tensor | None) -> List[Tensor]:
+    def mean(self, a: Tensor, g: List[Tensor], no_direc_mask: Tensor | None) -> List[Tensor]:
         """Compute mean of transitioned grid cells."""
         mats = self._transition_matrices(a, no_direc_mask)
 
@@ -82,10 +61,6 @@ class PathIntegrator(nn.Module):
         g_next = [g_f + delta_f for g_f, delta_f in zip(g, delta)]
 
         return g_next
-
-    def _transition_uncertainty(self, g: List[Tensor]) -> List[Tensor]:
-        """Compute uncertainty of transition."""
-        return self.MLP_sigma_g_path(g)
 
     def _transition_matrices(self, a: Tensor, no_direc_mask: Tensor | None) -> List[Tensor]:
         """Build per-frequency transition matrices, optionally overriding with D_no_a."""

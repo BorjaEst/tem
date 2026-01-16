@@ -25,6 +25,7 @@ class P2GMemoryModel(nn.Module):
         super().__init__()
         self._n_g, self._n_freq = n_g, len(n_g)
         self._settings = settings
+        self._uncertainty_constant = settings.curriculum_sigma
 
         # Mean prediction from place cells
         self.MLP_mu_g_mem = MLP(n_p, n_g, hidden_dim=[2 * g for g in n_g])
@@ -38,14 +39,14 @@ class P2GMemoryModel(nn.Module):
 
     def set_runtime(self, *, p2g_scale_offset: float):
         """Set runtime variance offset for curriculum training."""
-        self.settings.curriculum_sigma *= p2g_scale_offset
+        self._uncertainty_constant = p2g_scale_offset * self.settings.curriculum_sigma
 
     @property
     def settings(self) -> P2GMemSettings:
         """Place-to-grid memory inference settings."""
         return self._settings
 
-    def forward(self, p_x: List[Tensor], transition: Transition) -> Tuple[List[Tensor], Transition]:
+    def forward(self, p_x: List[Tensor], transition: Transition) -> Transition:
         """Infer grid code from place cells with uncertainty estimation.
 
         Args:
@@ -70,4 +71,4 @@ class P2GMemoryModel(nn.Module):
         """Infer grid cell uncertainties from place cells and reconstruction error."""
         sigma_g_input = [torch.cat((torch.sum(mu_f**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, mu_f in enumerate(g)]
         sigma = self.MLP_sigma_g_mem(sigma_g_input)
-        return [sigma[f] + self.settings.curriculum_sigma for f in range(self._n_freq)]
+        return [sigma[f] + self._uncertainty_constant for f in range(self._n_freq)]

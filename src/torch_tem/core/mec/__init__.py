@@ -23,7 +23,6 @@ import torch
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
-from torch_tem import utils
 from torch_tem.core.mec.memory import P2GMemoryModel
 from torch_tem.core.mec.ovc import OVCCorrection
 from torch_tem.core.mec.path import PathIntegrator
@@ -133,15 +132,13 @@ class MECModel(nn.Module):
         no_direc_mask = torch.tensor(shiny_envs, device=a.device, dtype=torch.bool) if any(shiny_envs) else None
 
         # Path integrate (returns distribution: mean + uncertainty)
-        g_gen, transition = self.path(a, state.cells, no_direc_mask)
+        transition = self.path(a, state.cells, no_direc_mask=None)
+        cells_next = g_gen = self._sample(transition.mean, transition.uncertainty)
 
-        # Apply central sampling policy
-        g_gen = self._sample(g_gen, transition.uncertainty)
-        cells_next = self._sample(transition.mean, transition.uncertainty)
-
-        # Apply clamping for stability
-        g_gen = self._clamp(g_gen)  # Clamp after sampling too
-        cells_next = self._clamp(cells_next)
+        # Calculate the generative position from sampling and shiny
+        if not self.settings.do_sample or any(shiny_envs):
+            g_gen = self.path.mean(a, state.cells, no_direc_mask)
+            g_gen = self._clamp(g_gen)
 
         return g_gen, MECState(cells=cells_next, uncertainty=transition.uncertainty)
 

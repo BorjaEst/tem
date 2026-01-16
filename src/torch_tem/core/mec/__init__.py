@@ -16,8 +16,8 @@ import torch
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
-from torch_tem.core.mec.memory import P2GMemoryModel
 from torch_tem.core.mec.ovc import OVCCorrection
+from torch_tem.core.mec.p2g import P2GMemoryModel
 from torch_tem.core.mec.path import PathIntegrator
 from torch_tem.settings import MECSettings
 from torch_tem.types import Transition

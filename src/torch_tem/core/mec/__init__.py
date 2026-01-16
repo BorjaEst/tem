@@ -135,7 +135,9 @@ class MECModel(nn.Module):
         # 1) Action-driven transition for the state (legacy g_path)
         transition = self.path(a, state.cells, no_direc_mask=None)
         mu, sigma = self._clamp(transition.mean), transition.uncertainty
-        cells_next = self._sample(mu, sigma)  # sampled iff do_sample
+
+        # Sample + clamp for stability (legacy clamps after step; sampling can escape bounds)
+        cells_next = self._clamp(self._sample(mu, sigma))
 
         # 2) g_gen: reuse mu when possible, only compute no_direc when needed
         if any_shiny:

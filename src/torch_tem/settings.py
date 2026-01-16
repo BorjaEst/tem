@@ -485,10 +485,6 @@ class PathSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    do_sample: bool = Field(
-        default=False,
-        description="Whether to sample, or assume no noise and simply take mean of all distributions",
-    )
     hidden_dim: int = Field(
         default=20,
         frozen=True,
@@ -505,10 +501,6 @@ class P2GMemSettings(BaseModel):
         default=10000.0,
         description="Additional value to offset standard deviation of inferred grounded location",
     )
-    do_sample: bool = Field(
-        default=False,
-        description="Whether to sample, or assume no noise and simply take mean of all distributions",
-    )
     sigma_init: float = Field(
         default=0.1,
         frozen=True,
@@ -521,10 +513,6 @@ class OVCSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    do_sample: bool = Field(
-        default=False,
-        description="Whether to sample from OVC correction distribution or use mean only.",
-    )
     n_freq: Optional[int] = Field(
         default=None,
         frozen=True,
@@ -542,6 +530,10 @@ class MECSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    do_sample: bool = Field(
+        default=False,
+        description="Whether to sample from distributions (stochastic) or use means (deterministic). Sampling policy is centralized in MECModel.",
+    )
     sigma_init: float = Field(
         default=0.5,
         frozen=True,

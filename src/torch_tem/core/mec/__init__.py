@@ -23,13 +23,12 @@ import torch
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
-from torch_tem import utils as tem_utils
+from torch_tem import utils
+from torch_tem.core.mec.memory import P2GMemoryModel
+from torch_tem.core.mec.ovc import OVCCorrection
+from torch_tem.core.mec.path import PathIntegrator
 from torch_tem.settings import MECSettings
-
-from .memory import P2GMemoryModel
-from .ovc import OVCCorrection
-from .path import PathIntegrator
-from .utils import fuse_inv_var
+from torch_tem.types import Transition
 
 __all__ = ["MECModel", "MECState", "MECPathIntegrator", "MECMemoryInference", "MECOVCCorrection"]
 
@@ -45,6 +44,11 @@ class MECState:
 
     cells: List[Tensor]  # MEC cell activations (grid and OVC) per frequency
     uncertainty: Optional[List[Tensor]] = None  # Grid cell uncertainty per frequency
+
+    @property
+    def transition(self) -> Transition:
+        """Return current state as Transition (mean, uncertainty)."""
+        return Transition(mean=self.cells, uncertainty=self.uncertainty)
 
     def detach(self) -> "MECState":
         """Return a detached copy suitable for storing as `prev_iter`."""
@@ -121,17 +125,25 @@ class MECModel(nn.Module):
             state: Current MEC state
 
         Returns:
-            g_gen: Grid code for generative branch (query to HPC)
+            g_gen: Grid code for generative branch (sampled if do_sample=True)
             new_state: Updated MEC state after transition
         """
         # Build no-direction mask for shiny environments
         shiny_envs = [loc.get("shiny") is not None for loc in locations]
         no_direc_mask = torch.tensor(shiny_envs, device=a.device, dtype=torch.bool) if any(shiny_envs) else None
 
-        # Path integrate
+        # Path integrate (returns distribution: mean + uncertainty)
         g_gen, transition = self.path(a, state.cells, no_direc_mask)
 
-        return g_gen, MECState(cells=transition.mean, uncertainty=transition.uncertainty)
+        # Apply central sampling policy
+        g_gen = self._sample(g_gen, transition.uncertainty)
+        cells_next = self._sample(transition.mean, transition.uncertainty)
+
+        # Apply clamping for stability
+        g_gen = self._clamp(g_gen)  # Clamp after sampling too
+        cells_next = self._clamp(cells_next)  # Clamp after sampling too
+
+        return g_gen, MECState(cells=cells_next, uncertainty=transition.uncertainty)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         """Execute inference step: fuse path integration with memory and OVC cues.
@@ -142,24 +154,44 @@ class MECModel(nn.Module):
             state: Current MEC state (contains path-integrated belief)
 
         Returns:
-            g_inf: Inferred grid code (fused estimate)
+            g_inf: Inferred grid code (sampled if do_sample=True, legacy parity)
             new_state: Updated MEC state
         """
         # Step 1: Infer from memory (p_x → g correction)
-        mu_g_mem, sigma_g_mem = self.memory(p_x, state.cells)
+        g_inf, transition = self.memory(p_x, state.cells)
 
         # Step 2: Fuse path integration with memory cues (precision weighting)
-        mu_mec, sigma_mec = fuse_inv_var(state.cells, state.uncertainty, mu_g_mem, sigma_g_mem)
+        transition = utils.inv_var_trans(state.transition, transition)
 
         # Step 3: Apply OVC correction from shiny landmarks (if enabled)
         if self.ovc.n_ovc > 0:
-            mu_mec, sigma_mec = self.ovc(locations, mu_mec, sigma_mec)
+            transition = self.ovc(locations, transition)
 
-        # Clamp for stability
-        g_inf = mu_mec = self._clamp(mu_mec)
+        # Clamp mean for stability
+        mu_mec = self._clamp(transition.mean)
+        transition = Transition(mean=mu_mec, uncertainty=transition.uncertainty)
 
-        return g_inf, MECState(cells=mu_mec, uncertainty=sigma_mec)
+        # Apply central sampling policy (legacy parity: g_inf is sampled when do_sample=True)
+        cells_next = self._sample(mu_mec, transition.uncertainty)
+        cells_next = self._clamp(cells_next)  # Clamp after sampling too
+        g_inf = cells_next
+
+        return g_inf, MECState(cells=cells_next, uncertainty=transition.uncertainty)
 
     def _clamp(self, g: List[Tensor]) -> List[Tensor]:
         """Clamp grid cell activations for stability."""
         return [torch.clamp(g_f, min=self._settings.clamp_min, max=self._settings.clamp_max) for g_f in g]
+
+    def _sample(self, mu: List[Tensor], sigma: List[Tensor]) -> List[Tensor]:
+        """Apply sampling policy: mu + sigma * eps if do_sample, else mu.
+
+        Args:
+            mu: Distribution means per frequency
+            sigma: Distribution uncertainties per frequency
+
+        Returns:
+            Sampled values if do_sample=True, else means
+        """
+        if self._settings.do_sample:
+            return [mu_f + sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu, sigma)]
+        return mu

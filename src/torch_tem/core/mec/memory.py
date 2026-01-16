@@ -11,6 +11,7 @@ from torch import Tensor, nn
 from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import P2GMemSettings
+from torch_tem.types import Transition
 
 
 class P2GMemoryModel(nn.Module):
@@ -44,7 +45,7 @@ class P2GMemoryModel(nn.Module):
         """Place-to-grid memory inference settings."""
         return self._settings
 
-    def forward(self, p_x: List[Tensor], g_ref: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
+    def forward(self, p_x: List[Tensor], g_ref: List[Tensor]) -> Tuple[List[Tensor], Transition]:
         """Infer grid code from place cells with uncertainty estimation.
 
         Args:
@@ -52,18 +53,24 @@ class P2GMemoryModel(nn.Module):
             g_ref: Reference grid code for computing reconstruction error
 
         Returns:
-            mu_g_mem: Predicted grid cell means
-            sigma_g_mem: Predicted grid cell uncertainties
+            g_inf: Inferred grid cell means per frequency
+            transition: Inferred grid cell distribution (mean, uncertainty)
         """
-        # Predict mean from place cells
-        mu_g_mem = self.MLP_mu_g_mem(p_x)
+        mu = self._inference_mean(p_x)
+        sigma = self._inference_uncertainty(g_ref, err=utils.squared_error(mu, g_ref))
 
-        # Compute memory quality features
-        err = utils.squared_error(mu_g_mem, g_ref)
-        sigma_g_input = [torch.cat((torch.sum(mu_f**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, mu_f in enumerate(mu_g_mem)]
+        # Always return full distribution; sampling decided by parent MEC module
+        transition = Transition(mean=mu, uncertainty=sigma)
+        g_inf = mu
 
-        # Predict uncertainty from quality
+        return g_inf, transition
+
+    def _inference_mean(self, p_x: List[Tensor]) -> List[Tensor]:
+        """Infer grid cell means from place cells."""
+        return self.MLP_mu_g_mem(p_x)
+
+    def _inference_uncertainty(self, g: List[Tensor], err: List[Tensor]) -> List[Tensor]:
+        """Infer grid cell uncertainties from place cells and reconstruction error."""
+        sigma_g_input = [torch.cat((torch.sum(mu_f**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, mu_f in enumerate(g)]
         sigma = self.MLP_sigma_g_mem(sigma_g_input)
-        sigma_g_mem = [sigma[f] + self.settings.curriculum_sigma for f in range(self._n_freq)]
-
-        return mu_g_mem, sigma_g_mem
+        return [sigma[f] + self.settings.curriculum_sigma for f in range(self._n_freq)]

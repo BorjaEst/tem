@@ -7,10 +7,10 @@ from typing import List, Tuple
 import torch
 from torch import Tensor, nn
 
+from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import OVCSettings
-
-from .utils import fuse_inv_var, resolve_ovc_slice
+from torch_tem.types import Transition
 
 
 class OVCCorrection(nn.Module):
@@ -23,7 +23,7 @@ class OVCCorrection(nn.Module):
     def __init__(self, n_g: List[int], settings: OVCSettings):
         super().__init__()
         self._settings = settings
-        self._ovc_start, self._n_ovc = resolve_ovc_slice(len(n_g), settings.n_freq)
+        self._ovc_start, self._n_ovc = utils.resolve_ovc_slice(len(n_g), settings.n_freq)
         ovc_out_sizes = n_g[self._ovc_start : self._ovc_start + self._n_ovc]
         hidden_dim = [settings.hidden_dim] * self._n_ovc
 
@@ -41,7 +41,7 @@ class OVCCorrection(nn.Module):
         """Number of OVC modules."""
         return self._n_ovc
 
-    def forward(self, locations: list[dict], mu: List[Tensor], sigma: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
+    def forward(self, locations: list[dict], transition: Transition) -> Transition:
         """Apply OVC correction to shiny environments.
 
         Args:
@@ -50,30 +50,18 @@ class OVCCorrection(nn.Module):
             sigma: Grid cell uncertainties per frequency
 
         Returns:
-            mu_corrected: Means with OVC correction applied (sampled if do_sample=True)
-            sigma_corrected: Uncertainties with OVC correction applied
+            transition: Corrected grid cell distribution (mean, uncertainty)
         """
-        shiny_mask = self._identify_shiny_envs(locations, mu[0].device)
+        shiny_mask = self._identify_shiny_envs(locations, transition.mean[0].device)
         if shiny_mask is None:  # No shiny envs present
-            return mu, sigma
+            return transition
 
-        shiny_input = self._extract_shiny_cues(locations, shiny_mask, mu[0].device)
-        mu_shiny, sigma_shiny = self._predict_correction(shiny_input)
-        mu_fused, sigma_fused = fuse_inv_var(
-            mu,
-            sigma,
-            mu_shiny,
-            sigma_shiny,
-            mask=shiny_mask,
-            freqs=range(self._ovc_start, self._ovc_start + self._n_ovc),
-        )
+        shiny_input = self._extract_shiny_cues(locations, shiny_mask, transition.mean[0].device)
+        correction = self._predict_correction(shiny_input)
 
-        if self.settings.do_sample:  # Sample if enabled (legacy behavior)
-            mu_corrected = [mu_f + sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu_fused, sigma_fused)]
-        else:
-            mu_corrected = mu_fused
-
-        return mu_corrected, sigma_fused
+        # Always return fused distribution; parent decides sampling
+        freqs = range(self._ovc_start, self._ovc_start + self._n_ovc)
+        return utils.inv_var_trans(transition, correction, shiny_mask, freqs)
 
     def _identify_shiny_envs(self, locations: list[dict], device: torch.device) -> Tensor | None:
         """Identify which environments have shiny landmarks.
@@ -105,7 +93,7 @@ class OVCCorrection(nn.Module):
         shiny_tensor = torch.as_tensor(shiny_vals, dtype=torch.float32, device=device).unsqueeze(-1)
         return [shiny_tensor] * self._n_ovc
 
-    def _predict_correction(self, shiny_input: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
+    def _predict_correction(self, shiny_input: List[Tensor]) -> Transition:
         """Predict OVC correction mean and uncertainty from shiny landmark cues.
 
         Args:
@@ -122,4 +110,4 @@ class OVCCorrection(nn.Module):
         # Predict uncertainty
         sigma_g_shiny = self.MLP_sigma_g_shiny(shiny_input)
 
-        return mu_g_shiny, sigma_g_shiny
+        return Transition(mean=mu_g_shiny, uncertainty=sigma_g_shiny)

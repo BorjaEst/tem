@@ -7,11 +7,10 @@ from typing import List, Tuple
 import torch
 from torch import Tensor, nn
 
+from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import PathSettings
 from torch_tem.types import Transition
-
-from .utils import connections
 
 
 class PathIntegrator(nn.Module):
@@ -24,7 +23,7 @@ class PathIntegrator(nn.Module):
     def __init__(self, n_a: int, n_g: List[int], f_init: List[float], settings: PathSettings):
         super().__init__()
         self._n_g, self._n_freq = n_g, len(n_g)
-        self._connections = conn = connections(f_init)
+        self._connections = conn = utils.connections(f_init)
         self._settings = settings
         path_out_sizes = [sum(n_g[fb] for fb in range(self._n_freq) if conn[fa][fb]) * n_g[fa] for fa in range(self._n_freq)]
         hidden_dim = [settings.hidden_dim] * self._n_freq
@@ -60,18 +59,14 @@ class PathIntegrator(nn.Module):
         mu = self._transition_mean(a, g_prev, no_direc_mask)
         sigma = self._transition_uncertainty(g_prev)
 
-        # Sample if enabled (legacy behavior)
-        if self.settings.do_sample:
-            g_sampled = [mu_f + sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu, sigma)]
-            transition = Transition(mean=g_sampled, uncertainty=sigma)
-        else:
-            transition = Transition(mean=mu, uncertainty=sigma)
+        # Always return distribution (mean + uncertainty); parent decides sampling
+        transition = Transition(mean=mu, uncertainty=sigma)
 
-        # Legacy shiny behavior: g_gen uses PREVIOUS g for shiny envs
+        # Legacy shiny behavior: g_gen uses no-direction transition for shiny envs
         if no_direc_mask is not None and torch.any(no_direc_mask):
             g_gen = self._transition_mean(a, g_prev, no_direc_mask)
         else:
-            g_gen = transition.mean
+            g_gen = mu
 
         return g_gen, transition
 

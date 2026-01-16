@@ -156,8 +156,7 @@ class MECModel(nn.Module):
 
         # 1) Action-driven transition for the state (legacy g_path)
         transition = self.path(a, state.cells, no_direc_mask=None)
-        mu, sigma = self._clamp(transition.mean), transition.uncertainty
-        cells_next = self._sample(mu, sigma)
+        cells_next = self._sample(transition.mean, transition.uncertainty)
 
         # 2) g_gen: reuse mu when possible, only compute no_direc when needed
         if any_shiny:
@@ -165,9 +164,9 @@ class MECModel(nn.Module):
         elif self.settings.do_sample:
             g_gen = cells_next  # legacy: g_gen == sampled g when no shiny
         else:
-            g_gen = mu  # legacy: g_gen == mean when do_sample=False
+            g_gen = self._clamp(transition.mean)
 
-        return g_gen, state.new(cells=cells_next, uncertainty=sigma)
+        return g_gen, state.new(cells=cells_next, uncertainty=transition.uncertainty)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         """Execute inference step: fuse path integration with memory and OVC cues.

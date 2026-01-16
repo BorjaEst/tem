@@ -58,9 +58,7 @@ class PathIntegrator(nn.Module):
 
         # Apply transition via batch matrix multiply
         delta = [torch.bmm(g_in_f, mat_f).squeeze(1) for g_in_f, mat_f in zip(g_in, mats)]
-        g_next = [g_f + delta_f for g_f, delta_f in zip(g, delta)]
-
-        return g_next
+        return [g_f + delta_f for g_f, delta_f in zip(g, delta)]
 
     def _transition_matrices(self, a: Tensor, no_direc_mask: Tensor | None) -> List[Tensor]:
         """Build per-frequency transition matrices, optionally overriding with D_no_a."""

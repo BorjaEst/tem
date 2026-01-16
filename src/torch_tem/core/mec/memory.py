@@ -21,30 +21,40 @@ class P2GMemoryModel(nn.Module):
     with uncertainty modulated by memory quality (reconstruction error + norm).
     """
 
-    def __init__(self, n_p: List[int], n_g: List[int], settings: P2GMemSettings):
+    def __init__(self, n_p: List[int], mec_shape: List[int], settings: P2GMemSettings):
         super().__init__()
-        self._n_g, self._n_freq = n_g, len(n_g)
+        self._mec_shape, self._n_freq = mec_shape, len(mec_shape)
         self._settings = settings
         self._uncertainty_constant = settings.curriculum_sigma
 
         # Mean prediction from place cells
-        self.MLP_mu_g_mem = MLP(n_p, n_g, hidden_dim=[2 * g for g in n_g])
+        self.MLP_mu_g_mem = MLP(n_p, mec_shape, hidden_dim=[2 * g for g in mec_shape])
 
         # Initialize last layer with truncated normal (legacy parity)
         init_w = lambda f: truncnorm.rvs(-2, 2, size=list(self.MLP_mu_g_mem.w[f][-1].weight.shape), loc=0, scale=settings.sigma_init)
         self.MLP_mu_g_mem.set_weights(-1, [torch.tensor(init_w(f), dtype=torch.float32) for f in range(self._n_freq)])
 
         # Uncertainty from memory quality indicators
-        self.MLP_sigma_g_mem = MLP([2 for _ in n_p], n_g, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in n_g])
+        self.MLP_sigma_g_mem = MLP([2 for _ in n_p], mec_shape, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in mec_shape])
 
-    def set_runtime(self, *, p2g_scale_offset: float):
+    def scale_curriculum_sigma(self, scale: float):
         """Set runtime variance offset for curriculum training."""
-        self._uncertainty_constant = p2g_scale_offset * self.settings.curriculum_sigma
+        self._uncertainty_constant = scale * self.settings.curriculum_sigma
 
     @property
     def settings(self) -> P2GMemSettings:
         """Place-to-grid memory inference settings."""
         return self._settings
+
+    @property
+    def shape(self) -> List[int]:
+        """Shape of grid cell frequency modules."""
+        return self._mec_shape
+
+    @property
+    def n_freq(self) -> int:
+        """Number of grid cell frequency modules."""
+        return self._n_freq
 
     def forward(self, p_x: List[Tensor], transition: Transition) -> Transition:
         """Infer grid code from place cells with uncertainty estimation.

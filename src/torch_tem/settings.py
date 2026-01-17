@@ -650,3 +650,22 @@ class HPCSettings(BaseModel):
         default_factory=HebbianUpdateSettings,
         description="Hebbian update module settings.",
     )
+
+
+class TEMSettings(BaseModel):
+    """Complete settings tree for TEM model configuration."""
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    lec: LECSettings = Field(
+        default_factory=LECSettings,
+        description="LEC module settings.",
+    )
+    mec: MECSettings = Field(
+        default_factory=MECSettings,
+        description="MEC module settings.",
+    )
+    hpc: HPCSettings = Field(
+        default_factory=HPCSettings,
+        description="HPC module settings.",
+    )

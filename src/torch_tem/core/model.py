@@ -19,6 +19,7 @@ from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules import MLP
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.projection import ProjectionModule
+from torch_tem.settings import TEMSettings
 from torch_tem.types import Transition
 
 
@@ -631,7 +632,7 @@ class TEMModel(nn.Module):
         super(TEMModel, self).__init__()
 
         # Accept either Parameters object or legacy dict
-        self._params = params
+        self._params = params  # TODO: replace by settings
         self.hyper = params.to_legacy_dict()
 
         # Initialize runtime hyperparameters with safe defaults
@@ -668,6 +669,11 @@ class TEMModel(nn.Module):
         self.runtime.p2g_scale_offset = p2g_scale_offset
         self.mec.set_runtime(p2g_scale_offset=p2g_scale_offset)
         self.hpc.set_runtime(eta=eta, hebbian_decay=hebbian_decay)
+
+    @property
+    def settings(self) -> TEMSettings:
+        """Return TEM settings object constructed from model parameters."""
+        return self._params
 
     def _apply(self, fn):
         """Override _apply to move tensors in self.hyper when model is moved to GPU/CPU."""

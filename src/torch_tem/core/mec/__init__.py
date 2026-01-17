@@ -145,11 +145,9 @@ class MECModel(nn.Module):
         Returns:
             An initialized `MECState`.
         """
-        return MECState(
-            cells=[g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.cells_init],
-            uncertainty=[torch.exp(std).unsqueeze(0).expand(batch_size, -1).to(device) for std in self.uncertainty_init],
-            _ovc_start=self.ovc.start if self.ovc.n_freq > 0 else None,
-        )
+        g0 = [g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.cells_init]
+        sigma_0 = [std.unsqueeze(0).expand(batch_size, -1).to(device) for std in self.uncertainty_init]
+        return MECState(cells=g0, uncertainty=sigma_0, _ovc_start=self.ovc.start if self.ovc.n_freq > 0 else None)
 
     def set_runtime(self, *, p2g_scale_offset: float):
         """Set runtime hyperparameters.

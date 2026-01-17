@@ -112,7 +112,7 @@ class PathIntegrator(nn.Module):
             A list of transition matrices, one per frequency module.
         """
         d_flat = self.MLP_D_a([a] * self.n_freq)
-        mats = [d[f].reshape(-1, *self._mat_shape[f]) for f, d in enumerate(d_flat)]
+        mats = [d.reshape(-1, *self._mat_shape[f]) for f, d in enumerate(d_flat)]
 
         if no_direc_mask is not None and torch.any(no_direc_mask):
             # Replace where the no-direction mask is active

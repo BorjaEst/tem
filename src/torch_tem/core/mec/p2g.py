@@ -19,7 +19,7 @@ from torch_tem.settings import P2GMemSettings
 from torch_tem.types import Transition
 
 
-class P2GMemoryModel(nn.Module):
+class P2GMemory(nn.Module):
     """Infer grid-cell code from retrieved place-cell activity.
 
     The model predicts a grid-code mean from `p_x` and estimates uncertainty

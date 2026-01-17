@@ -17,12 +17,12 @@ from scipy.stats import truncnorm
 from torch import Tensor, nn
 
 from torch_tem.core.mec.ovc import OVCCorrection
-from torch_tem.core.mec.p2g import P2GMemoryModel
+from torch_tem.core.mec.p2g import P2GMemory
 from torch_tem.core.mec.path import PathIntegrator
 from torch_tem.settings import MECSettings
 from torch_tem.types import Transition
 
-__all__ = ["MECModel", "MECState", "OVCCorrection", "PathIntegrator", "P2GMemoryModel"]
+__all__ = ["MECModel", "MECState", "OVCCorrection", "PathIntegrator", "P2GMemory"]
 
 
 @dataclass
@@ -115,7 +115,7 @@ class MECModel(nn.Module):
     Internally it composes:
 
     - `PathIntegrator` for action-driven transitions
-    - `P2GMemoryModel` for memory-based correction (p→g)
+    - `P2GMemory` for memory-based correction (p→g)
     - `OVCCorrection` for shiny landmark cue fusion
     """
 
@@ -127,7 +127,7 @@ class MECModel(nn.Module):
 
         # Composable submodules (single responsibility each)
         self.path = PathIntegrator(n_a, shape, f_init, settings.path)
-        self.memory = P2GMemoryModel(n_p, shape, settings.p2g)
+        self.memory = P2GMemory(n_p, shape, settings.p2g)
         self.ovc = OVCCorrection(shape, settings.ovc)
 
         # Prior: learned "default phase" of the grid code at reset

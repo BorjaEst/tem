@@ -33,14 +33,11 @@ class LECState:
 class LECModel(nn.Module):
     def __init__(self, n_c: int, shape: List[int], f_init: List[float], settings: LECSettings):
         super().__init__()
-        self._n_c = n_c
-        self._shape, self._n_freq = shape, len(shape)
-        self._settings = settings
 
-        # Composable submodules (single responsibility each)
-        self.filter = None  # Temporal filtering module
-        self.norm = None  # Normalization module
-        self.reconstructor = None  # Reconstruction module
+        # Store hyperparameters
+        self._n_c = n_c
+        self._n_x = shape
+        self.settings = settings
 
         # Initialize temporal filtering factors
         # Store as logit(f) so that sigmoid(alpha) recovers the desired frequency
@@ -55,29 +52,28 @@ class LECModel(nn.Module):
         self.b_x = torch.nn.Parameter(torch.zeros(self._n_c))  # Bias for reconstructing c from x
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> LECState:
-        x0 = [torch.zeros((batch_size, n), device=device) for n in self.shape]
-        return LECState(cells=x0, filtered=x0)
-
-    def set_runtime(self, *, _):
-        pass
+        """Initialize LEC state with zeros."""
+        x0 = [torch.zeros((batch_size, n), device=device) for n in self._n_x]
+        return LECState(x=x0, x_filtered=x0)
 
     @property
-    def settings(self) -> LECSettings:
-        return self._settings
+    def n_in(self) -> int:
+        """Dimensionality of compressed features."""
+        return self._n_c
 
     @property
     def shape(self) -> List[int]:
-        return self._shape
+        """Dimensionality of features per frequency module."""
+        return self._n_x
 
     @property
     def n_freq(self) -> int:
-        return len(self._shape)
+        """Number of frequency modules."""
+        return len(self._n_x)
 
-    def forward(self, *, _) -> Tuple[List[Tensor], LECState]:
-        raise NotImplementedError("LEC forward not implemented. Use inference().")
-
-    def generative(self, *, _) -> Tuple[List[Tensor], LECState]:
-        raise NotImplementedError("LEC does not support geenrative. Use inference().")
+    def forward(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
+        # Delegate to inference method
+        return self.inference(c, state)
 
     def inference(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
         # Temporally filter sensory observation by mixing it with previous experience

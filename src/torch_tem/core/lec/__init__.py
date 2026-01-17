@@ -9,13 +9,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor, nn
 
 from torch_tem import utils
+from torch_tem.core.lec.filter import FrequencyFilter
+from torch_tem.core.lec.norm import FeatureNorm
 from torch_tem.modules import MLP
 from torch_tem.settings import LECSettings
 
 
 @dataclass
 class LECState:
-    cells: List[Tensor]  # Multi-frequency filtered features
+    cells: List[Tensor]  # LEC cell activations per frequency
     filtered: List[Tensor]  # Unweighted filtered features
 
     def new(self, **kwargs) -> "LECState":
@@ -38,14 +40,9 @@ class LECModel(nn.Module):
         self._settings = settings
 
         # Composable submodules (single responsibility each)
-        self.filter = None  # Temporal filtering module
-        self.norm = None  # Normalization module
+        self.filter = FrequencyFilter(shape, f_init, settings.filter)
+        self.norm = FeatureNorm(shape, settings.norm)
         self.reconstructor = None  # Reconstruction module
-
-        # Initialize temporal filtering factors
-        # Store as logit(f) so that sigmoid(alpha) recovers the desired frequency
-        alpha_logit = [np.log(f / (1 - f)) for f in f_init]
-        self.alpha = nn.ParameterList([nn.Parameter(torch.tensor(a, dtype=torch.float)) for a in alpha_logit])
 
         # Frequency module specific scaling of filtered sensory experience
         self.w_f = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_freq)])
@@ -80,24 +77,10 @@ class LECModel(nn.Module):
         raise NotImplementedError("LEC does not support geenrative. Use inference().")
 
     def inference(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:
-        # Temporally filter sensory observation by mixing it with previous experience
-        filtered = self.x_prev2x(c, state.filtered)
-        # Normalize and weight filtered sensory experience for memory
-        normalized = self.f_n(filtered)
+        filtered = self.filter(c, state.filtered)
+        normalized = self.norm(filtered)
         x_inf = next_cells = self.f_w(normalized)
         return x_inf, state.new(cells=next_cells, filtered=filtered)
-
-    def x_prev2x(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
-        # Calculate factor for filtering from sigmoid of learned parameter
-        alpha = [torch.sigmoid(self.alpha[f]) for f in range(self.n_freq)]
-        # Do exponential temporal filtering for each frequency module
-        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * c for f in range(self.n_freq)]
-        return x
-
-    def f_n(self, x: List[Tensor]) -> List[Tensor]:
-        # Normalize using global mean across entire batch (legacy behavior)
-        normalised = [utils.normalise(utils.relu(x[f] - torch.mean(x[f]))) for f in range(self.n_freq)]
-        return normalised
 
     def f_w(self, x: List[Tensor]) -> List[Tensor]:
         # Apply sigmoid-constrained scaling like legacy

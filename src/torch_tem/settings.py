@@ -456,10 +456,31 @@ class LECProjectionSettings(ProjectionSettings):
     )
 
 
+class FreqFilterSettings(BaseModel):
+    """Settings for LEC frequency filtering modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+
+class FeatureNormSettings(BaseModel):
+    """Settings for LEC normalization modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+
 class LECSettings(BaseModel):
     """Settings for LEC modules."""
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    filter: FreqFilterSettings = Field(
+        default_factory=FreqFilterSettings,
+        description="Feature Frequency filtering module settings.",
+    )
+    norm: FeatureNormSettings = Field(
+        default_factory=FeatureNormSettings,
+        description="Feature normalization module settings.",
+    )
 
 
 class MECProjectionSettings(ProjectionSettings):

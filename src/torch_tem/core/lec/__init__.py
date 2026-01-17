@@ -121,9 +121,9 @@ class LECModel(nn.Module):
         """Not implemented.
 
         Raises:
-            NotImplementedError: Always. Use `inference`.
+            NotImplementedError: Always. Use `generative` or `inference`.
         """
-        raise NotImplementedError("LEC forward not implemented. Use inference().")
+        raise NotImplementedError("LEC forward not implemented. Use generative() or inference().")
 
     def generative(self, x: List[Tensor]) -> Tensor:
         """Reconstruct sensory input from LEC features.

@@ -468,6 +468,12 @@ class FeatureNormSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
 
+class ReconstructionSettings(BaseModel):
+    """Settings for LEC reconstruction modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+
 class LECSettings(BaseModel):
     """Settings for LEC modules."""
 
@@ -480,6 +486,10 @@ class LECSettings(BaseModel):
     norm: FeatureNormSettings = Field(
         default_factory=FeatureNormSettings,
         description="Feature normalization module settings.",
+    )
+    reconstruction: ReconstructionSettings = Field(
+        default_factory=ReconstructionSettings,
+        description="Feature reconstruction module settings.",
     )
 
 

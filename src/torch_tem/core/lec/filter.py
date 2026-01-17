@@ -10,9 +10,9 @@ from torch_tem.settings import FreqFilterSettings
 
 
 class FrequencyFilter(nn.Module):
-    def __init__(self, lec_shape: List[int], f_init: List[float], settings: FreqFilterSettings):
+    def __init__(self, f_init: List[float], settings: FreqFilterSettings):
         super().__init__()
-        self._n_freq = len(lec_shape)
+        self._n_freq = len(f_init)
         self._settings = settings
 
         # Initialize temporal filtering factors
@@ -30,8 +30,5 @@ class FrequencyFilter(nn.Module):
         return len(self.alpha)
 
     def forward(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
-        # Calculate factor for filtering from sigmoid of learned parameter
         alpha = [torch.sigmoid(self.alpha[f]) for f in range(self.n_freq)]
-        # Do exponential temporal filtering for each frequency module
-        x = [(1 - alpha[f]) * x_prev[f] + alpha[f] * c for f in range(self.n_freq)]
-        return x
+        return [(1 - alpha[f]) * x_prev[f] + alpha[f] * c for f in range(self.n_freq)]

@@ -649,7 +649,7 @@ class TEMModel(nn.Module):
 
         # Initialize LEC (Lateral Entorhinal Cortex) component
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
-        self.lec = lec = LECModel(n_c, n_x, f_init, params.lec_settings)
+        self.lec = lec = LECModel(n_c, f_init, params.lec_settings)
         self.mec = mec = MECModel(n_a, n_p, n_g, f_init, params.mec_settings)
         self.hpc = hpc = HPCModel(params.i_attractor, n_p, f_init, params.hpc_settings)  # i_attactor must be equal to n of frequencies for grid cells
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)

@@ -31,15 +31,15 @@ class LECState:
 
 
 class LECModel(nn.Module):
-    def __init__(self, n_c: int, shape: List[int], f_init: List[float], settings: LECSettings):
+    def __init__(self, n_c: int, f_init: List[float], settings: LECSettings):
         super().__init__()
-        self._n_c = n_c
-        self._shape, self._n_freq = shape, len(shape)
+        self._n_c, self._n_freq = n_c, len(f_init)
+        self._shape = [n_c] * self.n_freq
         self._settings = settings
 
         # Composable submodules (single responsibility each)
-        self.filter = FrequencyFilter(shape, f_init, settings.filter)
-        self.norm = FeatureNorm(shape, settings.norm)
+        self.filter = FrequencyFilter(f_init, settings.filter)
+        self.norm = FeatureNorm(settings.norm)
         self.reconstructor = Reconstruction(n_c, settings.reconstruction)
 
         # Frequency module specific scaling of filtered sensory experience
@@ -62,7 +62,7 @@ class LECModel(nn.Module):
 
     @property
     def n_freq(self) -> int:
-        return len(self._shape)
+        return self._n_freq
 
     def forward(self, *, _) -> Tuple[List[Tensor], LECState]:
         raise NotImplementedError("LEC forward not implemented. Use inference().")

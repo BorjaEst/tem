@@ -10,20 +10,16 @@ from torch_tem.settings import FeatureNormSettings
 
 
 class FeatureNorm(nn.Module):
-    def __init__(self, lec_shape: List[int], settings: FeatureNormSettings):
+    def __init__(self, settings: FeatureNormSettings):
         super().__init__()
-        self._n_freq = len(lec_shape)
         self._settings = settings
 
     @property
     def settings(self) -> FeatureNormSettings:
         return self._settings
 
-    @property
-    def n_freq(self) -> int:
-        return self._n_freq
-
     def forward(self, x: List[Tensor]) -> List[Tensor]:
-        positive_centered = [utils.relu(x[f] - torch.mean(x[f])) for f in range(self.n_freq)]
-        normalised = [utils.normalise(positive_centered[f]) for f in range(self.n_freq)]
+        n_freq = len(x)
+        positive_centered = [utils.relu(x[f] - torch.mean(x[f])) for f in range(n_freq)]
+        normalised = [utils.normalise(positive_centered[f]) for f in range(n_freq)]
         return normalised

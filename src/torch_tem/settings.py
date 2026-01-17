@@ -599,7 +599,32 @@ class AttractorSettings(BaseModel):
 
     n_iters: int = Field(
         default=3,
+        ge=1,
         description="Number of attractor update iterations per time step.",
+    )
+    kappa: float = Field(
+        default=0.8,
+        description="Hebbian retrieval decay term",
+    )
+
+
+class HebbianUpdateSettings(BaseModel):
+    """Settings for Hebbian update modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    n_stages: int = Field(
+        default=3,
+        ge=1,
+        description="Number of Hebbian update stages per time step.",
+    )
+    clamp_min: float = Field(
+        default=-1.0,
+        description="Minimum clamp value for Hebbian memory weights.",
+    )
+    clamp_max: float = Field(
+        default=1.0,
+        description="Maximum clamp value for Hebbian memory weights.",
     )
 
 
@@ -608,11 +633,20 @@ class LocDistributionSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-
-class HebbianUpdateSettings(BaseModel):
-    """Settings for Hebbian update modules."""
-
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+    sigma_activation: Literal["exp", "softplus"] = Field(
+        default="exp",
+        description="Activation for sigma head output. 'exp' matches legacy behavior.",
+    )
+    sigma_min: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Optional lower bound for sigma (applied after activation).",
+    )
+    noise_scale: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Scale factor for sampling noise (mu + noise_scale * sigma * eps).",
+    )
 
 
 class HPCSettings(BaseModel):
@@ -629,10 +663,7 @@ class HPCSettings(BaseModel):
         default=False,
         description="Use common memory for generative and inference network",
     )
-    kappa: float = Field(
-        default=0.8,
-        description="Hebbian retrieval decay term",
-    )
+
     do_sample: bool = Field(
         default=False,
         description="Whether to sample, or assume no noise and simply take mean of all distributions",
@@ -669,3 +700,7 @@ class TEMSettings(BaseModel):
         default_factory=HPCSettings,
         description="HPC module settings.",
     )
+
+
+# HERE IS A LIST OF VALIATION TESTS WE NEED TO ADD ONCE WE HAVE MINIMAL THINGS WORKING:
+#  - hpc.attractor.n_iters

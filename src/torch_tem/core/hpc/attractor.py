@@ -7,19 +7,20 @@ import torch
 from torch import Tensor, nn
 
 from torch_tem import utils
+from torch_tem.settings import AttractorSettings
 
 
 class AttractorNetwork(nn.Module):
     """Attractor retrieval dynamics (pattern completion) over a memory matrix."""
 
-    def __init__(self, *, shape: List[int], i_attractor: int, kappa: float):
+    def __init__(self, shape: List[int], settings: AttractorSettings):
         super().__init__()
-        self._shape = list(shape)
-        self._i_attractor = int(i_attractor)
-        self._kappa = float(kappa)
+        self._shape, self._n_freq = list(shape), len(shape)
+        self._settings = settings
 
-        if self._i_attractor < 1:
-            raise ValueError(f"i_attractor must be >= 1. Got i_attractor={self._i_attractor}.")
+    @property
+    def settings(self) -> AttractorSettings:
+        return self._settings
 
     @property
     def shape(self) -> List[int]:
@@ -30,8 +31,8 @@ class AttractorNetwork(nn.Module):
         return len(self._shape)
 
     @property
-    def i_attractor(self) -> int:
-        return self._i_attractor
+    def n_iters(self) -> int:
+        return self.settings.n_iters
 
     def forward(self, p_query: List[Tensor], M: Tensor, retrieve_it_mask: Optional[List[Tensor]] = None) -> List[Tensor]:
         # Start by flattening query grounded locations across frequency modules
@@ -40,13 +41,20 @@ class AttractorNetwork(nn.Module):
 
         # If not specified: initialise mask as all 1s
         if retrieve_it_mask is None:
-            retrieve_it_mask = [torch.ones(sum(self.shape), device=h_t.device, dtype=h_t.dtype) for _ in range(self.i_attractor)]
+            retrieve_it_mask = [torch.ones(sum(self.shape), device=h_t.device, dtype=h_t.dtype) for _ in range(self.n_iters)]
         else:
             retrieve_it_mask = [m.to(device=h_t.device, dtype=h_t.dtype) for m in retrieve_it_mask]
 
-        for tau in range(self.i_attractor):
+        # Allow legacy callers to provide longer masks (e.g. per-frequency schedules).
+        if len(retrieve_it_mask) < self.n_iters:
+            pad = [torch.ones(sum(self.shape), device=h_t.device, dtype=h_t.dtype) for _ in range(self.n_iters - len(retrieve_it_mask))]
+            retrieve_it_mask = list(retrieve_it_mask) + pad
+        elif len(retrieve_it_mask) > self.n_iters:
+            retrieve_it_mask = list(retrieve_it_mask[: self.n_iters])
+
+        for tau in range(self.n_iters):
             # Apply one iteration of attractor dynamics only where mask==1
-            update = self._activate(self._kappa * h_t + torch.squeeze(torch.matmul(torch.unsqueeze(h_t, 1), M)))
+            update = self._activate(self.settings.kappa * h_t + torch.squeeze(torch.matmul(torch.unsqueeze(h_t, 1), M)))
             h_t = (1 - retrieve_it_mask[tau]) * h_t + retrieve_it_mask[tau] * update
 
         # Re-cast the grounded location into different frequency modules

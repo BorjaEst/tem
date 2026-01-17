@@ -7,6 +7,8 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
+from torch_tem.settings import HebbianUpdateSettings
+
 
 def build_p_update_mask(*, shape: List[int], i_attractor: int, f_init: List[float]) -> Tensor:
     """Build the hierarchical connectivity mask for Hebbian memory updates."""
@@ -42,8 +44,9 @@ class Runtime:
 class HebbianUpdater(nn.Module):
     """Hebbian write/update logic for the grounded-location memory matrix."""
 
-    def __init__(self, *, shape: List[int], i_attractor: int, f_init: List[float]):
+    def __init__(self, shape: List[int], i_attractor: int, f_init: List[float], settings: HebbianUpdateSettings):
         super().__init__()
+        self._settings = settings
         mask = build_p_update_mask(shape=shape, i_attractor=i_attractor, f_init=f_init)
         self.register_buffer("p_update_mask", mask)
         self._runtime = Runtime()
@@ -52,10 +55,18 @@ class HebbianUpdater(nn.Module):
     def runtime(self) -> Runtime:
         return self._runtime
 
+    @property
+    def settings(self) -> HebbianUpdateSettings:
+        return self._settings
+
     def forward(self, M_prev: Tensor, p_inf: Tensor, p_gen: Tensor, *, do_hierarchical_connections: bool = True) -> Tensor:
         # Create new ground memory by outer product of learned vectors
         eta, hebbian_decay = self.runtime.eta, self.runtime.hebbian_decay
         M_new = torch.squeeze(torch.matmul(torch.unsqueeze(p_inf + p_gen, 2), torch.unsqueeze(p_inf - p_gen, 1)))
         if do_hierarchical_connections:
             M_new = M_new * self.p_update_mask
-        return torch.clamp(hebbian_decay * M_prev + eta * M_new, min=-1, max=1)
+        return torch.clamp(
+            hebbian_decay * M_prev + eta * M_new,
+            min=float(self._settings.clamp_min),
+            max=float(self._settings.clamp_max),
+        )

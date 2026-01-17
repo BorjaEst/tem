@@ -37,13 +37,13 @@ class HPCModel(nn.Module):
 
     def __init__(self, i_attractor: int, shape: List[int], f_init: List[float], settings: HPCSettings):
         super().__init__()
-        self._settings = settings
         self._shape = list(shape)
         self._i_attractor = int(i_attractor)
+        self._settings = settings
 
-        self.attractor = AttractorNetwork(shape=self._shape, i_attractor=self._i_attractor, kappa=self._settings.kappa)
-        self.hebbian_updater = HebbianUpdater(shape=self._shape, i_attractor=self._i_attractor, f_init=f_init)
-        self.distribution = GroundedLocationDistribution(shape=self._shape)
+        self.attractor = AttractorNetwork(shape, settings.attractor)
+        self.hebbian_updater = HebbianUpdater(shape, self._i_attractor, f_init, self._settings.hebbian_update)
+        self.distribution = GroundedLocationDistribution(shape, self._settings.distribution)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
         if device is None:
@@ -77,7 +77,11 @@ class HPCModel(nn.Module):
 
     @property
     def i_attractor(self) -> int:
-        """Number of attractor iterations."""
+        """Legacy split/iteration parameter (architecture-derived).
+
+        Kept for compatibility with legacy code and mask construction.
+        Attractor iterations are controlled by `HPCSettings.attractor.n_iters`.
+        """
         return self._i_attractor
 
     @property

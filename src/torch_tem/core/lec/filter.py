@@ -1,3 +1,9 @@
+"""LEC frequency filtering.
+
+This module implements an exponential moving-average style filter per frequency
+module, parameterized by a learned per-frequency coefficient.
+"""
+
 from __future__ import annotations
 
 from typing import List, Literal, Optional, Tuple
@@ -10,7 +16,19 @@ from torch_tem.settings import FreqFilterSettings
 
 
 class FrequencyFilter(nn.Module):
+    """Temporal frequency filter for sensory input.
+
+    Each frequency module maintains a learned coefficient (stored as a logit)
+    used to mix the previous filtered value with the current sensory input.
+    """
+
     def __init__(self, f_init: List[float], settings: FreqFilterSettings):
+        """Initialize the filter.
+
+        Args:
+            f_init: Initial filter coefficients per frequency module.
+            settings: Configuration for the filter.
+        """
         super().__init__()
         self._n_freq = len(f_init)
         self._settings = settings
@@ -22,6 +40,7 @@ class FrequencyFilter(nn.Module):
 
     @property
     def settings(self) -> FreqFilterSettings:
+        """Return the filter settings."""
         return self._settings
 
     @property
@@ -30,5 +49,14 @@ class FrequencyFilter(nn.Module):
         return len(self.alpha)
 
     def forward(self, c: Tensor, x_prev: List[Tensor]) -> List[Tensor]:
+        """Apply temporal filtering.
+
+        Args:
+            c: Current sensory input.
+            x_prev: Previous filtered features per frequency.
+
+        Returns:
+            Updated filtered features per frequency.
+        """
         alpha = [torch.sigmoid(self.alpha[f]) for f in range(self.n_freq)]
         return [(1 - alpha[f]) * x_prev[f] + alpha[f] * c for f in range(self.n_freq)]

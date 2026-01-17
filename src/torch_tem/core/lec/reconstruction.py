@@ -1,3 +1,9 @@
+"""LEC reconstruction.
+
+This module provides a minimal reconstruction head used in the generative
+branch, mapping LEC features back to the sensory input space.
+"""
+
 from __future__ import annotations
 
 from typing import List, Literal, Optional, Tuple
@@ -9,7 +15,15 @@ from torch_tem.settings import ReconstructionSettings
 
 
 class Reconstruction(nn.Module):
+    """Linear reconstruction of sensory input from LEC features."""
+
     def __init__(self, n_c: int, settings: ReconstructionSettings):
+        """Initialize reconstruction parameters.
+
+        Args:
+            n_c: Number of sensory channels / feature dimensions.
+            settings: Reconstruction configuration.
+        """
         super().__init__()
         self._settings = settings
 
@@ -19,7 +33,16 @@ class Reconstruction(nn.Module):
 
     @property
     def settings(self) -> ReconstructionSettings:
+        """Return the reconstruction settings."""
         return self._settings
 
     def forward(self, x: List[Tensor]) -> Tensor:
+        """Reconstruct sensory input.
+
+        Args:
+            x: Per-frequency LEC features.
+
+        Returns:
+            Reconstructed sensory input tensor.
+        """
         return self.w_x * x[0] + self.b_x

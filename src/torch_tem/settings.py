@@ -592,6 +592,29 @@ class MECSettings(BaseModel):
     )
 
 
+class AttractorSettings(BaseModel):
+    """Settings for attractor dynamics modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    n_iters: int = Field(
+        default=3,
+        description="Number of attractor update iterations per time step.",
+    )
+
+
+class LocDistributionSettings(BaseModel):
+    """Settings for location distribution modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+
+class HebbianUpdateSettings(BaseModel):
+    """Settings for Hebbian update modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+
 class HPCSettings(BaseModel):
     """Settings for HPC modules."""
 
@@ -613,4 +636,17 @@ class HPCSettings(BaseModel):
     do_sample: bool = Field(
         default=False,
         description="Whether to sample, or assume no noise and simply take mean of all distributions",
+    )
+
+    attractor: AttractorSettings = Field(
+        default_factory=AttractorSettings,
+        description="Attractor dynamics module settings.",
+    )
+    distribution: LocDistributionSettings = Field(
+        default_factory=LocDistributionSettings,
+        description="Location distribution module settings.",
+    )
+    hebbian_update: HebbianUpdateSettings = Field(
+        default_factory=HebbianUpdateSettings,
+        description="Hebbian update module settings.",
     )

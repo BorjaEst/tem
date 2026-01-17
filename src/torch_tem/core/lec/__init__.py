@@ -67,8 +67,7 @@ class LECModel(nn.Module):
     def forward(self, *, _) -> Tuple[List[Tensor], LECState]:
         raise NotImplementedError("LEC forward not implemented. Use inference().")
 
-    # def generative(self, *, _) -> Tuple[List[Tensor], LECState]:
-    def reconstruct(self, x: List[Tensor]) -> Tensor:
+    def generative(self, x: List[Tensor]) -> Tensor:
         return self.reconstructor(x)
 
     def inference(self, c: Tensor, state: LECState) -> Tuple[List[Tensor], LECState]:

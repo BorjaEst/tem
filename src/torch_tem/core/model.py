@@ -743,19 +743,19 @@ class TEMModel(nn.Module):
 
         # Generate observation prediction from inferred grounded location
         x = self.lec_projection.inverse(p_inf)
-        c_p_inf = self.lec.reconstruct(x)
+        c_p_inf = self.lec.generative(x)
         o_p_inf_logits = self.autoencoder.decode(c_p_inf)
         o_p_inf = utils.softmax(o_p_inf_logits)
 
         # Generate observation from inferred grounded location
         x = self.lec_projection.inverse(p_gen_gi)
-        c_p_gen_gi = self.lec.reconstruct(x)
+        c_p_gen_gi = self.lec.generative(x)
         o_gen_gi_logits = self.autoencoder.decode(c_p_gen_gi)
         o_gen_gi = utils.softmax(o_gen_gi_logits)
 
         # Generate observation from generated grounded location
         x = self.lec_projection.inverse(p_gen_gg)
-        c_p_gen_gg = self.lec.reconstruct(x)
+        c_p_gen_gg = self.lec.generative(x)
         x_gen_gg_logits = self.autoencoder.decode(c_p_gen_gg)
         o_gen_gg = utils.softmax(x_gen_gg_logits)
 

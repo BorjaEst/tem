@@ -32,14 +32,6 @@ class HPCState:
         )
 
 
-@dataclass
-class HPCRuntime:
-    """Runtime values injected by training (not architectural parameters)."""
-
-    eta: float = 0.0
-    hebbian_decay: float = 0.9999
-
-
 class HPCModel(nn.Module):
     """HPC façade that preserves legacy API while delegating to submodules."""
 
@@ -48,11 +40,6 @@ class HPCModel(nn.Module):
         self._settings = settings
         self._shape = list(shape)
         self._i_attractor = int(i_attractor)
-
-        if self._i_attractor < 1 or self._i_attractor > len(self._shape):
-            raise ValueError(f"i_attractor must be in [1, n_freq]. Got i_attractor={self._i_attractor}, n_freq={len(self._shape)}.")
-
-        self.runtime = HPCRuntime()
 
         self.attractor = AttractorNetwork(shape=self._shape, i_attractor=self._i_attractor, kappa=self._settings.kappa)
         self.hebbian_updater = HebbianUpdater(shape=self._shape, i_attractor=self._i_attractor, f_init=f_init)
@@ -75,8 +62,8 @@ class HPCModel(nn.Module):
         return memory
 
     def set_runtime(self, *, eta: float, hebbian_decay: float) -> None:
-        self.runtime.eta = float(eta)
-        self.runtime.hebbian_decay = float(hebbian_decay)
+        self.hebbian_updater.runtime.eta = float(eta)
+        self.hebbian_updater.runtime.hebbian_decay = float(hebbian_decay)
 
     @property
     def shape(self) -> List[int]:
@@ -116,16 +103,6 @@ class HPCModel(nn.Module):
             return mu_p, HPCState(p=mu_p, memory=state.memory)
         p = self.distribution.sample(mu_p)
         return p, HPCState(p=p, memory=state.memory)
-
-    def hebbian(self, M_prev: Tensor, p_inf: Tensor, p_gen_gi: Tensor, do_hierarchical_connections: bool = True) -> Tensor:
-        return self.hebbian_updater(
-            M_prev,
-            p_inf,
-            p_gen_gi,
-            do_hierarchical_connections=do_hierarchical_connections,
-            eta=self.runtime.eta,
-            hebbian_decay=self.runtime.hebbian_decay,
-        )
 
     def f_p(self, p):
         return [utils.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p] if type(p) is list else utils.leaky_relu(torch.clamp(p, min=-1, max=1))

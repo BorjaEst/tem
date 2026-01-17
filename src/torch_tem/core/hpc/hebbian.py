@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List
 
 import numpy as np
@@ -32,6 +33,12 @@ def build_p_update_mask(*, shape: List[int], i_attractor: int, f_init: List[floa
     return mask
 
 
+@dataclass
+class Runtime:
+    eta: float = 0.5
+    hebbian_decay: float = 0.9999
+
+
 class HebbianUpdater(nn.Module):
     """Hebbian write/update logic for the grounded-location memory matrix."""
 
@@ -39,18 +46,15 @@ class HebbianUpdater(nn.Module):
         super().__init__()
         mask = build_p_update_mask(shape=shape, i_attractor=i_attractor, f_init=f_init)
         self.register_buffer("p_update_mask", mask)
+        self._runtime = Runtime()
 
-    def forward(
-        self,
-        M_prev: Tensor,
-        p_inf: Tensor,
-        p_gen: Tensor,
-        *,
-        do_hierarchical_connections: bool,
-        eta: float,
-        hebbian_decay: float,
-    ) -> Tensor:
+    @property
+    def runtime(self) -> Runtime:
+        return self._runtime
+
+    def forward(self, M_prev: Tensor, p_inf: Tensor, p_gen: Tensor, *, do_hierarchical_connections: bool = True) -> Tensor:
         # Create new ground memory by outer product of learned vectors
+        eta, hebbian_decay = self.runtime.eta, self.runtime.hebbian_decay
         M_new = torch.squeeze(torch.matmul(torch.unsqueeze(p_inf + p_gen, 2), torch.unsqueeze(p_inf - p_gen, 1)))
         if do_hierarchical_connections:
             M_new = M_new * self.p_update_mask

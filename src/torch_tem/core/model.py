@@ -741,10 +741,23 @@ class TEMModel(nn.Module):
         generative = TEMGenerative(g_gen=g_gen, p_gen_gg=p_gen_gg, p_gen_gi=p_gen_gi)
         inference = TEMInference(g_inf=g_inf, p_inf=p_inf, p_xi=p_xi)
 
-        # Generate observation from sampled grounded location
-        o_p_inf, o_p_inf_logits = self.gen_o(p_inf)
-        o_gen_gi, o_gen_gi_logits = self.gen_o(p_gen_gi)
-        o_gen_gg, x_gen_gg_logits = self.gen_o(p_gen_gg)
+        # Generate observation prediction from inferred grounded location
+        x = self.lec_projection.inverse(p_inf)
+        c_p_inf = self.lec.reconstruct(x)
+        o_p_inf_logits = self.autoencoder.decode(c_p_inf)
+        o_p_inf = utils.softmax(o_p_inf_logits)
+
+        # Generate observation from inferred grounded location
+        x = self.lec_projection.inverse(p_gen_gi)
+        c_p_gen_gi = self.lec.reconstruct(x)
+        o_gen_gi_logits = self.autoencoder.decode(c_p_gen_gi)
+        o_gen_gi = utils.softmax(o_gen_gi_logits)
+
+        # Generate observation from generated grounded location
+        x = self.lec_projection.inverse(p_gen_gg)
+        c_p_gen_gg = self.lec.reconstruct(x)
+        x_gen_gg_logits = self.autoencoder.decode(c_p_gen_gg)
+        o_gen_gg = utils.softmax(x_gen_gg_logits)
 
         # Return all generated observations and their corresponding logits
         o_hat, o_logits = (o_p_inf, o_gen_gi, o_gen_gg), (o_p_inf_logits, o_gen_gi_logits, x_gen_gg_logits)
@@ -786,42 +799,6 @@ class TEMModel(nn.Module):
         hpc_state = self.hpc.init_state(batch_size, device)
         # And construct new iteration for that g, o, a, and M
         return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
-
-    def gen_o(self, p):
-        # Get categorical distribution over observations from grounded location
-        # If you actually want to sample observation, you need a reparaterisation trick for categorical distributions
-        # Sampling would be the correct way to do this, since observations are discrete, and it's also what the TEM paper says
-        # However, it looks like you could also get away with using categorical distribution directly as an approximation of the one-hot observations
-        p = p[0] if isinstance(p, list) else p  # Legacy behavior: only use highest-frequency module with shape (B, n_p[0])
-        if self.hyper["do_sample"]:
-            o, logits = self.f_o(
-                p
-            )  # This is a placeholder! Should be done using reparameterisation trick (like https://blog.evjang.com/2016/11/tutorial-categorical-variational.html)
-        else:
-            o, logits = self.f_o(p)
-        # Return one-hot (or almost one-hot...) observation obtained from grounded location, and also the non-softmaxed logits
-        return o, logits
-
-    def f_o(self, p: Tensor):
-        # Calculate categorical probability distribution over observations for a given ground location
-        # Legacy behavior: p is only the highest-frequency module with shape (B, n_p[0])
-        # p is the outer product of g and x for the highest frequency (p = g^T * x)
-        # To get x from p, sum over abstract locations g (transpose of tiling matrix)
-
-        # Project highest-frequency grounded location back to all frequency modules
-        # using the inverse tiling operation for each frequency
-        p_list = [p] if isinstance(p, Tensor) else p  # Handle both Tensor and List[Tensor]
-        x = self.lec_projection.inverse(p_list)
-
-        # Reconstruct compressed features from filtered features (affine transform)
-        c = self.lec.reconstruct(x)
-
-        # Decompress c to observation logits using decoder
-        logits = self.autoencoder.decode(c)
-
-        # Keep both logits and probabilities
-        probability = utils.softmax(logits)
-        return probability, logits
 
 
 Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)

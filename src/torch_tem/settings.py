@@ -613,11 +613,6 @@ class HebbianUpdateSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    n_stages: int = Field(
-        default=3,
-        ge=1,
-        description="Number of Hebbian update stages per time step.",
-    )
     clamp_min: float = Field(
         default=-1.0,
         description="Minimum clamp value for Hebbian memory weights.",
@@ -667,6 +662,11 @@ class HPCSettings(BaseModel):
     do_sample: bool = Field(
         default=False,
         description="Whether to sample, or assume no noise and simply take mean of all distributions",
+    )
+
+    retrieval_n_stages: Optional[int] = Field(
+        default=None,
+        description="Optional number of retrieval mask stages (length of retrieve_it_mask); If None, defaults to the number of grid modules.",
     )
 
     attractor: AttractorSettings = Field(

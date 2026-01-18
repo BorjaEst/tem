@@ -35,14 +35,14 @@ class HPCState:
 class HPCModel(nn.Module):
     """HPC façade that preserves legacy API while delegating to submodules."""
 
-    def __init__(self, i_attractor: int, shape: List[int], f_init: List[float], settings: HPCSettings):
+    def __init__(self, grid_n_freq: int, shape: List[int], f_init: List[float], settings: HPCSettings):
         super().__init__()
         self._shape = list(shape)
-        self._i_attractor = int(i_attractor)
+        self._grid_n_freq = int(grid_n_freq)
         self._settings = settings
 
         self.attractor = AttractorNetwork(shape, settings.attractor)
-        self.hebbian_updater = HebbianUpdater(shape, self._i_attractor, f_init, self._settings.hebbian_update)
+        self.hebbian_updater = HebbianUpdater(shape, self._grid_n_freq, f_init, self._settings.hebbian_update)
         self.distribution = GroundedLocationDistribution(shape, self._settings.distribution)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
@@ -71,26 +71,24 @@ class HPCModel(nn.Module):
         return self._shape
 
     @property
+    def grid_n_freq(self) -> int:
+        """Number of grid (spatial) modules."""
+        return self._grid_n_freq
+
+    @property
     def n_freq(self) -> int:
         """Number of frequency modules."""
         return len(self._shape)
 
     @property
-    def i_attractor(self) -> int:
-        """Legacy split/iteration parameter (architecture-derived).
-
-        Kept for compatibility with legacy code and mask construction.
-        Attractor iterations are controlled by `HPCSettings.attractor.n_iters`.
-        """
-        return self._i_attractor
-
-    @property
     def i_attractor_max_freq_inf(self) -> list[int]:
-        return [self.i_attractor for _ in range(self.n_freq)]
+        return [self.grid_n_freq for _ in range(self.n_freq)]
 
     @property
     def i_attractor_max_freq_gen(self) -> list[int]:
-        return [self.i_attractor - freq_nr for freq_nr in range(self.i_attractor)] + [self.i_attractor for _ in range(self.n_freq - self.i_attractor)]
+        grid = [self.grid_n_freq - freq_nr for freq_nr in range(self.grid_n_freq)]
+        aux = [self.grid_n_freq for _ in range(self.n_freq - self.grid_n_freq)]
+        return grid + aux
 
     def forward(self, *, state: HPCState) -> Tuple[List[Tensor], HPCState]:
         raise NotImplementedError("HPC forward not implemented. Use generative() or inference().")
@@ -114,23 +112,41 @@ class HPCModel(nn.Module):
 
 def p_retrieve_mask_inf(hpc: HPCModel) -> List[torch.Tensor]:
     """Hierarchical memory retrieval masks for inference model (legacy helper)."""
-    n_p, i_attractor = hpc.shape, hpc.i_attractor
+    n_p, i_attractor = hpc.shape, hpc.grid_n_freq
     masks = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
     n_p = np.cumsum(np.concatenate(([0], n_p)))
 
     for f, max_i in enumerate(hpc.i_attractor_max_freq_inf):
         for i in range(max_i):
             masks[i][n_p[f] : n_p[f + 1]] = 1.0
-    return masks
+
+    target = hpc._settings.retrieval_n_stages
+    if target is None:
+        return masks
+    if target <= len(masks):
+        return list(masks[:target])
+    if len(masks) == 0:
+        return [torch.zeros(sum(n_p)) for _ in range(target)]
+    pad = [masks[-1].clone() for _ in range(target - len(masks))]
+    return list(masks) + pad
 
 
 def p_retrieve_mask_gen(hpc: HPCModel) -> List[torch.Tensor]:
     """Hierarchical memory retrieval masks for generative model (legacy helper)."""
-    n_p, i_attractor = hpc.shape, hpc.i_attractor
+    n_p, i_attractor = hpc.shape, hpc.grid_n_freq
     masks = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
     n_p = np.cumsum(np.concatenate(([0], n_p)))
 
     for f, max_i in enumerate(hpc.i_attractor_max_freq_gen):
         for i in range(max_i):
             masks[i][n_p[f] : n_p[f + 1]] = 1.0
-    return masks
+
+    target = hpc._settings.retrieval_n_stages
+    if target is None:
+        return masks
+    if target <= len(masks):
+        return list(masks[:target])
+    if len(masks) == 0:
+        return [torch.zeros(sum(n_p)) for _ in range(target)]
+    pad = [masks[-1].clone() for _ in range(target - len(masks))]
+    return list(masks) + pad

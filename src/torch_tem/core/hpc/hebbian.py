@@ -10,31 +10,6 @@ from torch import Tensor, nn
 from torch_tem.settings import HebbianUpdateSettings
 
 
-def build_p_update_mask(*, shape: List[int], i_attractor: int, f_init: List[float]) -> Tensor:
-    """Build the hierarchical connectivity mask for Hebbian memory updates."""
-
-    n_p, n_f = list(shape), len(shape)
-    mask = torch.zeros((np.sum(n_p), np.sum(n_p)), dtype=torch.float)
-    n_p_cum = np.cumsum(np.concatenate(([0], n_p)))
-
-    for f_from in range(n_f):
-        for f_to in range(n_f):
-            if f_from >= i_attractor or f_to >= i_attractor:
-                # Connection between object vector modules: only allow from low to high frequency
-                if f_from >= i_attractor and f_to >= i_attractor:
-                    if f_init[f_from] <= f_init[f_to]:
-                        mask[n_p_cum[f_from] : n_p_cum[f_from + 1], n_p_cum[f_to] : n_p_cum[f_to + 1]] = 1.0
-                # Connection between object vector and normal modules: allow any connections
-                else:
-                    mask[n_p_cum[f_from] : n_p_cum[f_from + 1], n_p_cum[f_to] : n_p_cum[f_to + 1]] = 1.0
-            else:
-                # Connection between abstract location modules: only from low to high frequency
-                if f_init[f_from] <= f_init[f_to]:
-                    mask[n_p_cum[f_from] : n_p_cum[f_from + 1], n_p_cum[f_to] : n_p_cum[f_to + 1]] = 1.0
-
-    return mask
-
-
 @dataclass
 class Runtime:
     eta: float = 0.5
@@ -44,10 +19,10 @@ class Runtime:
 class HebbianUpdater(nn.Module):
     """Hebbian write/update logic for the grounded-location memory matrix."""
 
-    def __init__(self, shape: List[int], i_attractor: int, f_init: List[float], settings: HebbianUpdateSettings):
+    def __init__(self, shape: List[int], grid_n_freq: int, f_init: List[float], settings: HebbianUpdateSettings):
         super().__init__()
         self._settings = settings
-        mask = build_p_update_mask(shape=shape, i_attractor=i_attractor, f_init=f_init)
+        mask = build_p_update_mask(shape=shape, grid_n_freq=grid_n_freq, f_init=f_init)
         self.register_buffer("p_update_mask", mask)
         self._runtime = Runtime()
 
@@ -70,3 +45,28 @@ class HebbianUpdater(nn.Module):
             min=float(self._settings.clamp_min),
             max=float(self._settings.clamp_max),
         )
+
+
+def build_p_update_mask(*, shape: List[int], grid_n_freq: int, f_init: List[float]) -> Tensor:
+    """Build the hierarchical connectivity mask for Hebbian memory updates."""
+
+    n_p, n_f = list(shape), len(shape)
+    mask = torch.zeros((np.sum(n_p), np.sum(n_p)), dtype=torch.float)
+    n_p_cum = np.cumsum(np.concatenate(([0], n_p)))
+
+    for f_from in range(n_f):
+        for f_to in range(n_f):
+            if f_from >= grid_n_freq or f_to >= grid_n_freq:
+                # Connection between object vector modules: only allow from low to high frequency
+                if f_from >= grid_n_freq and f_to >= grid_n_freq:
+                    if f_init[f_from] <= f_init[f_to]:
+                        mask[n_p_cum[f_from] : n_p_cum[f_from + 1], n_p_cum[f_to] : n_p_cum[f_to + 1]] = 1.0
+                # Connection between object vector and normal modules: allow any connections
+                else:
+                    mask[n_p_cum[f_from] : n_p_cum[f_from + 1], n_p_cum[f_to] : n_p_cum[f_to + 1]] = 1.0
+            else:
+                # Connection between abstract location modules: only from low to high frequency
+                if f_init[f_from] <= f_init[f_to]:
+                    mask[n_p_cum[f_from] : n_p_cum[f_from + 1], n_p_cum[f_to] : n_p_cum[f_to + 1]] = 1.0
+
+    return mask

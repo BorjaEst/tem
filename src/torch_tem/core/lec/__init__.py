@@ -45,7 +45,7 @@ class LECState:
         Returns:
             A new `LECState` instance.
         """
-        copy = self.__dict__.copy()
+        copy = self.__dict__.copy()  # TODO: Should we use detach here?
         copy.update(kwargs)
         return LECState(**copy)
 

@@ -13,7 +13,7 @@ from scipy.stats import truncnorm
 from torch import Tensor, nn
 
 from torch_tem import settings, utils
-from torch_tem.core.hpc import HPCModel, HPCState
+from torch_tem.core.hpc import HPCModel, HPCState, p_retrieve_mask_gen, p_retrieve_mask_inf
 from torch_tem.core.lec import LECModel, LECState
 from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules import MLP
@@ -348,7 +348,13 @@ class Parameters(BaseModel):
     @computed_field
     @property
     def i_attractor(self) -> int:
-        """Number of iterations of attractor dynamics for memory retrieval."""
+        """Legacy name: number of grid (spatial) frequency modules.
+
+        This value is used as a hierarchy depth / split index for building
+        hierarchical connectivity and retrieval masks. It is *not* the number
+        of attractor dynamics iterations; those are controlled by
+        `HPCSettings.attractor.n_iters`.
+        """
         return self.n_f_g
 
     @computed_field
@@ -396,7 +402,12 @@ class Parameters(BaseModel):
     @computed_field
     @property
     def p_retrieve_mask_inf(self) -> list[torch.Tensor]:
-        """Hierarchical memory retrieval masks for inference model."""
+        """Hierarchical memory retrieval masks for inference model.
+
+        The base (legacy) schedule has length `i_attractor == n_f_g` (grid module count).
+        If `hpc_settings.retrieval_n_stages` is provided, the mask schedule is padded/truncated
+        to that length by repeating the last stage.
+        """
         masks = [torch.zeros(sum(self.n_p)) for _ in range(self.i_attractor)]
         n_p = np.cumsum(np.concatenate(([0], self.n_p)))
 
@@ -405,12 +416,29 @@ class Parameters(BaseModel):
             for i in range(max_i):
                 masks[i][n_p[f] : n_p[f + 1]] = 1.0
 
-        return masks
+        target = self.hpc_settings.retrieval_n_stages
+        if target is None:
+            return masks
+        target = int(target)
+        if target < 1:
+            raise ValueError(f"hpc_settings.retrieval_n_stages must be >= 1; got {target}")
+
+        if target <= len(masks):
+            return masks[:target]
+        if len(masks) == 0:
+            return [torch.zeros(sum(self.n_p)) for _ in range(target)]
+        pad = [masks[-1].clone() for _ in range(target - len(masks))]
+        return masks + pad
 
     @computed_field
     @property
     def p_retrieve_mask_gen(self) -> list[torch.Tensor]:
-        """Hierarchical memory retrieval masks for generative model."""
+        """Hierarchical memory retrieval masks for generative model.
+
+        The base (legacy) schedule has length `i_attractor == n_f_g` (grid module count).
+        If `hpc_settings.retrieval_n_stages` is provided, the mask schedule is padded/truncated
+        to that length by repeating the last stage.
+        """
         masks = [torch.zeros(sum(self.n_p)) for _ in range(self.i_attractor)]
         n_p = np.cumsum(np.concatenate(([0], self.n_p)))
 
@@ -419,7 +447,19 @@ class Parameters(BaseModel):
             for i in range(max_i):
                 masks[i][n_p[f] : n_p[f + 1]] = 1.0
 
-        return masks
+        target = self.hpc_settings.retrieval_n_stages
+        if target is None:
+            return masks
+        target = int(target)
+        if target < 1:
+            raise ValueError(f"hpc_settings.retrieval_n_stages must be >= 1; got {target}")
+
+        if target <= len(masks):
+            return masks[:target]
+        if len(masks) == 0:
+            return [torch.zeros(sum(self.n_p)) for _ in range(target)]
+        pad = [masks[-1].clone() for _ in range(target - len(masks))]
+        return masks + pad
 
     @computed_field
     @property
@@ -652,7 +692,7 @@ class TEMModel(nn.Module):
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
         self.lec = lec = LECModel(n_c, f_init, params.lec_settings)
         self.mec = mec = MECModel(n_a, n_p, n_g, f_init, params.mec_settings)
-        self.hpc = hpc = HPCModel(params.i_attractor, n_p, f_init, params.hpc_settings)  # i_attactor must be equal to n of frequencies for grid cells
+        self.hpc = hpc = HPCModel(len(mec.grid_n_freq), n_p, f_init, params.hpc_settings)
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
         self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
 
@@ -716,17 +756,18 @@ class TEMModel(nn.Module):
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
-        p_xi = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
+        p_xi = self.hpc.attractor(x_, memory[1], retrieve_it_mask=p_retrieve_mask_inf(self.hpc)) if self.hyper["use_x_cued_recall"] else None
 
         # Transition: MEC path integration (action-driven)
         g_gen, mec_state = self.mec.generative(a, locations, mec_state)  # Updates mec state with g_path
         g_ = self.mec_projection(g_gen)
-        p_gg = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        retrieve_gen = p_retrieve_mask_gen(self.hpc)
+        p_gg = self.hpc.attractor(g_, memory[0], retrieve_it_mask=retrieve_gen)
 
         # Infer abstract location by using state and sensory experience
         g_inf, mec_state = self.mec.inference(p_xi, locations=locations, state=mec_state)
         g_ = self.mec_projection(g_inf)
-        p_gi = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        p_gi = self.hpc.attractor(g_, memory[0], retrieve_it_mask=retrieve_gen)
 
         # Generate grounded location from inferred abstract location
         p_gen_gi, hpc_state = self.hpc.generative(p_gi, hpc_state)

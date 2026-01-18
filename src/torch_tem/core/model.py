@@ -359,13 +359,13 @@ class Parameters(BaseModel):
 
     @computed_field
     @property
-    def i_attractor_max_freq_inf(self) -> list[int]:
+    def active_stages_per_module_inf(self) -> list[int]:
         """Maximum iterations of attractor dynamics per frequency in inference model."""
         return [self.i_attractor for _ in range(self.n_f)]
 
     @computed_field
     @property
-    def i_attractor_max_freq_gen(self) -> list[int]:
+    def active_stages_per_module_gen(self) -> list[int]:
         """Maximum iterations of attractor dynamics per frequency in generative model."""
         return [self.i_attractor - freq_nr for freq_nr in range(self.n_f_g)] + [self.i_attractor for _ in range(self.n_f_ovc)]
 
@@ -412,7 +412,7 @@ class Parameters(BaseModel):
         n_p = np.cumsum(np.concatenate(([0], self.n_p)))
 
         # For each frequency, insert ones in the mask for those iterations
-        for f, max_i in enumerate(self.i_attractor_max_freq_inf):
+        for f, max_i in enumerate(self.active_stages_per_module_inf):
             for i in range(max_i):
                 masks[i][n_p[f] : n_p[f + 1]] = 1.0
 
@@ -443,7 +443,7 @@ class Parameters(BaseModel):
         n_p = np.cumsum(np.concatenate(([0], self.n_p)))
 
         # For each frequency, insert ones in the mask for those iterations
-        for f, max_i in enumerate(self.i_attractor_max_freq_gen):
+        for f, max_i in enumerate(self.active_stages_per_module_gen):
             for i in range(max_i):
                 masks[i][n_p[f] : n_p[f + 1]] = 1.0
 
@@ -559,8 +559,8 @@ class Parameters(BaseModel):
             "n_p": self.n_p,
             "f_initial": self.f_initial,
             "i_attractor": self.i_attractor,
-            "i_attractor_max_freq_inf": self.i_attractor_max_freq_inf,
-            "i_attractor_max_freq_gen": self.i_attractor_max_freq_gen,
+            "active_stages_per_module_inf": self.active_stages_per_module_inf,
+            "active_stages_per_module_gen": self.active_stages_per_module_gen,
             # masks / matrices
             "p_update_mask": self.p_update_mask,
             "p_retrieve_mask_inf": self.p_retrieve_mask_inf,

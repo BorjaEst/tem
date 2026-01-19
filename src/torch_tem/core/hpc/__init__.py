@@ -51,7 +51,7 @@ class HPCModel(nn.Module):
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
         self.hebbian_updater = HebbianUpdater(shape, n_stages, f_init, settings.hebbian_update)
-        self.distribution = GroundLocation(shape, settings.distribution)
+        self.location = GroundLocation(shape, settings.distribution)
 
         # MLP to predict sigma from mu
         self.uncertainty = Uncertainty(shape, settings.uncertainty)
@@ -101,7 +101,7 @@ class HPCModel(nn.Module):
         return p, HPCState(p=p, memory=state.memory)
 
     def inference(self, x_: List[Tensor], g_: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
-        mu_p = self.distribution(x_, g_)  # TODO rename to location
+        mu_p = self.location(x_, g_)  # TODO rename to location
         if not self.settings.do_sample:
             return mu_p, HPCState(p=mu_p, memory=state.memory)
         p = self.uncertainty.sample(mu_p)  # store in state to do not repeat computation? when to call it?

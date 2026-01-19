@@ -9,8 +9,8 @@ from torch import Tensor, nn
 
 from torch_tem import utils
 from torch_tem.core.hpc.attractor import AttractorNetwork
-from torch_tem.core.hpc.distribution import LocationDistribution
 from torch_tem.core.hpc.hebbian import HebbianUpdater
+from torch_tem.core.hpc.location import LocationDistribution
 from torch_tem.settings import HPCSettings
 from torch_tem.types import Matrix
 

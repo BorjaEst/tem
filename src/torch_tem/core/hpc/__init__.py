@@ -32,56 +32,40 @@ class HPCState:
         )
 
 
-@dataclass
-class HPCRuntime:
-    """Runtime values injected by training (not architectural parameters)."""
-
-    eta: float = 0.0
-    hebbian_decay: float = 0.9999
-
-
 class HPCModel(nn.Module):
     """HPC façade that preserves legacy API while delegating to submodules."""
 
-    def __init__(self, grid_n_freq: int, shape: List[int], f_init: List[float], settings: HPCSettings):
+    def __init__(self, n_stages: int, shape: List[int], f_init: List[float], settings: HPCSettings):
         super().__init__()
         self._shape, self._n_freq = list(shape), len(shape)
-        self._grid_n_freq = int(grid_n_freq)
+        self._n_stages = n_stages
         self._settings = settings
-        self._i_attractor = grid_n_freq
 
         # Store masks as buffers for device management
-        masks = torch.stack(gen_masks_full(shape, n_stages=grid_n_freq))
+        masks = torch.stack(gen_masks_full(shape, n_stages))
         self.register_buffer("masks_full", masks, persistent=False)
-        masks = torch.stack(gen_masks_hierarchical(shape, n_stages=grid_n_freq))
+        masks = torch.stack(gen_masks_hierarchical(shape, n_stages))
         self.register_buffer("masks_hierarchical", masks, persistent=False)
-
-        self.runtime = HPCRuntime()
 
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
-        self.hebbian_updater = HebbianUpdater(shape=self._shape, i_attractor=self._i_attractor, f_init=f_init)
-        self.distribution = GroundedLocationDistribution(shape=self._shape)
+        self.hebbian_updater = HebbianUpdater(shape, n_stages, f_init, settings.hebbian_update)
+        self.distribution = GroundedLocationDistribution(shape, settings.distribution)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
-        if device is None:
-            # Fall back to module device when not explicitly provided
-            try:
-                device = next(self.parameters()).device
-            except StopIteration:
-                device = torch.device("cpu")
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
         return HPCState(p=p_init, memory=self._init_memory(batch_size=batch_size, device=device))
 
     def _init_memory(self, *, batch_size: int, device: torch.device) -> List[Tensor]:
+        # TODO: merge rename HebbianUpdated by memory and mv this there
         m0 = torch.zeros((batch_size, sum(self.shape), sum(self.shape)), dtype=torch.float, device=device)
         memory = [m0]
         memory.append(m0 if self._settings.common_memory else m0.clone())
         return memory
 
     def set_runtime(self, *, eta: float, hebbian_decay: float) -> None:
-        self.runtime.eta = float(eta)
-        self.runtime.hebbian_decay = float(hebbian_decay)
+        self.hebbian_updater.runtime.eta = float(eta)
+        self.hebbian_updater.runtime.hebbian_decay = float(hebbian_decay)
 
     @property
     def settings(self) -> HPCSettings:
@@ -99,17 +83,9 @@ class HPCModel(nn.Module):
         return self._n_freq
 
     @property
-    def i_attractor(self) -> int:
-        """Number of attractor iterations."""
-        return self._i_attractor
-
-    @property
-    def i_attractor_max_freq_inf(self) -> list[int]:
-        return [self.i_attractor for _ in range(self.n_freq)]
-
-    @property
-    def i_attractor_max_freq_gen(self) -> list[int]:
-        return [self.i_attractor - freq_nr for freq_nr in range(self.i_attractor)] + [self.i_attractor for _ in range(self.n_freq - self.i_attractor)]
+    def n_stages(self) -> int:
+        """Number of attractor stages."""
+        return self._n_stages
 
     def forward(self, *, state: HPCState) -> Tuple[List[Tensor], HPCState]:
         raise NotImplementedError("HPC forward not implemented. Use generative() or inference().")
@@ -126,16 +102,6 @@ class HPCModel(nn.Module):
             return mu_p, HPCState(p=mu_p, memory=state.memory)
         p = self.distribution.sample(mu_p)
         return p, HPCState(p=p, memory=state.memory)
-
-    def hebbian(self, M_prev: Tensor, p_inf: Tensor, p_gen_gi: Tensor, do_hierarchical_connections: bool = True) -> Tensor:
-        return self.hebbian_updater(
-            M_prev,
-            p_inf,
-            p_gen_gi,
-            do_hierarchical_connections=do_hierarchical_connections,
-            eta=self.runtime.eta,
-            hebbian_decay=self.runtime.hebbian_decay,
-        )
 
     def recall(self, p_query: List[Tensor], state: HPCState, *, mode: Literal["full", "hierarchical"]) -> List[Tensor]:
         if mode == "full":

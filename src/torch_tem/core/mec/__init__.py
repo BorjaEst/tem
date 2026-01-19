@@ -175,9 +175,7 @@ class MECModel(nn.Module):
     @property
     def grid_n_freq(self) -> int:
         """Return the number of grid (spatial) frequency modules."""
-        if self.settings.ovc.n_freq is None:
-            return self._n_freq
-        return self._n_freq - self.ovc.n_freq
+        return self._n_freq - self.ovc.n_freq if self.settings.ovc.n_freq else self._n_freq
 
     def forward(self, *, _) -> Tuple[List[Tensor], MECState]:
         """Not implemented.

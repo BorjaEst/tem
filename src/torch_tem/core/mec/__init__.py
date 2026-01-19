@@ -126,15 +126,15 @@ class MECModel(nn.Module):
         self._shape, self._n_freq = shape, len(shape)
         self._settings = settings
 
-        # Composable submodules (single responsibility each)
-        self.path = PathIntegrator(n_a, shape, f_init, settings.path)
-        self.p2g = P2GMemory(n_p, shape, settings.p2g)
-        self.ovc = OVCCorrection(shape, settings.ovc)
-
         # Prior: learned "default phase" of the grid code at reset
         init_fn = lambda size: truncnorm.rvs(-2, 2, size=size, loc=0, scale=settings.sigma_init)
         self.cells_init = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n), dtype=torch.float32)) for n in shape])
         self.uncertainty_init = nn.ParameterList([nn.Parameter(torch.tensor(init_fn(n), dtype=torch.float32)) for n in shape])
+
+        # Instantiate submodules
+        self.path = PathIntegrator(n_a, shape, f_init, settings.path)
+        self.p2g = P2GMemory(n_p, shape, settings.p2g)
+        self.ovc = OVCCorrection(shape, settings.ovc)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> MECState:
         """Create an initial MEC state from learned priors.

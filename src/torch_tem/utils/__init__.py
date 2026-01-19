@@ -16,6 +16,7 @@ from torch_tem.types import Matrix, Reduction, Transition, Vector
 
 def sample_diag_gaussian(transition: Transition, *, scale: float = 1.0) -> List[Tensor]:
     """Sample a diagonal Gaussian distribution.
+    If uncertainty is None, returns the mean directly.
 
     Args:
         transition: Transition object with mean and uncertainty.
@@ -25,7 +26,12 @@ def sample_diag_gaussian(transition: Transition, *, scale: float = 1.0) -> List[
         Sampled activations if enabled, otherwise the means.
     """
     mu, sigma = transition.mean, transition.uncertainty
-    return [mu_f + float(scale) * sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu, sigma)]
+    return [gaussian(*args, scale=scale) for args in zip(mu, sigma)] if sigma else mu
+
+
+def gaussian(mean: Tensor, std: Tensor, *, scale: float = 1.0) -> Tensor:
+    # TODO: Probably there are built-in functions for this
+    return mean + float(scale) * std * torch.randn_like(mean)
 
 
 def inv_var_trans(base: Transition, corr: Transition, mask: Optional[Tensor] = None, freqs: Optional[range] = None) -> Transition:

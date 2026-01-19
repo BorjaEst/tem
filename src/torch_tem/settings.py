@@ -322,6 +322,11 @@ class UncertaintySettings(BaseModel):
         default="exp",
         description="Activation for sigma head output. 'exp' matches legacy behavior.",
     )
+    hidden_dim: int = Field(
+        default=20,
+        frozen=True,
+        description="Hidden dimension for MLP predicting uncertainty.",
+    )
     clamp_min: Optional[float] = Field(
         default=-1.0,
         description="Minimum clamp value for Hebbian memory weights.",
@@ -660,6 +665,10 @@ class GroundLocSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    do_sample: bool = Field(  # rename later to something that we deduce, it runs the uncertainty sampling
+        default=False,
+        description="Whether to sample from location distributions or use means.",
+    )
     activation: Activation = Field(
         default="leaky_relu",
         frozen=True,
@@ -688,19 +697,12 @@ class HPCSettings(BaseModel):
         default=False,
         description="Use common memory for generative and inference network",
     )
-    uncertainty: UncertaintySettings = Field(
-        default_factory=UncertaintySettings,
-        description="Uncertainty module settings.",
-    )
-    do_sample: bool = Field(
-        default=False,
-        description="Whether to sample from location distributions or use means.",
-    )
+
     attractor: AttractorSettings = Field(
         default_factory=AttractorSettings,
         description="Attractor dynamics module settings.",
     )
-    distribution: GroundLocSettings = Field(
+    location: GroundLocSettings = Field(
         default_factory=GroundLocSettings,
         description="Location distribution module settings.",
     )

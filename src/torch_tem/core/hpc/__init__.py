@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple
 
-import numpy as np
 import torch
 from torch import Tensor, nn
 
@@ -11,7 +10,6 @@ from torch_tem import utils
 from torch_tem.core.hpc.attractor import AttractorNetwork
 from torch_tem.core.hpc.hebbian import HebbianUpdater
 from torch_tem.core.hpc.location import GroundLocation
-from torch_tem.modules import Uncertainty
 from torch_tem.settings import HPCSettings
 from torch_tem.types import Matrix, Transition
 
@@ -22,15 +20,25 @@ __all__ = ["HPCModel", "HPCState", "AttractorNetwork", "GroundLocation", "Hebbia
 class HPCState:
     """State container for HPC dynamics."""
 
-    p: List[Tensor]  # Multi-frequency grounded location features
+    transition: Transition  # State and uncertainty over grounded locations
     memory: List[Matrix]  # Memory matrices
 
     def detach(self) -> "HPCState":
         """Return a detached copy suitable for storing as `prev_iter`."""
-        return HPCState(
-            p=[v.detach() for v in self.p] if self.p is not None else None,
-            memory=[m.detach() for m in self.memory] if self.memory is not None else None,
-        )
+        mean = [v.detach() for v in self.cells]
+        uncertainty = [v.detach() for v in self.uncertainty] if self.uncertainty else None
+        memory = [m.detach() for m in self.memory] if self.memory is not None else None
+        return HPCState(Transition(mean, uncertainty), memory)
+
+    @property
+    def cells(self) -> List[Tensor]:
+        """Return grounded location features."""
+        return self.transition.mean
+
+    @property
+    def uncertainty(self) -> Optional[List[Tensor]]:
+        """Return grounded location uncertainty."""
+        return self.transition.uncertainty
 
 
 class HPCModel(nn.Module):
@@ -51,14 +59,12 @@ class HPCModel(nn.Module):
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
         self.hebbian_updater = HebbianUpdater(shape, n_stages, f_init, settings.hebbian_update)
-        self.location = GroundLocation(shape, settings.distribution)
-
-        # MLP to predict sigma from mu
-        self.uncertainty = Uncertainty(shape, settings.uncertainty)
+        self.location = GroundLocation(shape, settings.location)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
-        return HPCState(p=p_init, memory=self._init_memory(batch_size=batch_size, device=device))
+        transition = Transition(mean=p_init, uncertainty=None)
+        return HPCState(transition, memory=self._init_memory(batch_size=batch_size, device=device))
 
     def _init_memory(self, *, batch_size: int, device: torch.device) -> List[Tensor]:
         # TODO: merge rename HebbianUpdated by memory and mv this there
@@ -95,17 +101,14 @@ class HPCModel(nn.Module):
         raise NotImplementedError("HPC forward not implemented. Use generative() or inference().")
 
     def generative(self, p_g: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
-        if not self.settings.do_sample:
-            return p_g, HPCState(p=p_g, memory=state.memory)
-        p = self.uncertainty.sample(p_g)  # store in state to do not repeat computation? when to call it?
-        return p, HPCState(p=p, memory=state.memory)
+        transition = Transition(mean=p_g, uncertainty=state.uncertainty)
+        p = utils.sample_diag_gaussian(transition, scale=1.0)
+        return p, HPCState(state.transition, state.memory)
 
     def inference(self, x_: List[Tensor], g_: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
-        mu_p = self.location(x_, g_)  # TODO rename to location
-        if not self.settings.do_sample:
-            return mu_p, HPCState(p=mu_p, memory=state.memory)
-        p = self.uncertainty.sample(mu_p)  # store in state to do not repeat computation? when to call it?
-        return p, HPCState(p=p, memory=state.memory)
+        transition = self.location(x_, g_)
+        p = utils.sample_diag_gaussian(transition, scale=1.0)
+        return p, HPCState(transition, state.memory)
 
     def recall(self, p_query: List[Tensor], state: HPCState, *, mode: Literal["full", "hierarchical"]) -> List[Tensor]:
         if mode == "full":

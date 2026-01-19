@@ -14,6 +14,23 @@ from torch import Tensor
 from torch_tem.types import Matrix, Reduction, Transition, Vector
 
 
+def sample_diag_gaussian(mu: List[Tensor], sigma: List[Tensor], *, enabled: bool, scale: float = 1.0) -> List[Tensor]:
+    """Sample a diagonal Gaussian distribution.
+
+    Args:
+        mu: Per-frequency distribution means.
+        sigma: Per-frequency standard deviations.
+        enabled: Whether to sample or return means.
+        scale: Optional noise scale multiplier.
+
+    Returns:
+        Sampled activations if enabled, otherwise the means.
+    """
+    if not enabled:
+        return mu
+    return [mu_f + float(scale) * sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu, sigma)]
+
+
 def inv_var_trans(base: Transition, corr: Transition, mask: Optional[Tensor] = None, freqs: Optional[range] = None) -> Transition:
     """Fuse correction into base using inverse-variance weighting.
 

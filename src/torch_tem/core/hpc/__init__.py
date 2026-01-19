@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
-import numpy as np
 import torch
 from torch import Tensor, nn
 
@@ -40,7 +39,13 @@ class HPCModel(nn.Module):
         self._shape, self._n_freq = list(shape), len(shape)
         self._grid_n_freq = int(grid_n_freq)
         self._settings = settings
+        masks = _build_retrieve_masks(shape, n_stages=grid_n_freq)
 
+        # Store masks as buffers for device management
+        self.register_buffer("p_retrieve_mask_full", torch.stack(masks["full"]), persistent=False)
+        self.register_buffer("p_retrieve_mask_hierarchical", torch.stack(masks["hierarchical"]), persistent=False)
+
+        # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
         self.hebbian_updater = HebbianUpdater(shape, self._grid_n_freq, f_init, self._settings.hebbian_update)
         self.distribution = GroundedLocationDistribution(shape, self._settings.distribution)
@@ -85,16 +90,6 @@ class HPCModel(nn.Module):
         """Number of grid (spatial) modules."""
         return self._grid_n_freq
 
-    @property
-    def active_stages_per_module_inf(self) -> list[int]:
-        return [self.grid_n_freq for _ in range(self.n_freq)]
-
-    @property
-    def active_stages_per_module_gen(self) -> list[int]:
-        grid = [self.grid_n_freq - freq_nr for freq_nr in range(self.grid_n_freq)]
-        aux = [self.grid_n_freq for _ in range(self.n_freq - self.grid_n_freq)]
-        return grid + aux
-
     def forward(self, *, state: HPCState) -> Tuple[List[Tensor], HPCState]:
         raise NotImplementedError("HPC forward not implemented. Use generative() or inference().")
 
@@ -111,43 +106,32 @@ class HPCModel(nn.Module):
         p = self.distribution.sample(mu_p)
         return p, HPCState(p=p, memory=state.memory)
 
+    def recall(self, p_query: List[Tensor], state: HPCState, *, mode: Literal["inference", "generative"]) -> List[Tensor]:
+        if mode == "inference":
+            return self.attractor(p_query, state.memory[1], masks=self.p_retrieve_mask_full)
+        elif mode == "generative":
+            return self.attractor(p_query, state.memory[0], masks=self.p_retrieve_mask_hierarchical)
+        raise ValueError(f"Invalid mode '{mode}'. Expected 'inference' or 'generative'.")
+
     def f_p(self, p):
         return [utils.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p] if type(p) is list else utils.leaky_relu(torch.clamp(p, min=-1, max=1))
 
 
-def p_retrieve_mask_inf(hpc: HPCModel) -> List[torch.Tensor]:
-    """Hierarchical memory retrieval masks for inference model (legacy helper)."""
-    n_p, i_attractor = hpc.shape, hpc.grid_n_freq
-    target = hpc.settings.retrieval_n_stages or i_attractor
-    masks = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
-    n_p = np.cumsum(np.concatenate(([0], n_p)))
+def _build_retrieve_masks(hpc_shape: List[int], n_stages: int) -> Dict[str, List[Tensor]]:
+    n_freq = len(hpc_shape)
+    n_stages = max(1, min(int(n_stages), n_freq))
+    n_units = sum(hpc_shape)
+    n_p = torch.tensor([0] + hpc_shape, dtype=torch.long).cumsum(dim=0).tolist()
 
-    for f, max_i in enumerate(hpc.active_stages_per_module_inf):
-        for i in range(max_i):
-            masks[i][n_p[f] : n_p[f + 1]] = 1.0
+    mask_full = [torch.zeros(n_units, dtype=torch.float32) for _ in range(n_stages)]
+    mask_hierarchical = [torch.zeros(n_units, dtype=torch.float32) for _ in range(n_stages)]
 
-    if target <= len(masks):
-        return list(masks[:target])
-    if len(masks) == 0:
-        return [torch.zeros(sum(n_p)) for _ in range(target)]
-    pad = [masks[-1].clone() for _ in range(target - len(masks))]
-    return list(masks) + pad
+    for f in range(n_freq):
+        start, end = n_p[f], n_p[f + 1]
+        for i in range(n_stages):
+            mask_full[i][start:end] = 1.0
+        max_i_gen = n_stages - f if f < n_stages else n_stages
+        for i in range(max_i_gen):
+            mask_hierarchical[i][start:end] = 1.0
 
-
-def p_retrieve_mask_gen(hpc: HPCModel) -> List[torch.Tensor]:
-    """Hierarchical memory retrieval masks for generative model (legacy helper)."""
-    n_p, i_attractor = hpc.shape, hpc.grid_n_freq
-    target = hpc.settings.retrieval_n_stages or i_attractor
-    masks = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
-    n_p = np.cumsum(np.concatenate(([0], n_p)))
-
-    for f, max_i in enumerate(hpc.active_stages_per_module_gen):
-        for i in range(max_i):
-            masks[i][n_p[f] : n_p[f + 1]] = 1.0
-
-    if target <= len(masks):
-        return list(masks[:target])
-    if len(masks) == 0:
-        return [torch.zeros(sum(n_p)) for _ in range(target)]
-    pad = [masks[-1].clone() for _ in range(target - len(masks))]
-    return list(masks) + pad
+    return {"full": mask_full, "hierarchical": mask_hierarchical}

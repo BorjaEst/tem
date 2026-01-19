@@ -56,7 +56,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from torch_tem.types import Reduction, Scalar
 
-Activation = Literal["sigmoid", "none"]
+Activation = Literal["leaky_relu", "sigmoid", "none"]
 ProjectionMode = Literal["identity", "tiling", "low_rank", "random"]
 InitStrategy = Literal["identity", "random"]
 
@@ -597,14 +597,22 @@ class AttractorSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    n_iters: int = Field(
-        default=3,
-        ge=1,
-        description="Number of attractor update iterations per time step.",
-    )
     kappa: float = Field(
         default=0.8,
         description="Hebbian retrieval decay term",
+    )
+    activation: Activation = Field(
+        default="leaky_relu",
+        frozen=True,
+        description="Activation function for attractor dynamics.",
+    )
+    clamp_min: float = Field(
+        default=-1.0,
+        description="Minimum clamp value for attractor dynamics.",
+    )
+    clamp_max: float = Field(
+        default=1.0,
+        description="Maximum clamp value for attractor dynamics.",
     )
 
 
@@ -664,11 +672,6 @@ class HPCSettings(BaseModel):
         description="Whether to sample, or assume no noise and simply take mean of all distributions",
     )
 
-    retrieval_n_stages: Optional[int] = Field(
-        default=None,
-        description="Optional number of retrieval mask stages (length of retrieve_it_mask); If None, defaults to the number of grid modules.",
-    )
-
     attractor: AttractorSettings = Field(
         default_factory=AttractorSettings,
         description="Attractor dynamics module settings.",
@@ -700,7 +703,3 @@ class TEMSettings(BaseModel):
         default_factory=HPCSettings,
         description="HPC module settings.",
     )
-
-
-# HERE IS A LIST OF VALIATION TESTS WE NEED TO ADD ONCE WE HAVE MINIMAL THINGS WORKING:
-#  - hpc.attractor.n_iters

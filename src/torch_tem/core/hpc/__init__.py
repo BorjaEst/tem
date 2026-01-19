@@ -14,7 +14,7 @@ from torch_tem.core.hpc.hebbian import HebbianUpdater
 from torch_tem.settings import HPCSettings
 from torch_tem.types import Matrix
 
-__all__ = ["HPCModel", "HPCState", "p_retrieve_mask_inf", "p_retrieve_mask_gen"]
+__all__ = ["HPCModel", "HPCState", "AttractorNetwork", "GroundedLocationDistribution", "HebbianUpdater"]
 
 
 @dataclass
@@ -42,9 +42,9 @@ class HPCModel(nn.Module):
         self._settings = settings
 
         # Store masks as buffers for device management
-        masks = torch.stack(gen_masks_full(shape, n_stages))
+        masks = utils.update_to_masks(shape, update=utils.make_update_full(n_stages, self.n_freq))
         self.register_buffer("masks_full", masks, persistent=False)
-        masks = torch.stack(gen_masks_hierarchical(shape, n_stages))
+        masks = utils.update_to_masks(shape, update=utils.make_update_hierarchical(n_stages, self.n_freq))
         self.register_buffer("masks_hierarchical", masks, persistent=False)
 
         # Instantiate submodules
@@ -112,27 +112,3 @@ class HPCModel(nn.Module):
 
     def f_p(self, p):
         return [utils.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p] if type(p) is list else utils.leaky_relu(torch.clamp(p, min=-1, max=1))
-
-
-def gen_masks_full(hpc_shape: List[int], n_stages: int) -> List[torch.Tensor]:
-    masks = [torch.zeros(sum(hpc_shape)) for _ in range(n_stages)]
-    i_attractor_max_freq_inf = [n_stages for _ in range(n_stages)]
-    n_p = np.cumsum([0] + hpc_shape)
-
-    # For each frequency, insert ones in the mask for those iterations
-    for f, max_i in enumerate(i_attractor_max_freq_inf):
-        for i in range(max_i):
-            masks[i][n_p[f] : n_p[f + 1]] = 1.0
-    return masks
-
-
-def gen_masks_hierarchical(hpc_shape: List[int], n_stages: int) -> List[torch.Tensor]:
-    masks = [torch.zeros(sum(hpc_shape)) for _ in range(n_stages)]
-    i_attractor_max_freq_gen = [n_stages - f for f in range(n_stages)] + [n_stages for _ in range(len(hpc_shape) - n_stages)]
-    n_p = np.cumsum([0] + hpc_shape)
-
-    # For each frequency, insert ones in the mask for those iterations
-    for f, max_i in enumerate(i_attractor_max_freq_gen):
-        for i in range(max_i):
-            masks[i][n_p[f] : n_p[f + 1]] = 1.0
-    return masks

@@ -528,3 +528,58 @@ def resolve_ovc_slice(n_freq_total: int, n_freq_ovc: Optional[int]) -> Tuple[int
 
     # Apply to last k modules (legacy separate_ovc=True)
     return n_freq_total - n_freq_ovc, n_freq_ovc
+
+
+def update_to_masks(shape: List[int], *, update: torch.Tensor) -> torch.Tensor:
+    """Expand a stage×freq update matrix to a stage×sum(shape) mask tensor.
+
+    Args:
+        shape: Feature dims per frequency module.
+        update: Bool/0-1 tensor of shape (n_stages, n_freq).
+
+    Returns:
+        masks: Float tensor of shape (n_stages, sum(hpc_shape)).
+    """
+    n_freq = len(shape)
+    if update.ndim != 2 or update.shape[1] != n_freq:
+        raise ValueError(f"Expected update shape (n_stages, {n_freq}), got {tuple(update.shape)}")
+
+    widths = torch.tensor(shape, device=update.device)
+    masks = update.to(dtype=torch.float).repeat_interleave(widths, dim=1)
+    return masks
+
+
+def make_update_full(n_stages: int, n_freq: int, *, device=None) -> torch.Tensor:
+    """Full update matrix (all True).
+
+    Args:
+        n_stages: Number of attractor stages.
+        n_freq: Number of frequency modules.
+
+    Returns:
+        Full update matrix of shape (n_stages, n_freq).
+    """
+    return torch.ones((n_stages, n_freq), dtype=torch.bool, device=device)
+
+
+def make_update_hierarchical(n_stages: int, n_freq: int, *, ramp_len: int | None = None, device=None) -> torch.Tensor:
+    """Hierarchical update matrix.
+
+    ramp_len controls how many frequency modules participate in the triangular ramp.
+    If None, uses min(n_stages, n_freq).
+    """
+    ramp_len = min(n_stages, n_freq) if ramp_len is None else ramp_len
+    if not (0 <= ramp_len <= n_freq):
+        raise ValueError("ramp_len must be in [0, n_freq]")
+
+    i = torch.arange(n_stages, device=device)[:, None]  # (n_stages, 1)
+    f = torch.arange(ramp_len, device=device)[None, :]  # (1, ramp_len)
+
+    # Triangular ramp: freq 0 updates n_stages times, freq 1 updates n_stages-1, etc.
+    update_ramp = i < (n_stages - f)  # (n_stages, ramp_len)
+
+    if ramp_len < n_freq:
+        update_tail = torch.ones((n_stages, n_freq - ramp_len), dtype=torch.bool, device=device)
+        return torch.cat([update_ramp, update_tail], dim=1)
+
+    return update_ramp

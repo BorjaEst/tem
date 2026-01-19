@@ -14,8 +14,6 @@ from torch_tem.types import Transition
 
 
 class GroundLocation(nn.Module):
-    """Distribution over grounded locations p (mean + learned sigma)."""
-
     def __init__(self, shape: List[int], settings: GroundLocSettings):
         super().__init__()
         self._shape, self._n_freq = list(shape), len(shape)

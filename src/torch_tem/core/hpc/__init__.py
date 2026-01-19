@@ -10,11 +10,12 @@ from torch import Tensor, nn
 from torch_tem import utils
 from torch_tem.core.hpc.attractor import AttractorNetwork
 from torch_tem.core.hpc.hebbian import HebbianUpdater
-from torch_tem.core.hpc.location import LocationDistribution
+from torch_tem.core.hpc.location import GroundLocation
+from torch_tem.modules import Uncertainty
 from torch_tem.settings import HPCSettings
-from torch_tem.types import Matrix
+from torch_tem.types import Matrix, Transition
 
-__all__ = ["HPCModel", "HPCState", "AttractorNetwork", "LocationDistribution", "HebbianUpdater"]
+__all__ = ["HPCModel", "HPCState", "AttractorNetwork", "GroundLocation", "HebbianUpdater"]
 
 
 @dataclass
@@ -50,7 +51,10 @@ class HPCModel(nn.Module):
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
         self.hebbian_updater = HebbianUpdater(shape, n_stages, f_init, settings.hebbian_update)
-        self.distribution = LocationDistribution(shape, settings.distribution)
+        self.distribution = GroundLocation(shape, settings.distribution)
+
+        # MLP to predict sigma from mu
+        self.uncertainty = Uncertainty(shape, settings.uncertainty)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
@@ -91,16 +95,16 @@ class HPCModel(nn.Module):
         raise NotImplementedError("HPC forward not implemented. Use generative() or inference().")
 
     def generative(self, p_g: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
-        if not self._settings.do_sample:
+        if not self.settings.do_sample:
             return p_g, HPCState(p=p_g, memory=state.memory)
-        p = self.distribution.sample(p_g)
+        p = self.uncertainty.sample(p_g)  # store in state to do not repeat computation? when to call it?
         return p, HPCState(p=p, memory=state.memory)
 
     def inference(self, x_: List[Tensor], g_: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
         mu_p = self.distribution(x_, g_)  # TODO rename to location
-        if not self._settings.do_sample:
+        if not self.settings.do_sample:
             return mu_p, HPCState(p=mu_p, memory=state.memory)
-        p = self.distribution.sample(mu_p)
+        p = self.uncertainty.sample(mu_p)  # store in state to do not repeat computation? when to call it?
         return p, HPCState(p=p, memory=state.memory)
 
     def recall(self, p_query: List[Tensor], state: HPCState, *, mode: Literal["full", "hierarchical"]) -> List[Tensor]:

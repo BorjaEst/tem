@@ -206,7 +206,10 @@ class MECModel(nn.Module):
 
         # 1) Action-driven transition for the state (legacy g_path)
         transition = self.path(a, state.cells, no_direc_mask=None)
-        cells_next = utils.sample_diag_gaussian(transition, enabled=self._settings.do_sample)
+        if self.settings.do_sample:
+            cells_next = utils.sample_diag_gaussian(transition)
+        else:
+            cells_next = transition.mean
 
         # 2) g_gen: reuse mu when possible, only compute no_direc when needed
         if any_shiny:
@@ -237,7 +240,10 @@ class MECModel(nn.Module):
         transition = self.ovc(locations, transition) if self.ovc.n_freq > 0 else transition
 
         # Apply central sampling policy (legacy parity: g_inf is sampled when do_sample=True)
-        cells_next = utils.sample_diag_gaussian(transition, enabled=self._settings.do_sample)
+        if self.settings.do_sample:
+            cells_next = utils.sample_diag_gaussian(transition)
+        else:
+            cells_next = transition.mean
         g_inf = self._clamp(cells_next)
 
         return g_inf, state.new(cells=cells_next, uncertainty=transition.uncertainty)

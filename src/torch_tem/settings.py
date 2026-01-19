@@ -313,6 +313,30 @@ class SensoryReconstructionSettings(BaseModel):
     )
 
 
+class UncertaintySettings(BaseModel):
+    """Settings for uncertainty modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    activation: Literal["exp", "softplus"] = Field(
+        default="exp",
+        description="Activation for sigma head output. 'exp' matches legacy behavior.",
+    )
+    clamp_min: Optional[float] = Field(
+        default=-1.0,
+        description="Minimum clamp value for Hebbian memory weights.",
+    )
+    clamp_max: Optional[float] = Field(
+        default=1.0,
+        description="Maximum clamp value for Hebbian memory weights.",
+    )
+    noise_scale: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Scale factor for sampling noise (mu + noise_scale * sigma * eps).",
+    )
+
+
 class AbstractLocationSettings(BaseModel):
     """Settings for abstract location transition loss ($L_g$)."""
 
@@ -631,25 +655,11 @@ class HebbianUpdateSettings(BaseModel):
     )
 
 
-class LocDistributionSettings(BaseModel):
+class GroundLocSettings(BaseModel):
     """Settings for location distribution modules."""
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    sigma_activation: Literal["exp", "softplus"] = Field(
-        default="exp",
-        description="Activation for sigma head output. 'exp' matches legacy behavior.",
-    )
-    sigma_min: float = Field(
-        default=0.0,
-        ge=0.0,
-        description="Optional lower bound for sigma (applied after activation).",
-    )
-    noise_scale: float = Field(
-        default=1.0,
-        ge=0.0,
-        description="Scale factor for sampling noise (mu + noise_scale * sigma * eps).",
-    )
     activation: Activation = Field(
         default="leaky_relu",
         frozen=True,
@@ -674,23 +684,24 @@ class HPCSettings(BaseModel):
         default=True,
         description="Whether to use inferred ground location while inferring new abstract location",
     )
-
-    common_memory: bool = Field(
+    common_memory: bool = Field(  # Probably to move to hebbian which will rename memory
         default=False,
         description="Use common memory for generative and inference network",
     )
-
+    uncertainty: UncertaintySettings = Field(
+        default_factory=UncertaintySettings,
+        description="Uncertainty module settings.",
+    )
     do_sample: bool = Field(
         default=False,
-        description="Whether to sample, or assume no noise and simply take mean of all distributions",
+        description="Whether to sample from location distributions or use means.",
     )
-
     attractor: AttractorSettings = Field(
         default_factory=AttractorSettings,
         description="Attractor dynamics module settings.",
     )
-    distribution: LocDistributionSettings = Field(
-        default_factory=LocDistributionSettings,
+    distribution: GroundLocSettings = Field(
+        default_factory=GroundLocSettings,
         description="Location distribution module settings.",
     )
     hebbian_update: HebbianUpdateSettings = Field(

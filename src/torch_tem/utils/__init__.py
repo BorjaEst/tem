@@ -14,20 +14,17 @@ from torch import Tensor
 from torch_tem.types import Matrix, Reduction, Transition, Vector
 
 
-def sample_diag_gaussian(transition: Transition, *, enabled: bool, scale: float = 1.0) -> List[Tensor]:
+def sample_diag_gaussian(transition: Transition, *, scale: float = 1.0) -> List[Tensor]:
     """Sample a diagonal Gaussian distribution.
 
     Args:
         transition: Transition object with mean and uncertainty.
-        enabled: Whether to sample or return means.
         scale: Optional noise scale multiplier.
 
     Returns:
         Sampled activations if enabled, otherwise the means.
     """
     mu, sigma = transition.mean, transition.uncertainty
-    if not enabled:
-        return mu
     return [mu_f + float(scale) * sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu, sigma)]
 
 
@@ -114,6 +111,10 @@ def activation_from_str(name: str):
         return torch.sigmoid
     if name == "softmax":
         return torch.nn.Softmax(dim=-1)
+    if name == "tanh":
+        return torch.tanh
+    if name == "exp":
+        return torch.exp
     raise ValueError(f"Unknown activation function: {name}")
 
 

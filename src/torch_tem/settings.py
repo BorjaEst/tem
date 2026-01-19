@@ -573,6 +573,11 @@ class OVCSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    do_sample: bool = Field(  # rename later to something that we deduce, it runs the uncertainty sampling
+        default=False,
+        frozen=True,
+        description="Whether to sample from location distributions or use means.",
+    )
     n_freq: Optional[int] = Field(
         default=None,
         frozen=True,
@@ -593,7 +598,8 @@ class MECSettings(BaseModel):
     do_sample: bool = Field(
         default=False,
         description="Whether to sample from distributions (stochastic) or use means (deterministic). Sampling policy is centralized in MECModel.",
-    )
+    )  # TODO: remove, individual modules, decide if to provide with uncertainty value or None
+
     sigma_init: float = Field(
         default=0.5,
         frozen=True,
@@ -667,6 +673,7 @@ class GroundLocSettings(BaseModel):
 
     do_sample: bool = Field(  # rename later to something that we deduce, it runs the uncertainty sampling
         default=False,
+        frozen=True,
         description="Whether to sample from location distributions or use means.",
     )
     activation: Activation = Field(

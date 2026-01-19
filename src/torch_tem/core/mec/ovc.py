@@ -33,7 +33,11 @@ class OVCCorrection(nn.Module):
         # Shiny cue → mean and uncertainty
         hidden_dim = [settings.hidden_dim] * self.n_freq
         self.g_shiny_fn = MLP([1] * self.n_freq, self.shape, [torch.relu, None], hidden_dim)
-        self.uncertainty_fn = MLP([1] * self.n_freq, self.shape, [torch.relu, torch.exp], hidden_dim)
+
+        if settings.do_sample:  # Uncertainty MLP module
+            self.uncertainty_fn = MLP([1] * self.n_freq, self.shape, [torch.relu, torch.exp], hidden_dim)
+        else:  # If we do not sample, no uncertainty
+            self.uncertainty_fn = lambda: None  # type: ignore
 
     @property
     def settings(self) -> OVCSettings:

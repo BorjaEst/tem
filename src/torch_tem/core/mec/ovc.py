@@ -32,8 +32,8 @@ class OVCCorrection(nn.Module):
 
         # Shiny cue → mean and uncertainty
         hidden_dim = [settings.hidden_dim] * self.n_freq
-        self.MLP_mu_g_shiny = MLP([1] * self.n_freq, self.shape, [torch.relu, None], hidden_dim)
-        self.MLP_sigma_g_shiny = MLP([1] * self.n_freq, self.shape, [torch.relu, torch.exp], hidden_dim)
+        self.g_shiny_fn = MLP([1] * self.n_freq, self.shape, [torch.relu, None], hidden_dim)
+        self.uncertainty_fn = MLP([1] * self.n_freq, self.shape, [torch.relu, torch.exp], hidden_dim)
 
     @property
     def settings(self) -> OVCSettings:
@@ -119,10 +119,10 @@ class OVCCorrection(nn.Module):
             A `Transition` containing OVC correction mean and uncertainty.
         """
         # Predict mean with legacy nonlinearity (abs → leaky_relu)
-        mu_g = [torch.abs(mu) for mu in self.MLP_mu_g_shiny(shiny_input)]
+        mu_g = [torch.abs(mu) for mu in self.g_shiny_fn(shiny_input)]
         mu_g_shiny = [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in mu_g]
 
         # Predict uncertainty
-        sigma_g_shiny = self.MLP_sigma_g_shiny(shiny_input)
+        sigma_g_shiny = self.uncertainty_fn(shiny_input)
 
         return Transition(mean=mu_g_shiny, uncertainty=sigma_g_shiny)

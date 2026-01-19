@@ -21,7 +21,7 @@ from torch_tem.core.mec.ovc import OVCCorrection
 from torch_tem.core.mec.p2g import P2GMemory
 from torch_tem.core.mec.path import PathIntegrator
 from torch_tem.settings import MECSettings
-from torch_tem.types import Transition
+from torch_tem.types import AbstractLocation, MultiScaleCode, Transition
 
 __all__ = ["MECModel", "MECState", "OVCCorrection", "PathIntegrator", "P2GMemory"]
 
@@ -42,56 +42,13 @@ class MECState:
             `None` when OVC is disabled.
     """
 
-    cells: List[Tensor]  # MEC cell activations (grid and OVC) per frequency
-    uncertainty: Optional[List[Tensor]] = None  # Grid cell uncertainty per frequency
+    transition: Transition  # State and uncertainty over abstract locations
     _ovc_start: Optional[int] = None  # Cached OVC start index for transition property
 
-    @property
-    def grid_cells(self) -> List[Tensor]:
-        """Return grid-cell activations (excluding any OVC modules).
-
-        Returns:
-            Per-frequency grid-cell activations.
-        """
-        if self._ovc_start is None:
-            return self.cells
-        return self.cells[: self._ovc_start]
-
-    @property
-    def ovc_cells(self) -> Optional[List[Tensor]]:
-        """Return OVC activations if present.
-
-        Returns:
-            Per-frequency OVC activations, or `None` if OVC modules are disabled.
-        """
-        if self._ovc_start is None:
-            return None
-        return self.cells[self._ovc_start :]
-
-    def new(self, **kwargs) -> "MECState":
-        """Return a new state with updated fields.
-
-        This is a convenience helper used to keep state updates explicit while
-        avoiding in-place mutation.
-
-        Args:
-            **kwargs: Field overrides for the new state.
-
-        Returns:
-            A new `MECState` instance.
-        """
+    def new(self, cells: AbstractLocation, uncertanty: MultiScaleCode) -> "MECState":
         copy = self.__dict__.copy()  # TODO: Should we use detach here?
-        copy.update(kwargs)
+        copy.update({"transition": Transition(mean=cells, uncertainty=uncertanty)})
         return MECState(**copy)
-
-    @property
-    def transition(self) -> Transition:
-        """Convert the state to a `Transition`.
-
-        Returns:
-            A `Transition(mean=cells, uncertainty=uncertainty)`.
-        """
-        return Transition(mean=self.cells, uncertainty=self.uncertainty)
 
     def detach(self) -> "MECState":
         """Return a detached copy.
@@ -102,11 +59,31 @@ class MECState:
         Returns:
             A detached copy of the current state.
         """
-        return MECState(
-            cells=[v.detach() for v in self.cells] if self.cells is not None else None,
-            uncertainty=[v.detach() for v in self.uncertainty] if self.uncertainty is not None else None,
-            _ovc_start=self._ovc_start,
-        )
+        cells = [v.detach() for v in self.cells]
+        uncertainty = [v.detach() for v in self.uncertainty] if self.uncertainty else None
+        return self.new(cells, uncertainty)
+
+    @property
+    def cells(self) -> List[Tensor]:
+        """Return grid + OVC activations."""
+        return self.transition.mean
+
+    @property
+    def uncertainty(self) -> Optional[List[Tensor]]:
+        """Return grid + OVC uncertainties."""
+        return self.transition.uncertainty
+
+    @property
+    def grid_cells(self) -> List[Tensor]:
+        if self._ovc_start is None:
+            return self.cells
+        return self.cells[: self._ovc_start]
+
+    @property
+    def ovc_cells(self) -> Optional[List[Tensor]]:
+        if self._ovc_start is None:
+            return None
+        return self.cells[self._ovc_start :]
 
 
 class MECModel(nn.Module):
@@ -148,7 +125,8 @@ class MECModel(nn.Module):
         """
         g0 = [g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.cells_init]
         sigma_0 = [std.unsqueeze(0).expand(batch_size, -1).to(device) for std in self.uncertainty_init]
-        return MECState(cells=g0, uncertainty=sigma_0, _ovc_start=self.ovc.start if self.ovc.n_freq > 0 else None)
+        transition = Transition(mean=g0, uncertainty=sigma_0)
+        return MECState(transition, _ovc_start=self.ovc.start if self.ovc.n_freq > 0 else None)
 
     def set_runtime(self, *, p2g_scale_offset: float):
         """Set runtime hyperparameters.
@@ -219,7 +197,7 @@ class MECModel(nn.Module):
         else:
             g_gen = self._clamp(transition.mean)
 
-        return g_gen, state.new(cells=cells_next, uncertainty=transition.uncertainty)
+        return g_gen, state.new(cells_next, transition.uncertainty)
 
     def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
         """Run inference by fusing memory and OVC cues into the state.
@@ -246,7 +224,7 @@ class MECModel(nn.Module):
             cells_next = transition.mean
         g_inf = self._clamp(cells_next)
 
-        return g_inf, state.new(cells=cells_next, uncertainty=transition.uncertainty)
+        return g_inf, state.new(cells_next, transition.uncertainty)
 
     def _clamp(self, g: List[Tensor]) -> List[Tensor]:
         """Clamp activations for numerical stability.

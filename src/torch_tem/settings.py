@@ -650,6 +650,19 @@ class LocDistributionSettings(BaseModel):
         ge=0.0,
         description="Scale factor for sampling noise (mu + noise_scale * sigma * eps).",
     )
+    activation: Activation = Field(
+        default="leaky_relu",
+        frozen=True,
+        description="Activation function for attractor dynamics.",
+    )
+    clamp_min: float = Field(
+        default=-1.0,
+        description="Minimum clamp value for Hebbian memory weights.",
+    )
+    clamp_max: float = Field(
+        default=1.0,
+        description="Maximum clamp value for Hebbian memory weights.",
+    )
 
 
 class HPCSettings(BaseModel):

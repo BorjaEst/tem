@@ -9,12 +9,12 @@ from torch import Tensor, nn
 
 from torch_tem import utils
 from torch_tem.core.hpc.attractor import AttractorNetwork
-from torch_tem.core.hpc.distribution import GroundedLocationDistribution
+from torch_tem.core.hpc.distribution import LocationDistribution
 from torch_tem.core.hpc.hebbian import HebbianUpdater
 from torch_tem.settings import HPCSettings
 from torch_tem.types import Matrix
 
-__all__ = ["HPCModel", "HPCState", "AttractorNetwork", "GroundedLocationDistribution", "HebbianUpdater"]
+__all__ = ["HPCModel", "HPCState", "AttractorNetwork", "LocationDistribution", "HebbianUpdater"]
 
 
 @dataclass
@@ -50,7 +50,7 @@ class HPCModel(nn.Module):
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
         self.hebbian_updater = HebbianUpdater(shape, n_stages, f_init, settings.hebbian_update)
-        self.distribution = GroundedLocationDistribution(shape, settings.distribution)
+        self.distribution = LocationDistribution(shape, settings.distribution)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
@@ -97,7 +97,7 @@ class HPCModel(nn.Module):
         return p, HPCState(p=p, memory=state.memory)
 
     def inference(self, x_: List[Tensor], g_: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
-        mu_p = self.f_p([g_[f] * x_[f] for f in range(self.n_freq)])
+        mu_p = self.distribution(x_, g_)  # TODO rename to location
         if not self._settings.do_sample:
             return mu_p, HPCState(p=mu_p, memory=state.memory)
         p = self.distribution.sample(mu_p)
@@ -109,6 +109,3 @@ class HPCModel(nn.Module):
         elif mode == "hierarchical":
             return self.attractor(p_query, state.memory[0], masks=self.masks_hierarchical)
         raise ValueError(f"Invalid mode '{mode}'. Expected 'full' or 'hierarchical'.")
-
-    def f_p(self, p):
-        return [utils.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p] if type(p) is list else utils.leaky_relu(torch.clamp(p, min=-1, max=1))

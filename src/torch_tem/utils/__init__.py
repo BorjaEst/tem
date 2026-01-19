@@ -14,18 +14,18 @@ from torch import Tensor
 from torch_tem.types import Matrix, Reduction, Transition, Vector
 
 
-def sample_diag_gaussian(mu: List[Tensor], sigma: List[Tensor], *, enabled: bool, scale: float = 1.0) -> List[Tensor]:
+def sample_diag_gaussian(transition: Transition, *, enabled: bool, scale: float = 1.0) -> List[Tensor]:
     """Sample a diagonal Gaussian distribution.
 
     Args:
-        mu: Per-frequency distribution means.
-        sigma: Per-frequency standard deviations.
+        transition: Transition object with mean and uncertainty.
         enabled: Whether to sample or return means.
         scale: Optional noise scale multiplier.
 
     Returns:
         Sampled activations if enabled, otherwise the means.
     """
+    mu, sigma = transition.mean, transition.uncertainty
     if not enabled:
         return mu
     return [mu_f + float(scale) * sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu, sigma)]

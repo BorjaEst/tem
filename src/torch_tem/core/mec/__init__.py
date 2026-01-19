@@ -16,6 +16,7 @@ import torch
 from scipy.stats import truncnorm
 from torch import Tensor, nn
 
+from torch_tem import utils
 from torch_tem.core.mec.ovc import OVCCorrection
 from torch_tem.core.mec.p2g import P2GMemory
 from torch_tem.core.mec.path import PathIntegrator
@@ -205,7 +206,7 @@ class MECModel(nn.Module):
 
         # 1) Action-driven transition for the state (legacy g_path)
         transition = self.path(a, state.cells, no_direc_mask=None)
-        cells_next = self._sample(transition.mean, transition.uncertainty)
+        cells_next = utils.sample_diag_gaussian(transition, enabled=self._settings.do_sample)
 
         # 2) g_gen: reuse mu when possible, only compute no_direc when needed
         if any_shiny:
@@ -236,7 +237,7 @@ class MECModel(nn.Module):
         transition = self.ovc(locations, transition) if self.ovc.n_freq > 0 else transition
 
         # Apply central sampling policy (legacy parity: g_inf is sampled when do_sample=True)
-        cells_next = self._sample(transition.mean, transition.uncertainty)
+        cells_next = utils.sample_diag_gaussian(transition, enabled=self._settings.do_sample)
         g_inf = self._clamp(cells_next)
 
         return g_inf, state.new(cells=cells_next, uncertainty=transition.uncertainty)
@@ -251,20 +252,3 @@ class MECModel(nn.Module):
             Clamped activations.
         """
         return [torch.clamp(g_f, min=self._settings.clamp_min, max=self._settings.clamp_max) for g_f in g]
-
-    def _sample(self, mu: List[Tensor], sigma: List[Tensor]) -> List[Tensor]:
-        """Sample from a diagonal Gaussian if enabled.
-
-        When `settings.do_sample` is true, returns `mu + sigma * eps` with
-        `eps ~ N(0, I)`.
-
-        Args:
-            mu: Per-frequency distribution means.
-            sigma: Per-frequency distribution uncertainties.
-
-        Returns:
-            Sampled activations if sampling is enabled, otherwise `mu`.
-        """
-        if self._settings.do_sample:
-            return [mu_f + sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu, sigma)]
-        return mu

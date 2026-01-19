@@ -3,7 +3,7 @@ import logging
 import os
 from itertools import combinations
 from pathlib import Path
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -35,39 +35,127 @@ def gaussian(mean: Tensor, std: Tensor, *, scale: float = 1.0) -> Tensor:
 
 
 def inv_var_trans(base: Transition, corr: Transition, mask: Optional[Tensor] = None, freqs: Optional[range] = None) -> Transition:
-    """Fuse correction into base using inverse-variance weighting.
+    """Fuse a correction estimate into a base transition.
 
-    Supports selective fusion by frequency range and batch masking.
-    Uses precision weighting to combine two multi-scale estimates.
+    Mean is always updated. Uncertainty is fused using inverse-variance
+    weighting when available.
+
+    Semantics for missing uncertainty:
+    - If ``corr.uncertainty is None``: treat it as perfect precision (sigma = 0).
+    - If ``base.uncertainty is None``: update mean only and keep uncertainty ``None``.
+
+    Args:
+        base: Base transition to correct.
+        corr: Correction transition. If ``freqs`` is provided, the correction
+            is assumed to be indexed relative to that frequency slice.
+        mask: Optional boolean mask over batch items (shape ``(B,)``) selecting
+            environments to update.
+        freqs: Optional frequency indices in the base transition to update.
+
+    Returns:
+        Fused ``Transition``.
     """
+
+    if mask is not None:
+        if mask.ndim != 1:
+            raise ValueError(f"mask must be 1D (B,), got shape={tuple(mask.shape)}")
+        if mask.dtype is not torch.bool:
+            raise TypeError(f"mask must be boolean, got dtype={mask.dtype}")
+
     freqs = range(len(base.mean)) if freqs is None else freqs
-    mu_out, sigma_out = list(base.mean), list(base.uncertainty)
-    idx = slice(None) if mask is None else mask
+    if len(corr.mean) != len(freqs):
+        raise ValueError(f"corr.mean length ({len(corr.mean)}) must match freqs length ({len(freqs)})")
+    if corr.uncertainty is not None and len(corr.uncertainty) != len(freqs):
+        raise ValueError(f"corr.uncertainty length ({len(corr.uncertainty)}) must match freqs length ({len(freqs)})")
+
+    mu_out = list(base.mean)
+
+    # Mean-only mode: update mean entries, keep uncertainty None (do_sample=False pathways)
+    if base.uncertainty is None:
+        for i, f in enumerate(freqs):
+            base_mu = base.mean[f]
+            corr_mu = corr.mean[i]
+
+            if mask is None:
+                mu_out[f] = corr_mu
+                continue
+
+            mu_f = base_mu.clone()
+            mu_f[mask] = corr_mu
+            mu_out[f] = mu_f
+
+        return Transition(mean=mu_out, uncertainty=None)
+
+    sigma_out = list(base.uncertainty)
 
     for i, f in enumerate(freqs):
-        mu_f, sigma_f = base.mean[f].clone(), base.uncertainty[f].clone()
-        mu_f[idx], sigma_f[idx] = inv_var_weight([base.mean[f][idx], corr.mean[i]], [base.uncertainty[f][idx], corr.uncertainty[i]])
+        base_mu = base.mean[f]
+        base_sigma = base.uncertainty[f]
+
+        corr_mu = corr.mean[i]
+        corr_sigma = corr.uncertainty[i] if corr.uncertainty is not None else None
+
+        if mask is None:
+            mu_new, sigma_new = inv_var_weight([base_mu, corr_mu], [base_sigma, corr_sigma])
+            mu_out[f], sigma_out[f] = mu_new, sigma_new
+            continue
+
+        mu_sel, sigma_sel = inv_var_weight([base_mu[mask], corr_mu], [base_sigma[mask], corr_sigma])
+        mu_f = base_mu.clone()
+        sigma_f = base_sigma.clone()
+        mu_f[mask] = mu_sel
+        sigma_f[mask] = sigma_sel
         mu_out[f], sigma_out[f] = mu_f, sigma_f
 
     return Transition(mean=mu_out, uncertainty=sigma_out)
 
 
-def inv_var_weight(mus, sigmas):
+def inv_var_weight(mus: Sequence[Tensor], sigmas: Sequence[Tensor | None], *, eps: float = 1e-8) -> Tuple[Tensor, Tensor]:
+    """Inverse-variance (precision) weighted fusion of diagonal Gaussians.
+
+    This fuses multiple independent Gaussian estimates with diagonal covariance.
+
+    Missing sigma is treated as perfect precision (sigma == 0), meaning the
+    corresponding mean dominates and the fused sigma becomes exactly zero for
+    those elements.
+
+    Args:
+        mus: Sequence of mean tensors, all same shape.
+        sigmas: Sequence of std-dev tensors (same shapes as mus) or ``None``.
+        eps: Small value to avoid division-by-zero for non-perfect entries.
+
+    Returns:
+        (mu, sigma): precision-weighted mean and std-dev.
     """
-    Accepts lists batches of row vectors of means and standard deviations, with batches along dim 0
-    Return tensors of inverse-variance weighted averages and tensors of inverse-variance weighted standard deviations
-    """
-    # Stack vectors together along first dimension
-    mus = torch.stack(mus, dim=0)
-    sigmas = torch.stack(sigmas, dim=0)
-    # Calculate inverse variance weighted variance from sum over reciprocal of squared sigmas
-    inv_var_var = 1.0 / torch.sum(1.0 / (sigmas**2), dim=0)
-    # Calculate inverse variance weighted average
-    inv_var_avg = torch.sum(mus / (sigmas**2), dim=0) * inv_var_var
-    # Convert weigthed variance to sigma
-    inv_var_sigma = torch.sqrt(inv_var_var)
-    # And return results
-    return inv_var_avg, inv_var_sigma
+    if len(mus) == 0:
+        raise ValueError("mus must be non-empty")
+    if len(mus) != len(sigmas):
+        raise ValueError(f"mus and sigmas must have same length, got {len(mus)} and {len(sigmas)}")
+
+    sigma_tensors = [torch.zeros_like(mu) if sigma is None else sigma for mu, sigma in zip(mus, sigmas)]
+
+    mu_stack = torch.stack(list(mus), dim=0)
+    sigma_stack = torch.stack(sigma_tensors, dim=0)
+
+    # Compute precision = 1 / var (with safe epsilon for non-perfect values)
+    var = torch.square(sigma_stack).clamp_min(eps)
+    precision = torch.reciprocal(var)
+
+    precision_sum = precision.sum(dim=0)
+    mu_out = (mu_stack * precision).sum(dim=0) / precision_sum.clamp_min(eps)
+    sigma_out = torch.sqrt(torch.reciprocal(precision_sum.clamp_min(eps)))
+
+    # If any source has perfect precision (sigma == 0), the fused result should be exact.
+    perfect = sigma_stack == 0
+    perfect_any = perfect.any(dim=0)
+    if perfect_any.any():
+        weights = perfect.to(dtype=mu_out.dtype)
+        denom = weights.sum(dim=0).clamp_min(1.0)
+        mu_perfect = (mu_stack * weights).sum(dim=0) / denom
+        mu_out = torch.where(perfect_any, mu_perfect, mu_out)
+        sigma_out = torch.where(perfect_any, torch.zeros_like(sigma_out), sigma_out)
+
+    return mu_out, sigma_out
 
 
 def softmax(o):

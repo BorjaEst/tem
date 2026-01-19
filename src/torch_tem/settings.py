@@ -545,6 +545,11 @@ class PathSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    do_sample: bool = Field(  # rename later to something that we deduce, it runs the uncertainty sampling
+        default=False,
+        frozen=True,
+        description="Whether to sample from location distributions or use means.",
+    )
     hidden_dim: int = Field(
         default=20,
         frozen=True,

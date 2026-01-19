@@ -19,6 +19,7 @@ from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules import MLP
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.projection import ProjectionModule
+from torch_tem.settings import TEMSettings
 from torch_tem.types import Transition
 
 
@@ -344,24 +345,6 @@ class Parameters(BaseModel):
         """Initial frequencies of each module, including object vector cell modules."""
         return self.f_initial_base + self.f_initial_base[0 : self.n_f_ovc]
 
-    @computed_field
-    @property
-    def i_attractor(self) -> int:
-        """Number of iterations of attractor dynamics for memory retrieval."""
-        return self.n_f_g
-
-    @computed_field
-    @property
-    def i_attractor_max_freq_inf(self) -> list[int]:
-        """Maximum iterations of attractor dynamics per frequency in inference model."""
-        return [self.i_attractor for _ in range(self.n_f)]
-
-    @computed_field
-    @property
-    def i_attractor_max_freq_gen(self) -> list[int]:
-        """Maximum iterations of attractor dynamics per frequency in generative model."""
-        return [self.i_attractor - freq_nr for freq_nr in range(self.n_f_g)] + [self.i_attractor for _ in range(self.n_f_ovc)]
-
     # --- Connectivity matrices
     @computed_field
     @property
@@ -391,34 +374,6 @@ class Parameters(BaseModel):
                         mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
 
         return mask
-
-    @computed_field
-    @property
-    def p_retrieve_mask_inf(self) -> list[torch.Tensor]:
-        """Hierarchical memory retrieval masks for inference model."""
-        masks = [torch.zeros(sum(self.n_p)) for _ in range(self.i_attractor)]
-        n_p = np.cumsum(np.concatenate(([0], self.n_p)))
-
-        # For each frequency, insert ones in the mask for those iterations
-        for f, max_i in enumerate(self.i_attractor_max_freq_inf):
-            for i in range(max_i):
-                masks[i][n_p[f] : n_p[f + 1]] = 1.0
-
-        return masks
-
-    @computed_field
-    @property
-    def p_retrieve_mask_gen(self) -> list[torch.Tensor]:
-        """Hierarchical memory retrieval masks for generative model."""
-        masks = [torch.zeros(sum(self.n_p)) for _ in range(self.i_attractor)]
-        n_p = np.cumsum(np.concatenate(([0], self.n_p)))
-
-        # For each frequency, insert ones in the mask for those iterations
-        for f, max_i in enumerate(self.i_attractor_max_freq_gen):
-            for i in range(max_i):
-                masks[i][n_p[f] : n_p[f + 1]] = 1.0
-
-        return masks
 
     @computed_field
     @property
@@ -517,13 +472,8 @@ class Parameters(BaseModel):
             "n_x": self.n_x,
             "n_p": self.n_p,
             "f_initial": self.f_initial,
-            "i_attractor": self.i_attractor,
-            "i_attractor_max_freq_inf": self.i_attractor_max_freq_inf,
-            "i_attractor_max_freq_gen": self.i_attractor_max_freq_gen,
             # masks / matrices
             "p_update_mask": self.p_update_mask,
-            "p_retrieve_mask_inf": self.p_retrieve_mask_inf,
-            "p_retrieve_mask_gen": self.p_retrieve_mask_gen,
             "g_connections": self.g_connections,
             "W_repeat": self.W_repeat,
             "W_tile": self.W_tile,
@@ -545,37 +495,6 @@ class RuntimeHyperparameters:
     eta: float = 0.0  # Hebbian learning rate (rate of remembering)
     hebbian_decay: float = 0.9999  # Hebbian decay factor (rate of forgetting)
     p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
-
-
-# This specifies how parameters are updated at every backpropagation iteration/gradient update
-def parameter_iteration(iteration, params):
-    # Calculate eta (rate of remembering) and hebian decay (rate of forgetting) for Hebbian memory updates
-    hebbian_decay = params.get("hebbian_decay")
-    eta = min((iteration + 1) / params["eta_it"], 1) * params["eta"]
-    lamb = min((iteration + 1) / params["lambda_it"], 1) * hebbian_decay
-    # Calculate current scaling of variance offset for ground location inference
-    p2g_scale_offset = 1 / (1 + np.exp((iteration - params["p2g_sig_half_it"]) / params["p2g_sig_scale_it"]))
-    # Calculate current learning rate
-    lr = max(params["lr_min"] + (params["lr_max"] - params["lr_min"]) * (params["lr_decay_rate"] ** (iteration / params["lr_decay_steps"])), params["lr_min"])
-    # Calculate center of walk length window, within which the walk lenghts of new walks are uniformly sampled
-    # Use max_steps (Lightning's Trainer.max_steps) as the training horizon
-    max_steps = max(int(params.get("max_steps", 1)), 1)
-    walk_length_center = (
-        params["walk_it_max"] - params["walk_it_window"] * 0.5 - min((iteration + 1) / max_steps, 1) * (params["walk_it_max"] - params["walk_it_min"] - params["walk_it_window"])
-    )
-    # Calculate current loss weights
-    L_p_g = min((iteration + 1) / params["loss_weights_p_g_it"], 1) * params["loss_weights_p"]
-    L_p_x = min((iteration + 1) / params["loss_weights_p_g_it"], 1) * params["loss_weights_p"] * (1 - p2g_scale_offset)
-    L_x_gen = params["loss_weights_x"]
-    L_x_g = params["loss_weights_x"]
-    L_x_p = params["loss_weights_x"]
-    L_g = min((iteration + 1) / params["loss_weights_p_g_it"], 1) * params["loss_weights_g"]
-    L_reg_g = (1 - min((iteration + 1) / params["loss_weights_reg_g_it"], 1)) * params["loss_weights_reg_g"]
-    L_reg_p = (1 - min((iteration + 1) / params["loss_weights_reg_p_it"], 1)) * params["loss_weights_reg_p"]
-    # And concatenate them in the order expected by the model
-    loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p])
-    # Return all updated parameters
-    return eta, lamb, p2g_scale_offset, lr, walk_length_center, loss_weights
 
 
 @dataclass
@@ -631,7 +550,7 @@ class TEMModel(nn.Module):
         super(TEMModel, self).__init__()
 
         # Accept either Parameters object or legacy dict
-        self._params = params
+        self._params = params  # TODO: replace by settings
         self.hyper = params.to_legacy_dict()
 
         # Initialize runtime hyperparameters with safe defaults
@@ -651,7 +570,7 @@ class TEMModel(nn.Module):
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
         self.lec = lec = LECModel(n_c, f_init, params.lec_settings)
         self.mec = mec = MECModel(n_a, n_p, n_g, f_init, params.mec_settings)
-        self.hpc = hpc = HPCModel(params.i_attractor, n_p, f_init, params.hpc_settings)  # i_attactor must be equal to n of frequencies for grid cells
+        self.hpc = hpc = HPCModel(mec.grid_n_freq, n_p, f_init, params.hpc_settings)
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
         self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
 
@@ -668,6 +587,11 @@ class TEMModel(nn.Module):
         self.runtime.p2g_scale_offset = p2g_scale_offset
         self.mec.set_runtime(p2g_scale_offset=p2g_scale_offset)
         self.hpc.set_runtime(eta=eta, hebbian_decay=hebbian_decay)
+
+    @property
+    def settings(self) -> TEMSettings:
+        """Return TEM settings object constructed from model parameters."""
+        return self._params
 
     def _apply(self, fn):
         """Override _apply to move tensors in self.hyper when model is moved to GPU/CPU."""
@@ -710,17 +634,17 @@ class TEMModel(nn.Module):
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
-        p_xi = self.hpc.attractor(x_, memory[1], masks=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
+        p_xi = self.hpc.recall(x_, hpc_state, mode="full") if self.hyper["use_x_cued_recall"] else None
 
         # Transition: MEC path integration (action-driven)
         g_gen, mec_state = self.mec.generative(a, locations, mec_state)  # Updates mec state with g_path
         g_ = self.mec_projection(g_gen)
-        p_gg = self.hpc.attractor(g_, memory[0], masks=self.hyper["p_retrieve_mask_gen"])
+        p_gg = self.hpc.recall(g_, hpc_state, mode="hierarchical")
 
         # Infer abstract location by using state and sensory experience
         g_inf, mec_state = self.mec.inference(p_xi, locations=locations, state=mec_state)
         g_ = self.mec_projection(g_inf)
-        p_gi = self.hpc.attractor(g_, memory[0], masks=self.hyper["p_retrieve_mask_gen"])
+        p_gi = self.hpc.recall(g_, hpc_state, mode="hierarchical")
 
         # Generate grounded location from inferred abstract location
         p_gen_gi, hpc_state = self.hpc.generative(p_gi, hpc_state)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -43,17 +43,22 @@ class HPCRuntime:
 class HPCModel(nn.Module):
     """HPC façade that preserves legacy API while delegating to submodules."""
 
-    def __init__(self, i_attractor: int, shape: List[int], f_init: List[float], settings: HPCSettings):
+    def __init__(self, grid_n_freq: int, shape: List[int], f_init: List[float], settings: HPCSettings):
         super().__init__()
+        self._shape, self._n_freq = list(shape), len(shape)
+        self._grid_n_freq = int(grid_n_freq)
         self._settings = settings
-        self._shape = list(shape)
-        self._i_attractor = int(i_attractor)
+        self._i_attractor = grid_n_freq
 
-        if self._i_attractor < 1 or self._i_attractor > len(self._shape):
-            raise ValueError(f"i_attractor must be in [1, n_freq]. Got i_attractor={self._i_attractor}, n_freq={len(self._shape)}.")
+        # Store masks as buffers for device management
+        masks = torch.stack(gen_masks_full(shape, n_stages=grid_n_freq))
+        self.register_buffer("masks_full", masks, persistent=False)
+        masks = torch.stack(gen_masks_hierarchical(shape, n_stages=grid_n_freq))
+        self.register_buffer("masks_hierarchical", masks, persistent=False)
 
         self.runtime = HPCRuntime()
 
+        # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
         self.hebbian_updater = HebbianUpdater(shape=self._shape, i_attractor=self._i_attractor, f_init=f_init)
         self.distribution = GroundedLocationDistribution(shape=self._shape)
@@ -79,6 +84,11 @@ class HPCModel(nn.Module):
         self.runtime.hebbian_decay = float(hebbian_decay)
 
     @property
+    def settings(self) -> HPCSettings:
+        """HPC module settings."""
+        return self._settings
+
+    @property
     def shape(self) -> List[int]:
         """Dimensionality of features per frequency module."""
         return self._shape
@@ -86,7 +96,7 @@ class HPCModel(nn.Module):
     @property
     def n_freq(self) -> int:
         """Number of frequency modules."""
-        return len(self._shape)
+        return self._n_freq
 
     @property
     def i_attractor(self) -> int:
@@ -127,29 +137,36 @@ class HPCModel(nn.Module):
             hebbian_decay=self.runtime.hebbian_decay,
         )
 
+    def recall(self, p_query: List[Tensor], state: HPCState, *, mode: Literal["full", "hierarchical"]) -> List[Tensor]:
+        if mode == "full":
+            return self.attractor(p_query, state.memory[1], masks=self.masks_full)
+        elif mode == "hierarchical":
+            return self.attractor(p_query, state.memory[0], masks=self.masks_hierarchical)
+        raise ValueError(f"Invalid mode '{mode}'. Expected 'full' or 'hierarchical'.")
+
     def f_p(self, p):
         return [utils.leaky_relu(torch.clamp(p_f, min=-1, max=1)) for p_f in p] if type(p) is list else utils.leaky_relu(torch.clamp(p, min=-1, max=1))
 
 
-def p_retrieve_mask_inf(hpc: HPCModel) -> List[torch.Tensor]:
-    """Hierarchical memory retrieval masks for inference model (legacy helper)."""
-    n_p, i_attractor = hpc.shape, hpc.i_attractor
-    masks = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
-    n_p = np.cumsum(np.concatenate(([0], n_p)))
+def gen_masks_full(hpc_shape: List[int], n_stages: int) -> List[torch.Tensor]:
+    masks = [torch.zeros(sum(hpc_shape)) for _ in range(n_stages)]
+    i_attractor_max_freq_inf = [n_stages for _ in range(n_stages)]
+    n_p = np.cumsum([0] + hpc_shape)
 
-    for f, max_i in enumerate(hpc.i_attractor_max_freq_inf):
+    # For each frequency, insert ones in the mask for those iterations
+    for f, max_i in enumerate(i_attractor_max_freq_inf):
         for i in range(max_i):
             masks[i][n_p[f] : n_p[f + 1]] = 1.0
     return masks
 
 
-def p_retrieve_mask_gen(hpc: HPCModel) -> List[torch.Tensor]:
-    """Hierarchical memory retrieval masks for generative model (legacy helper)."""
-    n_p, i_attractor = hpc.shape, hpc.i_attractor
-    masks = [torch.zeros(sum(n_p)) for _ in range(i_attractor)]
-    n_p = np.cumsum(np.concatenate(([0], n_p)))
+def gen_masks_hierarchical(hpc_shape: List[int], n_stages: int) -> List[torch.Tensor]:
+    masks = [torch.zeros(sum(hpc_shape)) for _ in range(n_stages)]
+    i_attractor_max_freq_gen = [n_stages - f for f in range(n_stages)] + [n_stages for _ in range(len(hpc_shape) - n_stages)]
+    n_p = np.cumsum([0] + hpc_shape)
 
-    for f, max_i in enumerate(hpc.i_attractor_max_freq_gen):
+    # For each frequency, insert ones in the mask for those iterations
+    for f, max_i in enumerate(i_attractor_max_freq_gen):
         for i in range(max_i):
             masks[i][n_p[f] : n_p[f + 1]] = 1.0
     return masks

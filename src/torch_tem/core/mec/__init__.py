@@ -79,7 +79,7 @@ class MECState:
         Returns:
             A new `MECState` instance.
         """
-        copy = self.__dict__.copy()
+        copy = self.__dict__.copy()  # TODO: Should we use detach here?
         copy.update(kwargs)
         return MECState(**copy)
 
@@ -127,7 +127,7 @@ class MECModel(nn.Module):
 
         # Composable submodules (single responsibility each)
         self.path = PathIntegrator(n_a, shape, f_init, settings.path)
-        self.memory = P2GMemory(n_p, shape, settings.p2g)
+        self.p2g = P2GMemory(n_p, shape, settings.p2g)
         self.ovc = OVCCorrection(shape, settings.ovc)
 
         # Prior: learned "default phase" of the grid code at reset
@@ -155,7 +155,7 @@ class MECModel(nn.Module):
         Args:
             p2g_scale_offset: Scale factor for the P2G uncertainty curriculum.
         """
-        self.memory.scale_curriculum_sigma(p2g_scale_offset)
+        self.p2g.scale_curriculum_sigma(p2g_scale_offset)
 
     @property
     def settings(self) -> MECSettings:
@@ -171,6 +171,13 @@ class MECModel(nn.Module):
     def n_freq(self) -> int:
         """Return the number of frequency modules."""
         return self._n_freq
+
+    @property
+    def grid_n_freq(self) -> int:
+        """Return the number of grid (spatial) frequency modules."""
+        if self.settings.ovc.n_freq is None:
+            return self._n_freq
+        return self._n_freq - self.ovc.n_freq
 
     def forward(self, *, _) -> Tuple[List[Tensor], MECState]:
         """Not implemented.
@@ -225,7 +232,7 @@ class MECModel(nn.Module):
             and `new_state` is the updated MEC state.
         """
         # Step 1: Correct path integration with memory-based inference
-        transition = self.memory(p_x, state.transition)
+        transition = self.p2g(p_x, state.transition)
 
         # Step 2: Apply OVC correction from shiny landmarks (if enabled)
         transition = self.ovc(locations, transition) if self.ovc.n_freq > 0 else transition

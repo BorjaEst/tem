@@ -710,17 +710,17 @@ class TEMModel(nn.Module):
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
-        p_xi = self.hpc.attractor(x_, memory[1], retrieve_it_mask=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
+        p_xi = self.hpc.attractor(x_, memory[1], masks=self.hyper["p_retrieve_mask_inf"]) if self.hyper["use_x_cued_recall"] else None
 
         # Transition: MEC path integration (action-driven)
         g_gen, mec_state = self.mec.generative(a, locations, mec_state)  # Updates mec state with g_path
         g_ = self.mec_projection(g_gen)
-        p_gg = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        p_gg = self.hpc.attractor(g_, memory[0], masks=self.hyper["p_retrieve_mask_gen"])
 
         # Infer abstract location by using state and sensory experience
         g_inf, mec_state = self.mec.inference(p_xi, locations=locations, state=mec_state)
         g_ = self.mec_projection(g_inf)
-        p_gi = self.hpc.attractor(g_, memory[0], retrieve_it_mask=self.hyper["p_retrieve_mask_gen"])
+        p_gi = self.hpc.attractor(g_, memory[0], masks=self.hyper["p_retrieve_mask_gen"])
 
         # Generate grounded location from inferred abstract location
         p_gen_gi, hpc_state = self.hpc.generative(p_gi, hpc_state)

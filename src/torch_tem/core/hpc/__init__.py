@@ -54,7 +54,7 @@ class HPCModel(nn.Module):
 
         self.runtime = HPCRuntime()
 
-        self.attractor = AttractorNetwork(shape=self._shape, i_attractor=self._i_attractor, kappa=self._settings.kappa)
+        self.attractor = AttractorNetwork(shape, settings.attractor)
         self.hebbian_updater = HebbianUpdater(shape=self._shape, i_attractor=self._i_attractor, f_init=f_init)
         self.distribution = GroundedLocationDistribution(shape=self._shape)
 

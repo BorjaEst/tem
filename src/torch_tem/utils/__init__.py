@@ -84,6 +84,22 @@ def leaky_relu(o):
     return torch.nn.functional.leaky_relu(o)
 
 
+def activation_from_str(name: str):
+    """Return activation function from string name."""
+    if name == "none":
+        return lambda x: x
+    if name == "relu":
+        return torch.nn.functional.relu
+    name = name.lower()
+    if name == "leaky_relu":
+        return torch.nn.functional.leaky_relu
+    if name == "sigmoid":
+        return torch.sigmoid
+    if name == "softmax":
+        return torch.nn.Softmax(dim=-1)
+    raise ValueError(f"Unknown activation function: {name}")
+
+
 def squared_error(value, target):
     """
     Calculates mean squared error (L2 norm) between (list of) tensors value and target by using torch MSE loss

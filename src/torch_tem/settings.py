@@ -56,7 +56,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from torch_tem.types import Reduction, Scalar
 
-Activation = Literal["sigmoid", "none"]
+Activation = Literal["leaky_relu", "sigmoid", "none"]
 ProjectionMode = Literal["identity", "tiling", "low_rank", "random"]
 InitStrategy = Literal["identity", "random"]
 
@@ -597,9 +597,37 @@ class AttractorSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    n_iters: int = Field(
-        default=3,
-        description="Number of attractor update iterations per time step.",
+    kappa: float = Field(
+        default=0.8,
+        description="Hebbian retrieval decay term",
+    )
+    activation: Activation = Field(
+        default="leaky_relu",
+        frozen=True,
+        description="Activation function for attractor dynamics.",
+    )
+    clamp_min: float = Field(
+        default=-1.0,
+        description="Minimum clamp value for attractor dynamics.",
+    )
+    clamp_max: float = Field(
+        default=1.0,
+        description="Maximum clamp value for attractor dynamics.",
+    )
+
+
+class HebbianUpdateSettings(BaseModel):
+    """Settings for Hebbian update modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    clamp_min: float = Field(
+        default=-1.0,
+        description="Minimum clamp value for Hebbian memory weights.",
+    )
+    clamp_max: float = Field(
+        default=1.0,
+        description="Maximum clamp value for Hebbian memory weights.",
     )
 
 
@@ -608,11 +636,20 @@ class LocDistributionSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-
-class HebbianUpdateSettings(BaseModel):
-    """Settings for Hebbian update modules."""
-
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+    sigma_activation: Literal["exp", "softplus"] = Field(
+        default="exp",
+        description="Activation for sigma head output. 'exp' matches legacy behavior.",
+    )
+    sigma_min: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Optional lower bound for sigma (applied after activation).",
+    )
+    noise_scale: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Scale factor for sampling noise (mu + noise_scale * sigma * eps).",
+    )
 
 
 class HPCSettings(BaseModel):
@@ -629,10 +666,7 @@ class HPCSettings(BaseModel):
         default=False,
         description="Use common memory for generative and inference network",
     )
-    kappa: float = Field(
-        default=0.8,
-        description="Hebbian retrieval decay term",
-    )
+
     do_sample: bool = Field(
         default=False,
         description="Whether to sample, or assume no noise and simply take mean of all distributions",
@@ -649,4 +683,23 @@ class HPCSettings(BaseModel):
     hebbian_update: HebbianUpdateSettings = Field(
         default_factory=HebbianUpdateSettings,
         description="Hebbian update module settings.",
+    )
+
+
+class TEMSettings(BaseModel):
+    """Complete settings tree for TEM model configuration."""
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    lec: LECSettings = Field(
+        default_factory=LECSettings,
+        description="LEC module settings.",
+    )
+    mec: MECSettings = Field(
+        default_factory=MECSettings,
+        description="MEC module settings.",
+    )
+    hpc: HPCSettings = Field(
+        default_factory=HPCSettings,
+        description="HPC module settings.",
     )

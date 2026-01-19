@@ -11,7 +11,7 @@ from torch_tem.core.hpc.attractor import AttractorNetwork
 from torch_tem.core.hpc.hebbian import HebbianUpdater
 from torch_tem.core.hpc.location import GroundLocation
 from torch_tem.settings import HPCSettings
-from torch_tem.types import Matrix, Transition
+from torch_tem.types import GroundedLocation, Matrix, MultiScaleCode, Transition
 
 __all__ = ["HPCModel", "HPCState", "AttractorNetwork", "GroundLocation", "HebbianUpdater"]
 
@@ -22,6 +22,11 @@ class HPCState:
 
     transition: Transition  # State and uncertainty over grounded locations
     memory: List[Matrix]  # Memory matrices
+
+    def new(self, cells: GroundedLocation, uncertanty: MultiScaleCode) -> "HPCState":
+        copy = self.__dict__.copy()  # TODO: Should we use detach here?
+        copy.update({"transition": Transition(mean=cells, uncertainty=uncertanty)})
+        return HPCState(**copy)
 
     def detach(self) -> "HPCState":
         """Return a detached copy suitable for storing as `prev_iter`."""
@@ -103,12 +108,12 @@ class HPCModel(nn.Module):
     def generative(self, p_g: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
         transition = Transition(mean=p_g, uncertainty=state.uncertainty)
         p = utils.sample_diag_gaussian(transition, scale=1.0)
-        return p, HPCState(state.transition, state.memory)
+        return p, state.new(p, state.uncertainty)
 
     def inference(self, x_: List[Tensor], g_: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
         transition = self.location(x_, g_)
         p = utils.sample_diag_gaussian(transition, scale=1.0)
-        return p, HPCState(transition, state.memory)
+        return p, state.new(p, transition.uncertainty)
 
     def recall(self, p_query: List[Tensor], state: HPCState, *, mode: Literal["full", "hierarchical"]) -> List[Tensor]:
         if mode == "full":

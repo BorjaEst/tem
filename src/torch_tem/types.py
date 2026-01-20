@@ -108,6 +108,24 @@ Theory:
 """
 
 
+GroundedLocation = MultiScaleCode
+"""Grounded place cell representation (p) from memory retrieval.
+
+The grounded location is retrieved from Hebbian memory using the abstract
+location as a query. It represents discrete place cell activations that
+are tied to specific environmental features.
+
+Theory:
+    Corresponds to hippocampal place cells that encode discrete locations
+    with sensory associations. The mapping from abstract to grounded
+    locations is learned through Hebbian plasticity.
+"""
+
+
+Location: TypeAlias = GroundedLocation | AbstractLocation
+"""Generic location code, either grounded (p) or abstract (g)."""
+
+
 @dataclass(frozen=True)
 class Transition:
     """Probabilistic abstract location estimate with uncertainty quantification.
@@ -126,22 +144,9 @@ class Transition:
         fusion algorithms.
     """
 
-    mean: AbstractLocation
-    uncertainty: AbstractLocation
+    mean: Location
+    uncertainty: Optional[MultiScaleCode]
 
-
-GroundedLocation = MultiScaleCode
-"""Grounded place cell representation (p) from memory retrieval.
-
-The grounded location is retrieved from Hebbian memory using the abstract
-location as a query. It represents discrete place cell activations that
-are tied to specific environmental features.
-
-Theory:
-    Corresponds to hippocampal place cells that encode discrete locations
-    with sensory associations. The mapping from abstract to grounded
-    locations is learned through Hebbian plasticity.
-"""
 
 Observation = Tensor
 """Ground-truth sensory observation (o) from the environment.

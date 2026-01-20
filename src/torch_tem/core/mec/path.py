@@ -41,7 +41,7 @@ class PathIntegrator(nn.Module):
         self.D_no_a = nn.ParameterList([nn.Parameter(torch.zeros(m)) for m in self._mat_shape])  # Non-directional, per-frequency matrix
 
         # Transition uncertainty
-        self.MLP_sigma_g_path = MLP(mec_shape, mec_shape, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in mec_shape])
+        self.uncertainty_mlp = MLP(mec_shape, mec_shape, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in mec_shape])
 
     @property
     def settings(self) -> PathSettings:
@@ -76,7 +76,7 @@ class PathIntegrator(nn.Module):
             A `Transition` with mean and uncertainty per frequency.
         """
         mu = self.mean(a, g_prev, no_direc_mask)
-        sigma = self.MLP_sigma_g_path(g_prev)
+        sigma = self.uncertainty_mlp(g_prev)
         return Transition(mean=mu, uncertainty=sigma)
 
     def mean(self, a: Tensor, g: List[Tensor], no_direc_mask: Tensor | None) -> List[Tensor]:

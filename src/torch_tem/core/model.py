@@ -615,14 +615,13 @@ class TEMModel(nn.Module):
         mec_state, lec_state, hpc_state = state.mec_state, state.lec_state, state.hpc_state
         c = self.autoencoder.encode(o)
         device = o.device
-        memory = hpc_state.memory
 
         # Handle reset boundaries: where a_prev is None, reset state to priors before transition
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
             # Reset g to priors for envs with no previous action
             g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.cells_init[f].unsqueeze(0), mec_state.cells[f]) for f in range(self.hyper["n_f"])]
-            mec_state.cells = g_reset
+            mec_state.transition = Transition(g_reset, uncertainty=None)
 
         # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
         if self.hyper["has_static_action"]:

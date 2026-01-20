@@ -562,6 +562,11 @@ class P2GMemSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    do_sample: bool = Field(  # rename later to something that we deduce, it runs the uncertainty sampling
+        default=False,
+        frozen=True,
+        description="Whether to sample from location distributions or use means.",
+    )
     curriculum_sigma: float = Field(
         default=10000.0,
         description="Additional value to offset standard deviation of inferred grounded location",

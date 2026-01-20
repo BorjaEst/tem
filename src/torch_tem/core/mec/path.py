@@ -40,7 +40,6 @@ class PathIntegrator(nn.Module):
         self.MLP_D_a.set_weights(1, 0.0)
         self.D_no_a = nn.ParameterList([nn.Parameter(torch.zeros(m)) for m in self._mat_shape])  # Non-directional, per-frequency matrix
 
-        # Transition uncertainty
         if settings.do_sample:  # Uncertainty MLP module
             self.uncertainty_fn = MLP(mec_shape, mec_shape, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in mec_shape])
         else:  # If we do not sample, no uncertainty

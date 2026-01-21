@@ -640,7 +640,7 @@ class GroundLocSettings(BaseModel):
     )
 
 
-class MemorySettings(BaseModel):
+class HebbianUpdateSettings(BaseModel):
     """Settings for Hebbian update modules."""
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
@@ -680,8 +680,8 @@ class HPCSettings(BaseModel):
         default_factory=GroundLocSettings,
         description="Location distribution module settings.",
     )
-    memory: MemorySettings = Field(
-        default_factory=MemorySettings,
+    memory: HebbianUpdateSettings = Field(
+        default_factory=HebbianUpdateSettings,
         description="Hebbian update module settings.",
     )
 

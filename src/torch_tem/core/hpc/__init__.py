@@ -9,11 +9,11 @@ from torch import Tensor, nn
 from torch_tem import utils
 from torch_tem.core.hpc.attractor import AttractorNetwork
 from torch_tem.core.hpc.location import GroundLocation
-from torch_tem.core.hpc.memory import MemorySystem
+from torch_tem.core.hpc.memory import HebbianUpdate
 from torch_tem.settings import HPCSettings
 from torch_tem.types import GroundedLocation, Matrix, MultiScaleCode, Transition
 
-__all__ = ["HPCModel", "HPCState", "AttractorNetwork", "GroundLocation", "MemorySystem"]
+__all__ = ["HPCModel", "HPCState"]
 
 
 @dataclass
@@ -68,23 +68,22 @@ class HPCModel(nn.Module):
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
         self.location = GroundLocation(shape, settings.location)
-        self.memory_sys = MemorySystem(shape, n_stages, f_init, settings.memory)
+        self.memory_system = HebbianUpdate(settings.memory)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
         transition = Transition(mean=p_init, uncertainty=None)
-        return HPCState(transition, memory=self._init_memory(batch_size=batch_size, device=device))
+        return HPCState(transition, memory=self.init_memory(batch_size=batch_size, device=device))
 
-    def _init_memory(self, *, batch_size: int, device: torch.device) -> List[Tensor]:
-        # TODO: merge rename HebbianUpdated by memory and mv this there
+    def init_memory(self, *, batch_size: int, device: torch.device) -> List[Tensor]:
         m0 = torch.zeros((batch_size, sum(self.shape), sum(self.shape)), dtype=torch.float, device=device)
         memory = [m0]
-        memory.append(m0 if self._settings.common_memory else m0.clone())
+        memory.append(m0 if self.settings.common_memory else m0.clone())
         return memory
 
     def set_runtime(self, *, eta: float, hebbian_decay: float) -> None:
-        self.memory_sys.runtime.eta = float(eta)
-        self.memory_sys.runtime.hebbian_decay = float(hebbian_decay)
+        self.memory_system.runtime.eta = float(eta)
+        self.memory_system.runtime.hebbian_decay = float(hebbian_decay)
 
     @property
     def settings(self) -> HPCSettings:
@@ -129,6 +128,6 @@ class HPCModel(nn.Module):
     def update(self, p_inf: List[Tensor], p_gen_gi: List[Tensor], p_xi: List[Tensor], state: HPCState) -> HPCState:
         m_hier, m_full = state.memory
         p_inf, p_xi, p_gen_gi = [torch.cat(p, dim=1) for p in (p_inf, p_xi, p_gen_gi)]
-        m_hier = self.memory_sys(m_hier, p_inf, p_gen_gi, mask=self.update_mask)
-        m_full = self.memory_sys(m_full, p_inf, p_xi) if not self.settings.common_memory else m_hier
+        m_hier = self.memory_system(m_hier, p_inf, p_gen_gi, mask=self.update_mask)
+        m_full = self.memory_system(m_full, p_inf, p_xi) if not self.settings.common_memory else m_hier
         return HPCState(state.transition, memory=[m_hier, m_full])

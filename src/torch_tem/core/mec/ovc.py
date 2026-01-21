@@ -6,7 +6,7 @@ frequency modules (OVC modules) and fuses them with a reference transition.
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional
 
 import torch
 from torch import Tensor, nn
@@ -24,11 +24,11 @@ class OVCCorrection(nn.Module):
     combined using inverse-variance weighting.
     """
 
-    def __init__(self, mec_shape: List[int], settings: OVCSettings):
+    def __init__(self, n_ovc: Optional[List[int]], mec_shape: List[int], *, settings: Optional[OVCSettings] = None):
         super().__init__()
-        self._ovc_start, self._ovc_count = utils.resolve_ovc_slice(len(mec_shape), settings.n_freq)
-        self._ovc_shape = mec_shape[self._ovc_start : self._ovc_start + self._ovc_count]
-        self._settings = settings
+        self._settings = settings or OVCSettings()
+        self._shape = n_ovc if n_ovc is not None else mec_shape
+        self._n_freq = len(self.shape)
 
         # Shiny cue → mean and uncertainty
         hidden_dim = [settings.hidden_dim] * self.n_freq
@@ -43,17 +43,12 @@ class OVCCorrection(nn.Module):
     @property
     def shape(self) -> List[int]:
         """Return OVC module sizes per frequency."""
-        return self._ovc_shape
-
-    @property
-    def start(self) -> int:
-        """Return the starting frequency index of OVC modules."""
-        return self._ovc_start
+        return self._shape
 
     @property
     def n_freq(self) -> int:
         """Return the number of OVC frequency modules."""
-        return self._ovc_count
+        return self._n_freq
 
     def forward(self, locations: list[dict], transition: Transition) -> Transition:
         """Apply OVC correction to environments with shiny cues.

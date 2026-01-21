@@ -75,16 +75,22 @@ class LECModel(nn.Module):
     generative and inference interfaces.
     """
 
-    def __init__(self, n_c: int, f_init: List[float], settings: LECSettings):
+    def __init__(
+        self,
+        n_features: int,  # Number of LEC features (compressed observation)
+        f_init: List[float],  # Initial firing rates per frequency
+        *,
+        settings: Optional[LECSettings] = None,  # LEC settings
+    ):
         super().__init__()
-        self._n_c, self._n_freq = n_c, len(f_init)
-        self._shape = [n_c] * self.n_freq
-        self._settings = settings
+        self._settings = settings or LECSettings()
+        self._n_c, self._n_freq = n_features, len(f_init)
+        self._shape = [n_features] * self.n_freq
 
         # Composable submodules (single responsibility each)
         self.filter = FrequencyFilter(f_init, settings.filter)
         self.norm = FeatureNorm(settings.norm)
-        self.reconstructor = Reconstruction(n_c, settings.reconstruction)
+        self.reconstructor = Reconstruction(n_features, settings.reconstruction)
 
         # Frequency module specific scaling of filtered sensory experience
         self.w_f = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(self.n_freq)])

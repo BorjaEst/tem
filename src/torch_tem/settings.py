@@ -509,11 +509,6 @@ class OVCSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    n_freq: Optional[int] = Field(
-        default=None,
-        frozen=True,
-        description="Number of OVC modules receiving shiny correction. None: all modules, 0: disable OVC, k>0: last k modules.",
-    )
     hidden_dim: int = Field(
         default=20,
         frozen=True,
@@ -670,10 +665,15 @@ class TEMSettings(BaseModel):
         default_factory=LECProjectionSettings,
         description="LEC projection module settings.",
     )
-    n_g: List[int] = Field(
+    n_grids: List[int] = Field(
         default_factory=lambda: [30, 30, 24, 18, 18],
         frozen=True,
         description="Number of MEC neurons per frequency module.",
+    )
+    n_ovc: Optional[List[int]] = Field(
+        default=None,
+        frozen=True,
+        description="Number of OVC neurons per frequency module. None: no OVC cells.",
     )
     mec_settings: MECSettings = Field(
         default_factory=MECSettings,
@@ -696,8 +696,3 @@ class TEMSettings(BaseModel):
         default=True,
         description="Whether to use inferred ground location while inferring new abstract location",
     )
-    # # TODO/ change add
-    # n_features: int # replaces n_c, indicates the number of context features
-    # n_grids: List[int]  # replaces n_g, indicates the number of grid cells per frequency module
-    # n_ovc: List[int]  # replaces n_ovc, indicates the number of OVC cells per frequency module
-    # n_memory: List[int]  # replaces n_p, indicates the number of place cells per frequency module

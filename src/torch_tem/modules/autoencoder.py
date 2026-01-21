@@ -19,6 +19,14 @@ class AutoencoderModule(nn.Module):
         self.decoder = _select_decoder(settings, n_c, n_o)
         self.settings = settings
 
+    @property
+    def n_observations(self) -> int:
+        return self.encoder.n_o
+
+    @property
+    def n_features(self) -> int:
+        return self.encoder.n_c
+
     def forward(self, *args, **kwds) -> Tensor:
         raise NotImplementedError("Use encoder and decoder methods separately.")
 

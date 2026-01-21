@@ -131,16 +131,14 @@ class HPCModel(nn.Module):
     - `HebbianUpdate` (write): M, p_inf, p_gen -> M'
     """
 
-    def __init__(self, n_stages: int, shape: List[int], f_init: List[float], settings: HPCSettings):
-        """Initialize the HPC module.
-
-        Args:
-            n_stages: Number of attractor update stages.
-            shape: Grounded-location feature sizes per frequency module.
-            f_init: Frequency values per module (used to build Hebbian
-                write-connectivity constraints).
-            settings: HPC settings tree.
-        """
+    def __init__(
+        self,
+        n_stages: int,  # Number of attractor update stages
+        shape: List[int],  # Grounded-location feature sizes per frequency module
+        f_init: List[float],  # Frequency values per module
+        *,
+        settings: Optional[HPCSettings] = None,  # HPC settings
+    ):
         super().__init__()
         self._shape, self._n_freq = list(shape), len(shape)
         self._n_stages = n_stages

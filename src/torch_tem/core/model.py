@@ -68,20 +68,23 @@ class TEMModel(nn.Module):
     def __init__(self, n_observations: int, n_actions: int, settings: Optional[TEMSettings] = None):
         super().__init__()
         self._settings = settings or TEMSettings()
-        n_c, n_g, n_p = settings.n_features, settings.n_g, settings.n_hippocampal
-        n_o, n_a = n_observations, n_actions
+        n_features = settings.n_features  # Number of LEC features (compressed observation)
+        n_grids = settings.n_grids  # Number of MEC grid cells per frequency
+        n_ovc = settings.n_ovc  # Number of OVC cells per frequency (or None)
+        n_hippocampal = settings.n_hippocampal  # Number of HPC place cells per frequency
+        f_initial = settings.f_initial  # Initial firing rate for all cells
 
         # Autoencoder module for observation compression/decoding
-        self.autoencoder = AutoencoderModule(n_o, n_c, settings.autoencoder)
+        self.autoencoder = AutoencoderModule(n_observations, n_features, settings=settings.autoencoder)
 
         # Entorhinal Hippocampal Circuit components
-        self.lec = lec = LECModel(n_c, self.settings.f_initial, settings.lec_settings)
-        self.mec = mec = MECModel(n_a, n_p, n_g, self.settings.f_initial, settings.mec_settings)
-        self.hpc = hpc = HPCModel(mec.grid_n_freq, n_p, self.settings.f_initial, settings.hpc_settings)
+        self.lec = lec = LECModel(n_features, f_initial, settings=settings.lec_settings)
+        self.mec = mec = MECModel(n_actions, n_hippocampal, n_grids, n_ovc, f_initial, settings=settings.mec_settings)
+        self.hpc = hpc = HPCModel(len(n_grids), n_hippocampal, f_initial, settings=settings.hpc_settings)
 
         # Projection modules
-        self.lec_projection = ProjectionModule(lec, hpc, settings.lec_projection)
-        self.mec_projection = ProjectionModule(mec, hpc, settings.mec_projection)
+        self.lec_projection = ProjectionModule(lec, hpc, settings=settings.lec_projection)
+        self.mec_projection = ProjectionModule(mec, hpc, settings=settings.mec_projection)
 
     def set_runtime(self, eta: float, hebbian_decay: float, p2g_uncertainty_offset: float) -> None:
         """Set runtime hyperparameters (called by training loop each step).
@@ -99,6 +102,36 @@ class TEMModel(nn.Module):
         """Return TEM settings object constructed from model parameters."""
         return self._settings
 
+    @property
+    def n_observations(self) -> int:
+        """Return the number of observation dimensions."""
+        return self.autoencoder.n_observations
+
+    @property
+    def n_features(self) -> int:
+        """Return the number of LEC features (compressed observation)."""
+        return self.autoencoder.n_features
+
+    @property
+    def n_actions(self) -> int:
+        """Return the number of possible discrete actions."""
+        return self.mec.n_actions
+
+    @property
+    def n_grids(self) -> List[int]:
+        """Return the number of MEC grid cells per frequency."""
+        return self.mec.n_grids
+
+    @property
+    def n_ovc(self) -> Optional[List[int]]:
+        """Return the number of MEC OVC cells per frequency (or None)."""
+        return self.mec.n_ovc
+
+    @property
+    def n_hippocampal(self) -> List[int]:
+        """Return the number of HPC place cells per frequency."""
+        return self.hpc.shape
+
     def forward(self, o, locations, a_prev, state: TEMState) -> tuple[TEMOutput, TEMState]:
         mec_state, lec_state, hpc_state = state.mec_state, state.lec_state, state.hpc_state
         c = self.autoencoder.encode(o)
@@ -112,7 +145,7 @@ class TEMModel(nn.Module):
             mec_state.transition = Transition(g_reset, uncertainty=None)
 
         # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
-        a = utils.one_hot_with_zero(a_prev, self.mec.n_a, device=device)
+        a = utils.one_hot_with_zero(a_prev, self.n_actions, device=device)
 
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
         x_inf, lec_state = self.lec.inference(c, lec_state)

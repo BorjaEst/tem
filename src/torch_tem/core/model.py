@@ -678,11 +678,11 @@ class TEMModel(nn.Module):
             Updated memory matrices [M_gen, M_inf] (M_inf only if use_x_cued_recall=True)
         """
         # Update generative memory with generated and inferred grounded location
-        M = [self.hpc.memoryr(memory_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen_gi, dim=1))]
+        M = [self.hpc.memory(memory_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen_gi, dim=1))]
         # If using memory for grounded location inference: append inference memory
         if self.hyper["use_x_cued_recall"]:
             # Inference memory is identical to generative memory if using common memory, and updated separately if not
-            M.append(M[0] if self.hyper["common_memory"] else self.hpc.memoryr(memory_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_xi, dim=1), do_hierarchical_connections=False))
+            M.append(M[0] if self.hyper["common_memory"] else self.hpc.memory(memory_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_xi, dim=1), do_hierarchical_connections=False))
         return M
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> TEMState:

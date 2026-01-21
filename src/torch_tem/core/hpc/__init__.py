@@ -63,7 +63,7 @@ class HPCModel(nn.Module):
 
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
-        self.memoryr = MemorySystem(shape, n_stages, f_init, settings.memory)
+        self.memory = MemorySystem(shape, n_stages, f_init, settings.memory)
         self.location = GroundLocation(shape, settings.location)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
@@ -79,8 +79,8 @@ class HPCModel(nn.Module):
         return memory
 
     def set_runtime(self, *, eta: float, hebbian_decay: float) -> None:
-        self.memoryr.runtime.eta = float(eta)
-        self.memoryr.runtime.hebbian_decay = float(hebbian_decay)
+        self.memory.runtime.eta = float(eta)
+        self.memory.runtime.hebbian_decay = float(hebbian_decay)
 
     @property
     def settings(self) -> HPCSettings:

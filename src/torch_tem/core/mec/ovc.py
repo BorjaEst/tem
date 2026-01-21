@@ -59,8 +59,9 @@ class OVCCorrection(nn.Module):
         """Apply OVC correction to environments with shiny cues.
 
         Args:
-            locations: Per-environment metadata. A non-`None` `"shiny"` value
-                indicates a landmark cue is present.
+            locations: Per-environment metadata. If `loc.get("shiny")` is not
+                `None`, the value is treated as a scalar cue for that batch
+                element.
             transition: Reference transition to correct.
 
         Returns:

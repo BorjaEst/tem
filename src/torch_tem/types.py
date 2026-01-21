@@ -1,50 +1,15 @@
-"""Type definitions for the Tolman-Eichenbaum Machine.
+"""Core type definitions used across TEM.
 
-This module defines the core types used throughout the TEM implementation,
-grounded in the theoretical framework of the Tolman-Eichenbaum Machine.
-These types abstract implementation details and provide clear semantics for
-multi-scale spatial representations, Hebbian memory, and belief propagation.
+This module is intentionally dependency-light (no imports from other
+`torch_tem` modules) and provides shared aliases and small dataclasses used
+throughout the codebase.
 
-Architecture Note
------------------
-This module is **dependency-free** within torch_tem:
-    - No imports from other torch_tem modules
-    - No Pydantic models (those live in settings.py)
-    - Pure type definitions using only standard library, torch, and dataclasses
-    - Provides foundation for settings.py and other modules
+Conventions:
+    - Multi-scale codes are `List[Tensor]` (one tensor per frequency module).
+    - Many modules use `B` for batch size and `S = sum(shape)` for flattened
+      multi-scale size.
 
-Type Hierarchy
---------------
-Mathematical Primitives:
-    - Vector: 1D or 2D tensor representing a single code or batch of codes
-    - Matrix: 2D tensor representing connection weights or transformations
-
-Multi-Scale Representations:
-    - MultiScaleCode: Hierarchical representation across frequency modules
-    - AbstractLocation: Abstract spatial code (g) in factorized representation
-    - GroundedLocation: Grounded place cell code (p) from memory retrieval
-
-Sensory Input:
-    - Observation: Ground-truth sensory observation (o) as single tensor
-
-Memory Structures:
-    - HebbianMemory: Attractor network connection weights
-    - MemoryState: Complete memory state (supports single/dual memory)
-
-Data Flow:
-    - StepInput: Inputs for a single timestep iteration
-    - TEMState: Outputs from a single timestep iteration
-    - Trajectory: Sequence of inputs forming a walk or episode
-    - Losses: All loss components from a single timestep
-
-Theory References
------------------
-The type system follows the TEM architecture:
-    1. Sensory observations (o) → Sensory inference
-    2. Abstract locations (g) → Multi-scale grid codes
-    3. Grounded locations (p) → Place cell activations
-    4. Hebbian memory (M) → Attractor dynamics
-    5. Generative/Inference loops → Belief propagation
+Longer background notes live in `docs/foundations.md`.
 """
 
 from dataclasses import dataclass
@@ -85,14 +50,8 @@ represented as multi-scale codes, where each frequency module operates
 at a different spatial scale.
 
 Structure:
-    - Length: n_freq (number of frequency modules)
-    - Each element: Vector of shape (batch_size, n_cells_f)
-    
-Theory:
-    Multi-scale representations allow the model to capture both local
-    precision (high frequencies) and global structure (low frequencies)
-    in a factorized manner, similar to multi-scale grid cells in the
-    entorhinal cortex.
+    - Length: `n_freq` (one element per frequency module)
+    - Each element: tensor of shape `(B, n_cells_f)`
 """
 
 AbstractLocation = MultiScaleCode
@@ -102,9 +61,8 @@ The abstract location encodes position in a factorized, multi-scale
 representation. It is updated through path integration and refined
 through sensory inference.
 
-Theory:
-    Corresponds to grid cell populations in medial entorhinal cortex,
-    organized into modules with different spatial frequencies.
+Notes:
+    This is the abstract (grid-like) code used by MEC dynamics.
 """
 
 
@@ -115,10 +73,8 @@ The grounded location is retrieved from Hebbian memory using the abstract
 location as a query. It represents discrete place cell activations that
 are tied to specific environmental features.
 
-Theory:
-    Corresponds to hippocampal place cells that encode discrete locations
-    with sensory associations. The mapping from abstract to grounded
-    locations is learned through Hebbian plasticity.
+Notes:
+    This is the grounded (place-like) code used by HPC memory.
 """
 
 
@@ -137,11 +93,8 @@ class Transition:
         mean: Predicted abstract location per frequency [List of (B, n_g[f])]
         uncertainty: Prediction uncertainty (sigma) per frequency [List of (B, n_g[f])]
 
-    Theory:
-        The transition model produces Gaussian estimates for path integration.
-        Uncertainty is used to weight fusion with memory and sensory cues
-        via precision (1/σ²) weighting. See torch_tem.utils.fusion for
-        fusion algorithms.
+    Notes:
+        The uncertainty is commonly used for inverse-variance fusion.
     """
 
     mean: Location
@@ -157,14 +110,10 @@ Observations are provided as single tensors (typically one-hot or encoded)
 and are processed internally into multi-scale representations.
 
 Shape:
-    - Batched: (batch_size, n_observations)
-    - One-hot encoding: Each row has a single 1.0 at the observation index
+    - Batched: `(B, n_observations)`
 
-Theory:
-    Raw observations drive the inference pathway, providing the sensory
-    evidence that the model uses to infer location and update beliefs.
-    Distinguished from SensoryPrediction which is a multi-scale structure
-    with both values and logits generated by the model.
+Notes:
+    Observations are typically one-hot or encoded features.
 """
 
 Action = Tensor
@@ -183,10 +132,8 @@ Recommended dtype:
     - Discrete actions: integer type (e.g., torch.long)
     - Continuous actions (if used): float type (e.g., torch.float32)
 
-Theory:
-    In TEM, actions are used by the transition model to predict the next
-    abstract location (g) via path integration. They are conceptually distinct
-    from observations (o), which provide sensory evidence for inference.
+Notes:
+    Actions drive the transition/path-integration dynamics.
 """
 
 Location = Tensor
@@ -228,12 +175,9 @@ Where:
 Shape:
     Each matrix: [batch_size, sum(n_p), sum(n_p)]
 
-Theory:
-    Hebbian plasticity M = λ·M + η·(p_inf + p_gen_gi) ⊗ (p_inf - p_gen_gi)
-    creates associative connections between abstract and grounded
-    representations, enabling both memory-guided generation and inference.
-    The dual-memory architecture allows separate optimization of the
-    inference and generative pathways.
+Notes:
+    Detailed write dynamics are documented in the HPC memory module and in
+    `docs/foundations.md`.
 """
 
 MemoryState = HebbianMemory
@@ -257,10 +201,8 @@ class SensoryPrediction:
         values: Predicted sensory observation (probabilities or activations)
         logits: Pre-softmax logits corresponding to the prediction
 
-    Theory:
-        The generative pathway produces sensory predictions from latent
-        representations. Both the final values and their logits are retained
-        for loss calculation (e.g., cross-entropy from logits).
+    Notes:
+        Both values and logits are kept for loss computation.
     """
 
     values: MultiScaleCode
@@ -277,10 +219,8 @@ class LocationInference:
         grounded: Grounded location code (p) representing discrete place cell
                  activations tied to environmental features
 
-    Theory:
-        The inference pathway produces both abstract (grid-like) and grounded
-        (place-like) representations. These are used together for memory
-        interaction and sensory generation.
+    Notes:
+        This bundles abstract and grounded codes produced by inference.
     """
 
     abstract: AbstractLocation
@@ -296,10 +236,8 @@ class StepInput:
         action: Action taken at the previous timestep (or None for initial step)
         location_info: Environment metadata (e.g., shiny object locations)
 
-    Theory:
-        The model receives sensory observations and action information,
-        which drive both the transition model (path integration) and
-        sensory inference.
+    Notes:
+        This is a convenience container used by data/rollout utilities.
     """
 
     observation: MultiScaleCode
@@ -315,10 +253,8 @@ class Trajectory:
         steps: Sequence of StepInput objects
         metadata: Optional trajectory-level metadata (e.g., environment ID)
 
-    Theory:
-        A trajectory represents a continuous sequence of observations and
-        actions through an environment. The model processes trajectories
-        sequentially to build spatial representations and memories.
+    Notes:
+        This is a convenience container used by data/rollout utilities.
     """
 
     steps: Sequence[StepInput]

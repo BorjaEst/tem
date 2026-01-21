@@ -46,8 +46,13 @@ class LECState:
 
         Returns:
             A new `LECState` instance.
+
+        Notes:
+            This method performs a shallow copy of the state fields. Use
+            `detach()` when you need to carry state across iterations without
+            keeping autograd history.
         """
-        copy = self.__dict__.copy()  # TODO: Should we use detach here?
+        copy = self.__dict__.copy()
         copy.update(kwargs)
         return LECState(**copy)
 

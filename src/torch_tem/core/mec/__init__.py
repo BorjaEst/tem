@@ -46,7 +46,22 @@ class MECState:
     _ovc_start: Optional[int] = None  # Cached OVC start index for transition property
 
     def new(self, cells: AbstractLocation, uncertanty: MultiScaleCode) -> "MECState":
-        copy = self.__dict__.copy()  # TODO: Should we use detach here?
+        """Return a new state with an updated transition.
+
+        Args:
+            cells: New abstract location mean (multi-scale code).
+            uncertanty: New abstract location uncertainty (multi-scale code).
+                Note: the parameter name preserves a legacy spelling.
+
+        Returns:
+            A new `MECState` with updated `transition`.
+
+        Notes:
+            This method performs a shallow copy of the state fields. Use
+            `detach()` when you need to cache state across iterations without
+            keeping autograd history.
+        """
+        copy = self.__dict__.copy()
         copy.update({"transition": Transition(mean=cells, uncertainty=uncertanty)})
         return MECState(**copy)
 

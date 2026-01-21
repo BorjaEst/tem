@@ -34,14 +34,11 @@ class MemorySystem(nn.Module):
     def settings(self) -> MemorySettings:
         return self._settings
 
-    def forward(self, M_prev: Tensor, p_inf: Tensor, p_gen: Tensor, *, mask: Optional[Tensor] = None) -> Tensor:
-        # Create new ground memory by outer product of learned vectors
+    def forward(self, memory: Tensor, p_inf: Tensor, p_gen: Tensor, *, mask: Optional[Tensor] = None) -> Tensor:
         eta, hebbian_decay = self.runtime.eta, self.runtime.hebbian_decay
-        M_new = torch.squeeze(torch.matmul(torch.unsqueeze(p_inf + p_gen, 2), torch.unsqueeze(p_inf - p_gen, 1)))
-        if mask is not None:
-            M_new = M_new * mask.to(dtype=M_new.dtype)
-        return torch.clamp(
-            hebbian_decay * M_prev + eta * M_new,
-            min=float(self._settings.clamp_min),
-            max=float(self._settings.clamp_max),
-        )
+        update = torch.squeeze(torch.unsqueeze(p_inf + p_gen, 2) @ torch.unsqueeze(p_inf - p_gen, 1))
+        update = update * mask.to(dtype=memory.dtype) if mask is not None else update
+        return self.clamp_memory(hebbian_decay * memory + eta * update)
+
+    def clamp_memory(self, m: Tensor) -> Tensor:
+        return torch.clamp(m, min=self._settings.clamp_min, max=self._settings.clamp_max)

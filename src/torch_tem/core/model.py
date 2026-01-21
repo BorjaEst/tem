@@ -594,8 +594,8 @@ class TEMModel(nn.Module):
         # Infer grounded location from abstract location and sensory experience
         p_inf, hpc_state = self.hpc.inference(x_, g_, hpc_state)
 
-        # Update memory (Hebbian write)  (Idealy should be in hpc.generative and hpc.inference)
-        hpc_state = self.hpc.update(p_inf, p_xi, p_gen_gi, hpc_state)
+        # Update memory (Hebbian write)
+        hpc_state = self.hpc.update(p_inf, p_gen_gi, p_xi, hpc_state)
 
         # Build tem state
         state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)

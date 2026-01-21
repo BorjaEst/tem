@@ -56,10 +56,10 @@ class HPCModel(nn.Module):
         self._settings = settings
 
         # Store masks as buffers for device management
-        masks = utils.update_to_masks(shape, update=utils.make_update_full(n_stages, self.n_freq))
-        self.register_buffer("masks_full", masks, persistent=False)
         masks = utils.update_to_masks(shape, update=utils.make_update_hierarchical(n_stages, self.n_freq))
         self.register_buffer("masks_hierarchical", masks, persistent=False)
+        masks = utils.update_to_masks(shape, update=utils.make_update_full(n_stages, self.n_freq))
+        self.register_buffer("masks_full", masks, persistent=False)
 
         # Store update masks as buffers for device management
         mask = utils.make_hebbian_write_mask(n_stages, shape, f_init)
@@ -120,15 +120,15 @@ class HPCModel(nn.Module):
         return p_inf, state.new(p_inf, transition.uncertainty)
 
     def recall(self, p_query: List[Tensor], state: HPCState, *, mode: Literal["full", "hierarchical"]) -> List[Tensor]:
-        if mode == "full":
-            return self.attractor(p_query, state.memory[1], masks=self.masks_full)
-        elif mode == "hierarchical":
+        if mode == "hierarchical":
             return self.attractor(p_query, state.memory[0], masks=self.masks_hierarchical)
+        elif mode == "full":
+            return self.attractor(p_query, state.memory[1], masks=self.masks_full)
         raise ValueError(f"Invalid mode '{mode}'. Expected 'full' or 'hierarchical'.")
 
-    def update(self, p_inf: List[Tensor], p_xi: List[Tensor], p_gen_gi: List[Tensor], state: HPCState) -> HPCState:
-        m1, m2 = state.memory
+    def update(self, p_inf: List[Tensor], p_gen_gi: List[Tensor], p_xi: List[Tensor], state: HPCState) -> HPCState:
+        m_hier, m_full = state.memory
         p_inf, p_xi, p_gen_gi = [torch.cat(p, dim=1) for p in (p_inf, p_xi, p_gen_gi)]
-        m1 = self.memory_sys(m1, p_inf, p_gen_gi, mask=self.update_mask)
-        m2 = self.memory_sys(m2, p_inf, p_xi) if not self.settings.common_memory else m1
-        return HPCState(state.transition, memory=[m1, m2])
+        m_hier = self.memory_sys(m_hier, p_inf, p_gen_gi, mask=self.update_mask)
+        m_full = self.memory_sys(m_full, p_inf, p_xi) if not self.settings.common_memory else m_hier
+        return HPCState(state.transition, memory=[m_hier, m_full])

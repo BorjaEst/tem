@@ -13,7 +13,7 @@ Longer background notes live in `docs/foundations.md`.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, TypeAlias
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, TypeAlias
 
 from torch import Tensor
 
@@ -319,6 +319,10 @@ BatchedMemory = Matrix
 Note: In practice, memory is typically shared across a batch rather than
 per-sample, so this represents the global memory state.
 """
+
+
+# TODO: Walk as Itrerable with correct types
+Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)
 
 
 # ....

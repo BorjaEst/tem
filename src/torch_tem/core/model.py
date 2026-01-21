@@ -14,7 +14,7 @@ from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import TEMSettings
-from torch_tem.types import Transition
+from torch_tem.types import Transition, Walk
 
 
 @dataclass
@@ -182,9 +182,6 @@ class TEMModel(nn.Module):
         hpc_state = self.hpc.init_state(batch_size, device)
         # And construct new iteration for that g, o, a, and M
         return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
-
-
-Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)
 
 
 class Rollout(Iterator[TEMState]):

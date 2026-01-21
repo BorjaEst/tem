@@ -157,6 +157,11 @@ class MECModel(nn.Module):
         return self._settings
 
     @property
+    def n_a(self) -> int:
+        """Return the number of actions."""
+        return self._n_a
+
+    @property
     def shape(self) -> List[int]:
         """Return grid-cell counts per frequency module."""
         return self._shape

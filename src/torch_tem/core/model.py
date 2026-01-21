@@ -2,448 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlias
+from typing import Any, List, Optional, Sequence, Tuple
 
-# Standard modules
-import numpy as np
 import torch
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
-from scipy.special import comb
-from scipy.stats import truncnorm
 from torch import Tensor, nn
 
-from torch_tem import settings, utils
+from torch_tem import utils
 from torch_tem.core.hpc import HPCModel, HPCState
 from torch_tem.core.lec import LECModel, LECState
 from torch_tem.core.mec import MECModel, MECState
-from torch_tem.modules import MLP
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import TEMSettings
 from torch_tem.types import Transition
-
-
-class WorldParameters(BaseModel):
-    """World + action-space parameters (input semantics)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    has_static_action: bool = Field(
-        default=True,
-        description="Does this world include the standing still action?",
-    )
-    n_actions: int = Field(
-        default=4,
-        description="Number of available actions, excluding the stand still action",
-    )
-
-
-class LECParameters(BaseModel):
-    """LEC parameters: observation -> feature cell representation."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    n_o: int = Field(default=45, description="Neurons for sensory observation o")
-    n_c: int = Field(default=10, description="Neurons for compressed sensory experience c")
-
-
-class MECParameters(BaseModel):
-    """MEC parameters: abstract location (grid/ovc) structure and dynamics."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    do_sample: bool = Field(
-        default=False,
-        description="Whether to sample, or assume no noise and simply take mean of all distributions",
-    )
-    separate_ovc: bool = Field(
-        default=False,
-        description="Whether to use separate grid modules that receive shiny information for object vector cells",
-    )
-    std_grid_init: float = Field(
-        default=0.5,
-        description="Standard deviation for initial g (which will then be learned)",
-    )
-    std_grid_mem: float = Field(
-        default=0.1,
-        description="Standard deviation to initialise hidden to output layer of MLP for inferring new abstract location",
-    )
-    d_hidden_dim: int = Field(
-        default=20,
-        description="Hidden layer size of MLP for abstract location transitions",
-    )
-
-    n_g_subsampled_base: list[int] = Field(
-        default=[10, 10, 8, 6, 6],
-        description="Base neurons for subsampled entorhinal abstract location f_g(g) for each frequency module",
-    )
-    n_ovc_base: list[int] | None = Field(
-        default=None,
-        description="Neurons for object vector cells",
-    )
-
-    f_initial_base: list[float] = Field(
-        default=[0.99, 0.3, 0.09, 0.03, 0.01],
-        description="Initial frequencies of each module",
-    )
-
-
-class HPCParameters(BaseModel):
-    """HPC parameters: grounded location, inference toggles, and memory."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    use_x_cued_recall: bool = Field(
-        default=True,
-        description="Whether to use inferred ground location while inferring new abstract location",
-    )
-
-    common_memory: bool = Field(
-        default=False,
-        description="Use common memory for generative and inference network",
-    )
-    kappa: float = Field(
-        default=0.8,
-        description="Hebbian retrieval decay term",
-    )
-
-
-class Parameters(BaseModel):
-    """
-    Pydantic model for Tolman-Eichenbaum Machine model parameters.
-
-    This model defines model architecture and inference parameters only.
-    Training schedules and data generation settings are in torch_tem.settings.
-    """
-
-    model_config = ConfigDict(
-        populate_by_name=True,
-        arbitrary_types_allowed=True,
-        extra="forbid",
-    )
-
-    world: WorldParameters = Field(
-        default_factory=WorldParameters,
-        description="World/action parameters.",
-    )
-    lec: LECParameters = Field(
-        default_factory=LECParameters,
-        description="LEC parameters (observation -> feature cells).",
-    )
-    mec: MECParameters = Field(
-        default_factory=MECParameters,
-        description="MEC parameters (grid/ovc abstract location).",
-    )
-    hpc: HPCParameters = Field(
-        default_factory=HPCParameters,
-        description="HPC parameters (memory + grounded location).",
-    )
-
-    # Module settings
-    autoencoder: settings.AutoencoderSettings = Field(
-        default_factory=settings.AutoencoderSettings,
-        description="Autoencoder settings.",
-    )
-    lec_projection: settings.ProjectionSettings = Field(
-        default_factory=settings.LECProjectionSettings,
-        description="LEC projection settings.",
-    )
-    lec_settings: settings.LECSettings = Field(
-        default_factory=settings.LECSettings,
-        description="LEC module settings.",
-    )
-    mec_projection: settings.ProjectionSettings = Field(
-        default_factory=settings.MECProjectionSettings,
-        description="MEC projection settings.",
-    )
-    mec_settings: settings.MECSettings = Field(
-        default_factory=settings.MECSettings,
-        description="MEC module settings.",
-    )
-    hpc_settings: settings.HPCSettings = Field(
-        default_factory=settings.HPCSettings,
-        description="HPC module settings.",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _upgrade_flat_to_nested(cls, data: Any) -> Any:
-        """Accept both legacy flat keys and new nested groups."""
-        if not isinstance(data, dict):
-            return data
-
-        data = dict(data)
-
-        world = dict(data.get("world") or {})
-        lec = dict(data.get("lec") or {})
-        mec = dict(data.get("mec") or {})
-        hpc = dict(data.get("hpc") or {})
-
-        def pop_into(key: str, target: dict) -> None:
-            if key in data:
-                target.setdefault(key, data.pop(key))
-
-        for key in ("has_static_action", "n_actions"):
-            pop_into(key, world)
-
-        for key in ("n_o", "n_c"):
-            pop_into(key, lec)
-
-        for key in (
-            "do_sample",
-            "separate_ovc",
-            "std_grid_init",
-            "std_grid_mem",
-            "d_hidden_dim",
-            "n_g_subsampled_base",
-            "n_ovc_base",
-            "f_initial_base",
-        ):
-            pop_into(key, mec)
-
-        for key in ("use_x_cued_recall", "common_memory", "kappa"):
-            pop_into(key, hpc)
-
-        if world:
-            data["world"] = world
-        if lec:
-            data["lec"] = lec
-        if mec:
-            data["mec"] = mec
-        if hpc:
-            data["hpc"] = hpc
-
-        return data
-
-    # --- Backward-compatible flat attribute accessors (used by computed fields)
-    @property
-    def has_static_action(self) -> bool:
-        return self.world.has_static_action
-
-    @property
-    def n_actions(self) -> int:
-        return self.world.n_actions
-
-    @property
-    def n_o(self) -> int:
-        return self.lec.n_o
-
-    @property
-    def n_c(self) -> int:
-        return self.lec.n_c
-
-    @property
-    def do_sample(self) -> bool:
-        return self.mec.do_sample
-
-    @property
-    def separate_ovc(self) -> bool:
-        return self.mec.separate_ovc
-
-    @property
-    def std_grid_init(self) -> float:
-        return self.mec.std_grid_init
-
-    @property
-    def std_grid_mem(self) -> float:
-        return self.mec.std_grid_mem
-
-    @property
-    def d_hidden_dim(self) -> int:
-        return self.mec.d_hidden_dim
-
-    @property
-    def n_g_subsampled_base(self) -> list[int]:
-        return self.mec.n_g_subsampled_base
-
-    @property
-    def n_ovc_base(self) -> list[int] | None:
-        return self.mec.n_ovc_base
-
-    @property
-    def f_initial_base(self) -> list[float]:
-        return self.mec.f_initial_base
-
-    @property
-    def use_x_cued_recall(self) -> bool:
-        return self.hpc.use_x_cued_recall
-
-    @property
-    def common_memory(self) -> bool:
-        return self.hpc.common_memory
-
-    @property
-    def kappa(self) -> float:
-        return self.hpc.kappa
-
-    @computed_field
-    @property
-    def n_ovc(self) -> list[int]:
-        """Neurons for object vector cells."""
-        if self.n_ovc_base is not None:
-            return self.n_ovc_base
-        return [0 for _ in range(len(self.n_g_subsampled_base))]
-
-    @computed_field
-    @property
-    def n_g_subsampled(self) -> list[int]:
-        """
-        Add neurons for object vector cells. Add new modules if object vector cells get separate modules,
-        or else add neurons to existing modules.
-        """
-        if self.separate_ovc:
-            return self.n_g_subsampled_base + self.n_ovc
-        else:
-            return [grid + ovc for grid, ovc in zip(self.n_g_subsampled_base, self.n_ovc)]
-
-    @computed_field
-    @property
-    def n_f_ovc(self) -> int:
-        """Number of hierarchical frequency modules for object vector cells."""
-        return len(self.n_ovc) if self.separate_ovc else 0
-
-    @computed_field
-    @property
-    def n_f_g(self) -> int:
-        """Number of hierarchical frequency modules for grid cells."""
-        return len(self.n_g_subsampled) - self.n_f_ovc
-
-    @computed_field
-    @property
-    def n_f(self) -> int:
-        """Total number of modules."""
-        return len(self.n_g_subsampled)
-
-    @computed_field
-    @property
-    def n_g(self) -> list[int]:
-        """Number of neurons of entorhinal abstract location g for each frequency."""
-        return [3 * g for g in self.n_g_subsampled]
-
-    @computed_field
-    @property
-    def n_x(self) -> list[int]:
-        """Neurons for temporally filtered sensory experience x for each frequency."""
-        return [self.n_c for _ in range(self.n_f)]
-
-    @computed_field
-    @property
-    def n_p(self) -> list[int]:
-        """Neurons for hippocampal grounded location p for each frequency."""
-        return [g * x for g, x in zip(self.n_g_subsampled, self.n_x)]
-
-    @computed_field
-    @property
-    def f_initial(self) -> list[float]:
-        """Initial frequencies of each module, including object vector cell modules."""
-        return self.f_initial_base + self.f_initial_base[0 : self.n_f_ovc]
-
-    # --- Connectivity matrices
-    @computed_field
-    @property
-    def g_connections(self) -> list[list[bool]]:
-        """
-        In path integration, abstract location frequency modules can influence the transition of other modules
-        hierarchically (low to high).
-        """
-        # Connections for grid cell modules
-        connections = [[self.f_initial[f_from] <= self.f_initial[f_to] for f_from in range(self.n_f_g)] + [False for _ in range(self.n_f_ovc)] for f_to in range(self.n_f_g)]
-
-        # Add connections for separate object vector cell modules
-        connections += [
-            [False for _ in range(self.n_f_g)] + [self.f_initial[f_from] <= self.f_initial[f_to] for f_from in range(self.n_f_g, self.n_f)] for f_to in range(self.n_f_g, self.n_f)
-        ]
-
-        return connections
-
-    # ---- Static matrices
-    @computed_field
-    @property
-    def W_repeat(self) -> list[torch.Tensor]:
-        """Matrix for repeating abstract location g to do outer product with sensory information x."""
-        return [torch.tensor(np.kron(np.eye(self.n_g_subsampled[f]), np.ones((1, self.n_x[f]))), dtype=torch.float) for f in range(self.n_f)]
-
-    @computed_field
-    @property
-    def W_tile(self) -> list[torch.Tensor]:
-        """Matrix for tiling sensory observation x to do outer product with abstract location g."""
-        return [torch.tensor(np.kron(np.ones((1, self.n_g_subsampled[f])), np.eye(self.n_x[f])), dtype=torch.float) for f in range(self.n_f)]
-
-    @computed_field
-    @property
-    def two_hot_table(self) -> list[torch.Tensor]:
-        """Table for converting one-hot to two-hot compressed representation."""
-        table = [[0] * (self.n_c - 2) + [1] * 2]
-
-        # Generate compressed codes for each possible observation
-        for i in range(1, min(int(comb(self.n_c, 2)), self.n_o)):
-            code = table[-1].copy()
-            # Find latest occurrence of [0 1] in that code
-            swap = [index for index in range(len(code) - 1, -1, -1) if code[index : index + 2] == [0, 1]][0]
-            # Swap those to get new code
-            code[swap : swap + 2] = [1, 0]
-            # If the first one was swapped: value after swapped pair is 1
-            if swap + 2 < len(code) and code[swap + 2] == 1:
-                # Move the second 1 all the way back - reverse everything after the swapped pair
-                code[swap + 2 :] = code[: swap + 1 : -1]
-            table.append(code)
-
-        # Convert each code to column vector pytorch tensor
-        return [torch.tensor(code) for code in table]
-
-    @computed_field
-    @property
-    def g_downsample(self) -> list[torch.Tensor]:
-        """Downsampling matrix to go from grid cells to compressed grid cells."""
-        return [
-            torch.cat([torch.eye(dim_out, dtype=torch.float), torch.zeros((dim_in - dim_out, dim_out), dtype=torch.float)])
-            for dim_in, dim_out in zip(self.n_g, self.n_g_subsampled)
-        ]
-
-    def to_legacy_dict(self) -> dict[str, Any]:
-        """Flatten nested Parameters to the legacy dict consumed by TEMModel."""
-        base: dict[str, Any] = {
-            # World
-            "has_static_action": self.has_static_action,
-            "n_actions": self.n_actions,
-            # LEC
-            "n_o": self.n_o,
-            "n_c": self.n_c,
-            # MEC
-            "do_sample": self.do_sample,
-            "separate_ovc": self.separate_ovc,
-            "std_grid_init": self.std_grid_init,
-            "std_grid_mem": self.std_grid_mem,
-            "d_hidden_dim": self.d_hidden_dim,
-            "n_g_subsampled_base": self.n_g_subsampled_base,
-            "n_ovc_base": self.n_ovc_base,
-            "f_initial_base": self.f_initial_base,
-            # HPC
-            "use_x_cued_recall": self.use_x_cued_recall,
-            "common_memory": self.common_memory,
-            "kappa": self.kappa,
-        }
-
-        derived: dict[str, Any] = {
-            # sizes / derived scalars
-            "n_ovc": self.n_ovc,
-            "n_g_subsampled": self.n_g_subsampled,
-            "n_f_ovc": self.n_f_ovc,
-            "n_f_g": self.n_f_g,
-            "n_f": self.n_f,
-            "n_g": self.n_g,
-            "n_x": self.n_x,
-            "n_p": self.n_p,
-            "f_initial": self.f_initial,
-            # masks / matrices
-            "g_connections": self.g_connections,
-            "W_repeat": self.W_repeat,
-            "W_tile": self.W_tile,
-            "two_hot_table": self.two_hot_table,
-            "g_downsample": self.g_downsample,
-        }
-
-        return {**base, **derived}
 
 
 @dataclass
@@ -494,34 +65,23 @@ class TEMOutput:
 
 
 class TEMModel(nn.Module):
-    def __init__(self, params: Parameters):
-        # First call super class init function to set up torch.nn.Module style model and inherit it's functionality
-        super(TEMModel, self).__init__()
-
-        # Accept either Parameters object or legacy dict
-        self._settings = params  # TODO: replace by settings
-        self.hyper = params.to_legacy_dict()
-
-        # Extract commonly used parameters
-        n_a = self.hyper["n_actions"]
-        n_o = self.hyper["n_o"]
-        n_c = self.hyper["n_c"]
-        n_p = self.hyper["n_p"]
-        n_g = self.hyper["n_g"]
-        n_x = self.hyper["n_x"]
-        f_init = self.hyper["f_initial"]
+    def __init__(self, n_observations: int, n_actions: int, settings: Optional[TEMSettings] = None):
+        super().__init__()
+        self._settings = settings or TEMSettings()
+        n_c, n_g, n_p = settings.n_features, settings.n_g, settings.n_p
+        n_o, n_a = n_observations, n_actions
 
         # Autoencoder module for observation compression/decoding
-        self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
+        self.autoencoder = AutoencoderModule(n_o, n_c, settings.autoencoder)
 
         # Entorhinal Hippocampal Circuit components
-        self.lec = lec = LECModel(n_c, f_init, params.lec_settings)
-        self.mec = mec = MECModel(n_a, n_p, n_g, f_init, params.mec_settings)
-        self.hpc = hpc = HPCModel(mec.grid_n_freq, n_p, f_init, params.hpc_settings)
+        self.lec = lec = LECModel(n_c, self.settings.f_initial, settings.lec_settings)
+        self.mec = mec = MECModel(n_a, n_p, n_g, self.settings.f_initial, settings.mec_settings)
+        self.hpc = hpc = HPCModel(mec.grid_n_freq, n_p, self.settings.f_initial, settings.hpc_settings)
 
         # Projection modules
-        self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
-        self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
+        self.lec_projection = ProjectionModule(lec, hpc, settings.lec_projection)
+        self.mec_projection = ProjectionModule(mec, hpc, settings.mec_projection)
 
     def set_runtime(self, eta: float, hebbian_decay: float, p2g_uncertainty_offset: float) -> None:
         """Set runtime hyperparameters (called by training loop each step).
@@ -548,20 +108,16 @@ class TEMModel(nn.Module):
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
             # Reset g to priors for envs with no previous action
-            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.cells_init[f].unsqueeze(0), mec_state.cells[f]) for f in range(self.hyper["n_f"])]
+            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.cells_init[f].unsqueeze(0), mec_state.cells[f]) for f in range(self.mec.n_freq)]
             mec_state.transition = Transition(g_reset, uncertainty=None)
 
         # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
-        if self.hyper["has_static_action"]:
-            a = utils.one_hot_with_zero(a_prev, self.hyper["n_actions"], device=device)
-        else:
-            a_idx = torch.tensor([int(a) if a is not None else 0 for a in a_prev], dtype=torch.long, device=device)
-            a = torch.nn.functional.one_hot(a_idx, num_classes=self.hyper["n_actions"]).float()
+        a = utils.one_hot_with_zero(a_prev, self.mec.n_a, device=device)
 
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
-        p_xi = self.hpc.recall(x_, hpc_state, mode="full") if self.hyper["use_x_cued_recall"] else None
+        p_xi = self.hpc.recall(x_, hpc_state, mode="full") if self.settings.use_x_cued_recall else None
 
         # Transition: MEC path integration (action-driven)
         g_gen, mec_state = self.mec.generative(a, locations, mec_state)  # Updates mec state with g_path

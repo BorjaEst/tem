@@ -36,9 +36,8 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import core, data, losses, settings, training
-from torch_tem.core import Parameters
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.settings import CheckpointSettings, LoggerSettings
+from torch_tem.settings import CheckpointSettings, LoggerSettings, TEMSettings
 from torch_tem.training import TrainerConfig
 
 # Configure PyTorch for better performance on modern GPUs
@@ -82,8 +81,8 @@ class RunArguments(BaseSettings):
     # =========================================================================
     # Core settings
     # =========================================================================
-    model_params: Parameters = Field(
-        default_factory=Parameters,
+    model_params: TEMSettings = Field(
+        default_factory=TEMSettings,
         description="Model architecture parameters.",
     )
     seed: int = Field(
@@ -240,7 +239,7 @@ if __name__ == "__main__":
 
     # Step 3: Construct the TEM model from architecture parameters
     # TEMModel now accepts Parameters object directly (backwards compatible with legacy dict)
-    tem_model = core.TEMModel(args.model_params)
+    tem_model = core.TEMModel(n_observations=45, n_actions=4, settings=args.model_params)
 
     # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control

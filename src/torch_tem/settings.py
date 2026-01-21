@@ -308,11 +308,10 @@ class GroundedLocationSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
-    use_x_cued_recall: bool = Field(
+    use_x_cued_recall: bool = Field(  # TODO: We should remove this an allow p_xi to be None
         default=True,
         description="Whether to use inferred grounded location loss.",
     )
-
     reduction: Reduction = Field(
         default="none",
         description="Reduction for grounded location loss.",
@@ -622,10 +621,6 @@ class HPCSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    use_x_cued_recall: bool = Field(
-        default=True,
-        description="Whether to use inferred ground location while inferring new abstract location",
-    )
     common_memory: bool = Field(  # Probably to move to hebbian which will rename memory
         default=False,
         description="Use common memory for generative and inference network",
@@ -653,15 +648,56 @@ class TEMSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
 
-    lec: LECSettings = Field(
+    autoencoder: AutoencoderSettings = Field(
+        default_factory=AutoencoderSettings,
+        description="Autoencoder module settings.",
+    )
+    f_initial: List[float] = Field(
+        default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01],
+        frozen=True,
+        description="Initial spatial frequencies for multi-scale modules.",
+    )
+    n_features: int = Field(
+        default=10,
+        frozen=True,
+        description="Number of LEC context features.",
+    )
+    lec_settings: LECSettings = Field(
         default_factory=LECSettings,
         description="LEC module settings.",
     )
-    mec: MECSettings = Field(
+    lec_projection: LECProjectionSettings = Field(
+        default_factory=LECProjectionSettings,
+        description="LEC projection module settings.",
+    )
+    n_g: List[int] = Field(
+        default_factory=lambda: [30, 30, 24, 18, 18],
+        frozen=True,
+        description="Number of MEC neurons per frequency module.",
+    )
+    mec_settings: MECSettings = Field(
         default_factory=MECSettings,
         description="MEC module settings.",
     )
-    hpc: HPCSettings = Field(
+    mec_projection: MECProjectionSettings = Field(
+        default_factory=MECProjectionSettings,
+        description="MEC projection module settings.",
+    )
+    n_p: List[int] = Field(
+        default_factory=lambda: [100, 100, 80, 60, 60],
+        frozen=True,
+        description="Number of HPC neurons per frequency module.",
+    )
+    hpc_settings: HPCSettings = Field(
         default_factory=HPCSettings,
         description="HPC module settings.",
     )
+    use_x_cued_recall: bool = Field(
+        default=True,
+        description="Whether to use inferred ground location while inferring new abstract location",
+    )
+    # # TODO/ change add
+    # n_features: int # replaces n_c, indicates the number of context features
+    # n_grids: List[int]  # replaces n_g, indicates the number of grid cells per frequency module
+    # n_ovc: List[int]  # replaces n_ovc, indicates the number of OVC cells per frequency module
+    # n_memory: List[int]  # replaces n_p, indicates the number of place cells per frequency module

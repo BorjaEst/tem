@@ -204,9 +204,6 @@ class Parameters(BaseModel):
         for key in ("use_x_cued_recall", "common_memory", "kappa"):
             pop_into(key, hpc)
 
-        for key in ("p2g_sig_val",):
-            pop_into(key, mec)
-
         if world:
             data["world"] = world
         if lec:
@@ -270,10 +267,6 @@ class Parameters(BaseModel):
     @property
     def use_x_cued_recall(self) -> bool:
         return self.hpc.use_x_cued_recall
-
-    @property
-    def p2g_sig_val(self) -> float:
-        return self.mec_settings.p2g.curriculum_sigma
 
     @property
     def common_memory(self) -> bool:
@@ -456,7 +449,6 @@ class Parameters(BaseModel):
             "f_initial_base": self.f_initial_base,
             # HPC
             "use_x_cued_recall": self.use_x_cued_recall,
-            "p2g_sig_val": self.p2g_sig_val,
             "common_memory": self.common_memory,
             "kappa": self.kappa,
         }
@@ -482,19 +474,6 @@ class Parameters(BaseModel):
         }
 
         return {**base, **derived}
-
-
-@dataclass
-class RuntimeHyperparameters:
-    """Runtime hyperparameters injected by training (not part of model architecture).
-
-    These values are computed by the training schedule and updated each step.
-    They control time-varying aspects of model behavior during training.
-    """
-
-    eta: float = 0.0  # Hebbian learning rate (rate of remembering)
-    hebbian_decay: float = 0.9999  # Hebbian decay factor (rate of forgetting)
-    p2g_scale_offset: float = 1.0  # Variance offset scaling for p->g inference
 
 
 @dataclass
@@ -553,10 +532,6 @@ class TEMModel(nn.Module):
         self._params = params  # TODO: replace by settings
         self.hyper = params.to_legacy_dict()
 
-        # Initialize runtime hyperparameters with safe defaults
-        # These will be updated by training before each forward pass
-        self.runtime = RuntimeHyperparameters()
-
         # Extract commonly used parameters
         n_a = self.hyper["n_actions"]
         n_o = self.hyper["n_o"]
@@ -574,18 +549,15 @@ class TEMModel(nn.Module):
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
         self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
 
-    def set_runtime_hyperparams(self, eta: float, hebbian_decay: float, p2g_scale_offset: float) -> None:
+    def set_runtime(self, eta: float, hebbian_decay: float, p2g_uncertainty_offset: float) -> None:
         """Set runtime hyperparameters (called by training loop each step).
 
         Args:
             eta: Hebbian learning rate (rate of remembering)
             hebbian_decay: Hebbian decay factor (rate of forgetting)
-            p2g_scale_offset: Variance offset scaling for p->g inference
+            p2g_uncertainty_offset: Additive uncertainty offset for p->g inference
         """
-        self.runtime.eta = eta
-        self.runtime.hebbian_decay = hebbian_decay
-        self.runtime.p2g_scale_offset = p2g_scale_offset
-        self.mec.set_runtime(p2g_scale_offset=p2g_scale_offset)
+        self.mec.set_runtime(p2g_uncertainty_offset=p2g_uncertainty_offset)
         self.hpc.set_runtime(eta=eta, hebbian_decay=hebbian_decay)
 
     @property

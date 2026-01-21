@@ -128,13 +128,13 @@ class MECModel(nn.Module):
         transition = Transition(mean=g0, uncertainty=sigma_0)
         return MECState(transition, _ovc_start=self.ovc.start if self.ovc.n_freq > 0 else None)
 
-    def set_runtime(self, *, p2g_scale_offset: float):
+    def set_runtime(self, *, p2g_uncertainty_offset: float) -> None:
         """Set runtime hyperparameters.
 
         Args:
-            p2g_scale_offset: Scale factor for the P2G uncertainty curriculum.
+            p2g_uncertainty_offset: Additive uncertainty offset for P2G inference.
         """
-        self.p2g.scale_curriculum_sigma(p2g_scale_offset)
+        self.p2g.runtime.uncertainty_offset = p2g_uncertainty_offset
 
     @property
     def settings(self) -> MECSettings:

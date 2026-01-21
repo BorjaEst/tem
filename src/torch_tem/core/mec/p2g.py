@@ -7,6 +7,7 @@ weighting.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Tuple
 
 import torch
@@ -17,6 +18,11 @@ from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import P2GMemSettings
 from torch_tem.types import Transition
+
+
+@dataclass
+class Runtime:
+    uncertainty_offset: float = 0.0
 
 
 class P2GMemory(nn.Module):
@@ -31,8 +37,8 @@ class P2GMemory(nn.Module):
         super().__init__()
         self._mec_shape, self._n_freq = mec_shape, len(mec_shape)
         self._n_p = n_p
-        self._uncertainty_constant = settings.curriculum_sigma
         self._settings = settings
+        self._runtime = Runtime()
 
         # Mean prediction from place cells
         self.MLP_mu_g_mem = MLP(n_p, mec_shape, hidden_dim=[2 * g for g in mec_shape])
@@ -44,13 +50,9 @@ class P2GMemory(nn.Module):
         # Uncertainty from memory quality indicators
         self.MLP_sigma_g_mem = MLP([2 for _ in n_p], mec_shape, activation=[torch.tanh, torch.exp], hidden_dim=[2 * g for g in mec_shape])
 
-    def scale_curriculum_sigma(self, scale: float):
-        """Update the curriculum variance offset.
-
-        Args:
-            scale: Multiplier applied to `settings.curriculum_sigma`.
-        """
-        self._uncertainty_constant = scale * self.settings.curriculum_sigma
+    @property
+    def runtime(self) -> Runtime:
+        return self._runtime
 
     @property
     def settings(self) -> P2GMemSettings:
@@ -113,4 +115,4 @@ class P2GMemory(nn.Module):
         """
         sigma_g_input = [torch.cat((torch.sum(mu_f**2, dim=1, keepdim=True), torch.unsqueeze(err[f], dim=1)), dim=1) for f, mu_f in enumerate(g)]
         sigma = self.MLP_sigma_g_mem(sigma_g_input)
-        return [sigma[f] + self._uncertainty_constant for f in range(self._n_freq)]
+        return [sigma[f] + self.runtime.uncertainty_offset for f in range(self._n_freq)]

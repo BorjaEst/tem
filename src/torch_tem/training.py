@@ -320,8 +320,8 @@ class TEMLightningModule(pl.LightningModule):
             batch: Training batch (unused).
             batch_idx: Batch index (unused).
         """
-        eta, hebbian_decay, p2g_scale_offset, walk_center = self._compute_schedule(self.global_step)
-        self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
+        eta, hebbian_decay, p2g_uncertainty_offset, walk_center = self._compute_schedule(self.global_step)
+        self.tem.set_runtime(eta, hebbian_decay, p2g_uncertainty_offset)
         self._maybe_set_walk_length_center(walk_center)
 
     def on_validation_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
@@ -332,8 +332,8 @@ class TEMLightningModule(pl.LightningModule):
             batch_idx: Batch index (unused).
             dataloader_idx: Dataloader index for multiple validation sets.
         """
-        eta, hebbian_decay, p2g_scale_offset, _ = self._compute_schedule(self.global_step)
-        self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
+        eta, hebbian_decay, p2g_uncertainty_offset, _ = self._compute_schedule(self.global_step)
+        self.tem.set_runtime(eta, hebbian_decay, p2g_uncertainty_offset)
 
     def on_test_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         """Update runtime hyperparameters before test step.
@@ -343,8 +343,8 @@ class TEMLightningModule(pl.LightningModule):
             batch_idx: Batch index (unused).
             dataloader_idx: Dataloader index for multiple test sets.
         """
-        eta, hebbian_decay, p2g_scale_offset, _ = self._compute_schedule(self.global_step)
-        self.tem.set_runtime_hyperparams(eta, hebbian_decay, p2g_scale_offset)
+        eta, hebbian_decay, p2g_uncertainty_offset, _ = self._compute_schedule(self.global_step)
+        self.tem.set_runtime(eta, hebbian_decay, p2g_uncertainty_offset)
 
     def on_before_optimizer_step(self, optimizer) -> None:
         """Apply learning rate schedule before optimizer step.
@@ -442,10 +442,10 @@ class TEMLightningModule(pl.LightningModule):
             iteration: Current global step.
 
         Returns:
-            Tuple of (eta, hebbian_decay, p2g_scale_offset, walk_length_center):
+            Tuple of (eta, hebbian_decay, p2g_uncertainty_offset, walk_length_center):
                 eta: Hebbian learning rate.
                 hebbian_decay: Hebbian memory decay factor.
-                p2g_scale_offset: Place-to-grid transition variance offset.
+                p2g_uncertainty_offset: Additive uncertainty offset for place-to-grid inference.
                 walk_length_center: Target mean walk length for curriculum.
         """
         walk = self.trainer_settings.walk
@@ -456,14 +456,15 @@ class TEMLightningModule(pl.LightningModule):
         eta = min((iteration + 1) / hebbian.eta_it, 1) * hebbian.eta
         lamb = min((iteration + 1) / hebbian.lambda_it, 1) * hebbian.hebbian_decay
 
-        # p->g variance offset schedule
-        p2g_scale_offset = 1 / (1 + np.exp((iteration - p2g.p2g_sig_half_it) / p2g.p2g_sig_scale_it))
+        # p->g uncertainty offset schedule (eta-style: schedule outputs the final runtime value)
+        p2g_scale = 1 / (1 + np.exp((iteration - p2g.p2g_sig_half_it) / p2g.p2g_sig_scale_it))
+        p2g_uncertainty_offset = p2g.offset_min + (p2g.offset_max - p2g.offset_min) * p2g_scale
 
         # Walk length center (annealing from max to min over training)
         max_steps = max(int(self.trainer_settings.max_steps), 1)
         walk_length_center = walk.walk_it_max - walk.walk_it_window * 0.5 - min((iteration + 1) / max_steps, 1) * (walk.walk_it_max - walk.walk_it_min - walk.walk_it_window)
 
-        return eta, lamb, p2g_scale_offset, walk_length_center
+        return eta, lamb, p2g_uncertainty_offset, walk_length_center
 
 
 def select_env(t: Tensor, env_i: int) -> Tensor:

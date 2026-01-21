@@ -253,6 +253,14 @@ class P2GOffsetScheduleSettings(BaseModel):
         default=200,
         description="Scale factor for p2g variance offset schedule.",
     )
+    offset_min: float = Field(
+        default=0.0,
+        description="Minimum additive uncertainty offset applied to p->g inference.",
+    )
+    offset_max: float = Field(
+        default=10000.0,
+        description="Maximum additive uncertainty offset applied to p->g inference (schedule start).",
+    )
 
 
 class LoggerSettings(BaseModel):
@@ -528,10 +536,6 @@ class P2GMemSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    curriculum_sigma: float = Field(
-        default=10000.0,
-        description="Additional value to offset standard deviation of inferred grounded location",
-    )
     sigma_init: float = Field(
         default=0.1,
         frozen=True,

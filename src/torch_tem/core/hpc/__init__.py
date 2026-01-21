@@ -8,12 +8,12 @@ from torch import Tensor, nn
 
 from torch_tem import utils
 from torch_tem.core.hpc.attractor import AttractorNetwork
-from torch_tem.core.hpc.hebbian import HebbianUpdater
 from torch_tem.core.hpc.location import GroundLocation
+from torch_tem.core.hpc.memory import MemorySystem
 from torch_tem.settings import HPCSettings
 from torch_tem.types import GroundedLocation, Matrix, MultiScaleCode, Transition
 
-__all__ = ["HPCModel", "HPCState", "AttractorNetwork", "GroundLocation", "HebbianUpdater"]
+__all__ = ["HPCModel", "HPCState", "AttractorNetwork", "GroundLocation", "MemorySystem"]
 
 
 @dataclass
@@ -63,7 +63,7 @@ class HPCModel(nn.Module):
 
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
-        self.hebbian_updater = HebbianUpdater(shape, n_stages, f_init, settings.hebbian_update)
+        self.memoryr = MemorySystem(shape, n_stages, f_init, settings.memory)
         self.location = GroundLocation(shape, settings.location)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
@@ -79,8 +79,8 @@ class HPCModel(nn.Module):
         return memory
 
     def set_runtime(self, *, eta: float, hebbian_decay: float) -> None:
-        self.hebbian_updater.runtime.eta = float(eta)
-        self.hebbian_updater.runtime.hebbian_decay = float(hebbian_decay)
+        self.memoryr.runtime.eta = float(eta)
+        self.memoryr.runtime.hebbian_decay = float(hebbian_decay)
 
     @property
     def settings(self) -> HPCSettings:

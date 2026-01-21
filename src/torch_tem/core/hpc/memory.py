@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
-from torch_tem.settings import HebbianUpdateSettings
+from torch_tem.settings import MemorySettings
 
 
 @dataclass
@@ -16,10 +16,10 @@ class Runtime:
     hebbian_decay: float = 0.9999
 
 
-class HebbianUpdater(nn.Module):
+class MemorySystem(nn.Module):
     """Hebbian write/update logic for the grounded-location memory matrix."""
 
-    def __init__(self, shape: List[int], grid_n_freq: int, f_init: List[float], settings: HebbianUpdateSettings):
+    def __init__(self, shape: List[int], grid_n_freq: int, f_init: List[float], settings: MemorySettings):
         super().__init__()
         self._settings = settings
         mask = build_p_update_mask(shape=shape, grid_n_freq=grid_n_freq, f_init=f_init)
@@ -31,7 +31,7 @@ class HebbianUpdater(nn.Module):
         return self._runtime
 
     @property
-    def settings(self) -> HebbianUpdateSettings:
+    def settings(self) -> MemorySettings:
         return self._settings
 
     def forward(self, M_prev: Tensor, p_inf: Tensor, p_gen: Tensor, *, do_hierarchical_connections: bool = True) -> Tensor:

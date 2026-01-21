@@ -616,21 +616,6 @@ class AttractorSettings(BaseModel):
     )
 
 
-class HebbianUpdateSettings(BaseModel):
-    """Settings for Hebbian update modules."""
-
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-
-    clamp_min: float = Field(
-        default=-1.0,
-        description="Minimum clamp value for Hebbian memory weights.",
-    )
-    clamp_max: float = Field(
-        default=1.0,
-        description="Maximum clamp value for Hebbian memory weights.",
-    )
-
-
 class GroundLocSettings(BaseModel):
     """Settings for location distribution modules."""
 
@@ -641,6 +626,21 @@ class GroundLocSettings(BaseModel):
         frozen=True,
         description="Activation function for attractor dynamics.",
     )
+    clamp_min: float = Field(
+        default=-1.0,
+        description="Minimum clamp value for Hebbian memory weights.",
+    )
+    clamp_max: float = Field(
+        default=1.0,
+        description="Maximum clamp value for Hebbian memory weights.",
+    )
+
+
+class MemorySettings(BaseModel):
+    """Settings for Hebbian update modules."""
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     clamp_min: float = Field(
         default=-1.0,
         description="Minimum clamp value for Hebbian memory weights.",
@@ -676,8 +676,8 @@ class HPCSettings(BaseModel):
         default_factory=GroundLocSettings,
         description="Location distribution module settings.",
     )
-    hebbian_update: HebbianUpdateSettings = Field(
-        default_factory=HebbianUpdateSettings,
+    memory: MemorySettings = Field(
+        default_factory=MemorySettings,
         description="Hebbian update module settings.",
     )
 

@@ -499,7 +499,7 @@ class TEMModel(nn.Module):
         super(TEMModel, self).__init__()
 
         # Accept either Parameters object or legacy dict
-        self._params = params  # TODO: replace by settings
+        self._settings = params  # TODO: replace by settings
         self.hyper = params.to_legacy_dict()
 
         # Extract commonly used parameters
@@ -511,11 +511,15 @@ class TEMModel(nn.Module):
         n_x = self.hyper["n_x"]
         f_init = self.hyper["f_initial"]
 
-        # Initialize LEC (Lateral Entorhinal Cortex) component
+        # Autoencoder module for observation compression/decoding
         self.autoencoder = AutoencoderModule(n_o, n_c, params.autoencoder)
+
+        # Entorhinal Hippocampal Circuit components
         self.lec = lec = LECModel(n_c, f_init, params.lec_settings)
         self.mec = mec = MECModel(n_a, n_p, n_g, f_init, params.mec_settings)
         self.hpc = hpc = HPCModel(mec.grid_n_freq, n_p, f_init, params.hpc_settings)
+
+        # Projection modules
         self.lec_projection = ProjectionModule(lec, hpc, params.lec_projection)
         self.mec_projection = ProjectionModule(mec, hpc, params.mec_projection)
 
@@ -533,25 +537,7 @@ class TEMModel(nn.Module):
     @property
     def settings(self) -> TEMSettings:
         """Return TEM settings object constructed from model parameters."""
-        return self._params
-
-    def _apply(self, fn):
-        """Override _apply to move tensors in self.hyper when model is moved to GPU/CPU."""
-        super()._apply(fn)
-        self.hyper = self._apply_to_nested_tensors(self.hyper, fn)
-        return self
-
-    def _apply_to_nested_tensors(self, obj, fn):
-        """Recursively apply function to all tensors in nested dict/list/tuple structure."""
-        if torch.is_tensor(obj):
-            return fn(obj)
-        if isinstance(obj, dict):
-            return {k: self._apply_to_nested_tensors(v, fn) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [self._apply_to_nested_tensors(v, fn) for v in obj]
-        if isinstance(obj, tuple):
-            return tuple(self._apply_to_nested_tensors(v, fn) for v in obj)
-        return obj
+        return self._settings
 
     def forward(self, o, locations, a_prev, state: TEMState) -> tuple[TEMOutput, TEMState]:
         mec_state, lec_state, hpc_state = state.mec_state, state.lec_state, state.hpc_state

@@ -61,10 +61,14 @@ class HPCModel(nn.Module):
         masks = utils.update_to_masks(shape, update=utils.make_update_hierarchical(n_stages, self.n_freq))
         self.register_buffer("masks_hierarchical", masks, persistent=False)
 
+        # Store update masks as buffers for device management
+        mask = utils.make_hebbian_write_mask(n_stages, shape, f_init)
+        self.register_buffer("update_mask", mask, persistent=False)
+
         # Instantiate submodules
         self.attractor = AttractorNetwork(shape, settings.attractor)
-        self.memory = MemorySystem(shape, n_stages, f_init, settings.memory)
         self.location = GroundLocation(shape, settings.location)
+        self.memory_sys = MemorySystem(shape, n_stages, f_init, settings.memory)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
@@ -79,8 +83,8 @@ class HPCModel(nn.Module):
         return memory
 
     def set_runtime(self, *, eta: float, hebbian_decay: float) -> None:
-        self.memory.runtime.eta = float(eta)
-        self.memory.runtime.hebbian_decay = float(hebbian_decay)
+        self.memory_sys.runtime.eta = float(eta)
+        self.memory_sys.runtime.hebbian_decay = float(hebbian_decay)
 
     @property
     def settings(self) -> HPCSettings:
@@ -107,13 +111,13 @@ class HPCModel(nn.Module):
 
     def generative(self, p_g: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
         transition = Transition(mean=p_g, uncertainty=state.uncertainty)
-        p = utils.sample_diag_gaussian(transition) if self.settings.do_sample else transition.mean
-        return p, state.new(p, state.uncertainty)
+        p_gen = utils.sample_diag_gaussian(transition) if self.settings.do_sample else transition.mean
+        return p_gen, state.new(p_gen, state.uncertainty)
 
     def inference(self, x_: List[Tensor], g_: List[Tensor], state: HPCState) -> Tuple[List[Tensor], HPCState]:
         transition = self.location(x_, g_)
-        p = utils.sample_diag_gaussian(transition) if self.settings.do_sample else transition.mean
-        return p, state.new(p, transition.uncertainty)
+        p_inf = utils.sample_diag_gaussian(transition) if self.settings.do_sample else transition.mean
+        return p_inf, state.new(p_inf, transition.uncertainty)
 
     def recall(self, p_query: List[Tensor], state: HPCState, *, mode: Literal["full", "hierarchical"]) -> List[Tensor]:
         if mode == "full":
@@ -121,3 +125,10 @@ class HPCModel(nn.Module):
         elif mode == "hierarchical":
             return self.attractor(p_query, state.memory[0], masks=self.masks_hierarchical)
         raise ValueError(f"Invalid mode '{mode}'. Expected 'full' or 'hierarchical'.")
+
+    def update(self, p_inf: List[Tensor], p_xi: List[Tensor], p_gen_gi: List[Tensor], state: HPCState) -> HPCState:
+        m1, m2 = state.memory
+        p_inf, p_xi, p_gen_gi = [torch.cat(p, dim=1) for p in (p_inf, p_xi, p_gen_gi)]
+        m1 = self.memory_sys(m1, p_inf, p_gen_gi, mask=self.update_mask)
+        m2 = self.memory_sys(m2, p_inf, p_xi) if not self.settings.common_memory else m1
+        return HPCState(state.transition, memory=[m1, m2])

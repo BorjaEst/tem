@@ -341,35 +341,6 @@ class Parameters(BaseModel):
     # --- Connectivity matrices
     @computed_field
     @property
-    def p_update_mask(self) -> torch.Tensor:
-        """
-        Set connections when forming Hebbian memory of grounded locations: from low frequency modules to high.
-        High frequency modules come first.
-        """
-        mask = torch.zeros((np.sum(self.n_p), np.sum(self.n_p)), dtype=torch.float)
-        n_p = np.cumsum(np.concatenate(([0], self.n_p)))
-
-        # Entry M_ij (row i, col j) is the connection FROM cell i TO cell j
-        for f_from in range(self.n_f):
-            for f_to in range(self.n_f):
-                # For connections that involve separate object vector modules
-                if f_from >= self.n_f_g or f_to >= self.n_f_g:
-                    # Connection between object vector modules: only allow from low to high frequency
-                    if f_from >= self.n_f_g and f_to >= self.n_f_g:
-                        if self.f_initial[f_from] <= self.f_initial[f_to]:
-                            mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
-                    # Connection between object vector and normal modules: allow any connections
-                    else:
-                        mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
-                # Connection between abstract location frequency modules: only from low to high frequency
-                else:
-                    if self.f_initial[f_from] <= self.f_initial[f_to]:
-                        mask[n_p[f_from] : n_p[f_from + 1], n_p[f_to] : n_p[f_to + 1]] = 1.0
-
-        return mask
-
-    @computed_field
-    @property
     def g_connections(self) -> list[list[bool]]:
         """
         In path integration, abstract location frequency modules can influence the transition of other modules
@@ -465,7 +436,6 @@ class Parameters(BaseModel):
             "n_p": self.n_p,
             "f_initial": self.f_initial,
             # masks / matrices
-            "p_update_mask": self.p_update_mask,
             "g_connections": self.g_connections,
             "W_repeat": self.W_repeat,
             "W_tile": self.W_tile,
@@ -625,9 +595,7 @@ class TEMModel(nn.Module):
         p_inf, hpc_state = self.hpc.inference(x_, g_, hpc_state)
 
         # Update memory (Hebbian write)  (Idealy should be in hpc.generative and hpc.inference)
-        M = self.update_memory(hpc_state.memory, p_inf, p_xi, p_gen_gi)
-        hpc_state.memory = M
-        state.hpc_state = hpc_state
+        hpc_state = self.hpc.update(p_inf, p_xi, p_gen_gi, hpc_state)
 
         # Build tem state
         state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
@@ -662,28 +630,6 @@ class TEMModel(nn.Module):
         output = TEMOutput(inference=inference, generative=generative, reconstruction=reconstructions)
         state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
         return output, state
-
-    def update_memory(self, memory_prev: List[Tensor], p_inf, p_xi, p_gen_gi) -> List[Tensor]:
-        """Update Hebbian memory matrices.
-
-        Computes M_{t+1} after predictions are made (to avoid write-then-read shortcut).
-
-        Args:
-            memory_prev: Previous memory matrices (from state.hpc_state.memory)
-            p_inf: Inferred place cells
-            p_xi: Place cells from sensory retrieval
-            p_gen_gi: Generated place cells (from g_inf via memory)
-
-        Returns:
-            Updated memory matrices [M_gen, M_inf] (M_inf only if use_x_cued_recall=True)
-        """
-        # Update generative memory with generated and inferred grounded location
-        M = [self.hpc.memory(memory_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen_gi, dim=1))]
-        # If using memory for grounded location inference: append inference memory
-        if self.hyper["use_x_cued_recall"]:
-            # Inference memory is identical to generative memory if using common memory, and updated separately if not
-            M.append(M[0] if self.hyper["common_memory"] else self.hpc.memory(memory_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_xi, dim=1), do_hierarchical_connections=False))
-        return M
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> TEMState:
         # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)

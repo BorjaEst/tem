@@ -683,7 +683,7 @@ class TEMSettings(BaseModel):
         default_factory=MECProjectionSettings,
         description="MEC projection module settings.",
     )
-    n_p: List[int] = Field(
+    n_hippocampal: List[int] = Field(
         default_factory=lambda: [100, 100, 80, 60, 60],
         frozen=True,
         description="Number of HPC neurons per frequency module.",

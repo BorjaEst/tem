@@ -68,7 +68,7 @@ class TEMModel(nn.Module):
     def __init__(self, n_observations: int, n_actions: int, settings: Optional[TEMSettings] = None):
         super().__init__()
         self._settings = settings or TEMSettings()
-        n_c, n_g, n_p = settings.n_features, settings.n_g, settings.n_p
+        n_c, n_g, n_p = settings.n_features, settings.n_g, settings.n_hippocampal
         n_o, n_a = n_observations, n_actions
 
         # Autoencoder module for observation compression/decoding

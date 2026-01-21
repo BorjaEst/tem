@@ -23,6 +23,8 @@ from torch_tem.core.lec.norm import FeatureNorm
 from torch_tem.core.lec.reconstruction import Reconstruction
 from torch_tem.settings import LECSettings
 
+__all__ = ["LECModel", "LECState"]
+
 
 @dataclass
 class LECState:

@@ -1,17 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Mon Mar 30 14:35:30 2020
+TEM Figures Package
 
-@author: jacobb
+Provides plotting utilities and multi-panel figure modules for TEM visualization.
+
+Backward Compatibility:
+    Legacy plotting functions (plot_map, plot_walk, plot_actions) are re-exported
+    from the primitives module to maintain compatibility with existing code.
+
+New Architecture:
+    - primitives: Low-level drawing utilities (plot_map, plot_walk, etc.)
+    - style: Centralized matplotlib styling
+    - sinks: PDF/PNG saving and TensorBoard logging
+    - tem_overview: Multi-panel TEM diagnostic figures
 """
 
-# Functions for plotting training and results of TEM
-
-# Standard library imports
+# Standard library imports (for legacy functions below)
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import cm
+
+# Legacy imports for backward compatibility
+from torch_tem.figures.primitives import action_patch, initialise_axes, plot_actions, plot_map, plot_walk
+
+# Expose legacy API
+__all__ = [
+    "plot_map",
+    "plot_walk",
+    "plot_actions",
+    "initialise_axes",
+    "action_patch",
+    "plot_weights",  # Legacy, kept for compatibility
+    "plot_memory",  # Legacy, kept for compatibility
+    "plot_cells",  # Legacy, kept for compatibility
+]
 
 
 def plot_weights(models, params=None, steps=None, do_save=False):

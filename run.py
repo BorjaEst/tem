@@ -35,7 +35,8 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import core, data, losses, settings, training
+from torch_tem import callbacks, core, data, losses, settings, training
+from torch_tem.callbacks import FigureCallbackSettings, FiguresCallback
 from torch_tem.data.datamodule import DataConfig
 from torch_tem.settings import CheckpointSettings, LoggerSettings, TEMSettings
 from torch_tem.training import TrainerConfig
@@ -81,7 +82,7 @@ class RunArguments(BaseSettings):
     # =========================================================================
     # Core settings
     # =========================================================================
-    model_params: TEMSettings = Field(
+    model: TEMSettings = Field(
         default_factory=TEMSettings,
         description="Model architecture parameters.",
     )
@@ -165,6 +166,10 @@ class RunArguments(BaseSettings):
         default_factory=CheckpointSettings,
         description="Model checkpoint settings.",
     )
+    figures: FigureCallbackSettings = Field(
+        default_factory=FigureCallbackSettings,
+        description="Figure generation callback settings.",
+    )
     ckpt_path: Optional[Path] = Field(
         default=None,
         description="Path to checkpoint file to resume from.",
@@ -239,15 +244,21 @@ if __name__ == "__main__":
 
     # Step 3: Construct the TEM model from architecture parameters
     # TEMModel now accepts Parameters object directly (backwards compatible with legacy dict)
-    tem_model = core.TEMModel(n_observations=45, n_actions=4, settings=args.model_params)
+    tem_model = core.TEMModel(n_observations=45, n_actions=4, settings=args.model)
 
     # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control
+    callbacks_list = [ModelCheckpoint(**args.checkpoint.model_dump())]
+
+    # Add FiguresCallback if enabled
+    if args.figures.enabled:
+        callbacks_list.append(FiguresCallback(args.figures))
+
     trainer = Trainer(
         # TensorBoard logger for metrics and hyperparameters
         logger=TensorBoardLogger(**args.logger.model_dump()),
-        # Checkpoint callback to save model state periodically
-        callbacks=[ModelCheckpoint(**args.checkpoint.model_dump())],
+        # Callbacks: checkpointing + optional figure generation
+        callbacks=callbacks_list,
         # Lightning Trainer kwargs (extracted from config)
         max_steps=args.max_steps,
         log_every_n_steps=args.log_every_n_steps,

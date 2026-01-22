@@ -1,0 +1,117 @@
+% !TeX program = latexmk
+% !TeX options = -pdf -interaction=nonstopmode
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{positioning,shapes.geometric,arrows.meta,fit,backgrounds,calc,matrix}
+
+\begin{document}
+
+\tikzset{
+  configuration/.style={ rectangle, draw=green!70, fill=green!10, thick, minimum width=3.2cm, minimum height=6mm, rounded corners=2pt, font=\small\bfseries, align=left },
+  setting/.style={ rectangle, draw=orange!70, fill=orange!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left },
+  blank/.style={draw=none,fill=none,inner sep=0pt},
+  title/.style={font=\small\bfseries,align=left},
+  config_edge/.style={->,>=Stealth,thick,green!70},
+  setting_edge/.style={->,>=Stealth,thick,orange!70},
+}
+
+\begin{tikzpicture}
+
+  % --- Layout anchors: fixed columns by hierarchy depth ---
+  \def\xCfg{0}
+  \def\xLone{7.8}
+  \def\xLtwo{14.4}
+  \def\xLthree{20.8}
+
+  % Vertical anchors (compact, grouped)
+  \def\yModel{-0.0}
+  \def\yShareda{-1.0}
+  \def\yData{-2.0}
+  \def\ySharedb{-7.0}
+  \def\yTrain{-8.0}
+
+  % --- Headers ---
+  \node[title] (hdr_cfg) at (\xCfg,1.4) {Configurations};
+  \node[title] (hdr_l1) at (\xLone,1.4) {Level-1 settings};
+  \node[title] (hdr_l2) at (\xLtwo,1.4) {Level-2 settings};
+  \node[title] (hdr_l3) at (\xLthree,1.4) {Level-3 nested settings};
+
+  % --- Level-3 nested model settings (column 3; aligned to their parent setting) ---
+  \node[setting,font=\scriptsize] (FreqFilterSettings) at (\xLthree,\yModel-0.0) {FreqFilterSettings};
+  \node[setting,font=\scriptsize] (FeatureNormSettings) at (\xLthree,\yModel-1.0) {FeatureNormSettings};
+  \node[setting,font=\scriptsize] (ReconstructionSettings) at (\xLthree,\yModel-2.0) {ReconstructionSettings};
+
+  \node[setting,font=\scriptsize] (PathSettings) at (\xLthree,\yModel-3.0) {PathSettings};
+  \node[setting,font=\scriptsize] (P2GMemSettings) at (\xLthree,\yModel-4.0) {P2GMemSettings};
+  \node[setting,font=\scriptsize] (OVCSettings) at (\xLthree,\yModel-5.0) {OVCSettings};
+
+  \node[setting,font=\scriptsize] (AttractorSettings) at (\xLthree,\yModel-6.0) {AttractorSettings};
+  \node[setting,font=\scriptsize] (GroundLocSettings) at (\xLthree,\yModel-7.0) {GroundLocSettings};
+  \node[setting,font=\scriptsize] (HebbianUpdateSettings) at (\xLthree,\yModel-8.0) {HebbianUpdateSettings};
+
+  % --- Level-2 model settings (column 2; children of TEMSettings) ---
+  \node[setting] (LECProjectionSettings) at (\xLtwo,\yModel-0.0) {LECProjectionSettings};
+  \node[setting] (LECSettings) at (\xLtwo,\yModel-1.0) {LECSettings};
+  --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (FreqFilterSettings.west);
+  --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (FeatureNormSettings.west);
+  --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (ReconstructionSettings.west);
+
+  \node[setting] (MECProjectionSettings) at (\xLtwo,\yModel-3.0) {MECProjectionSettings};
+  \node[setting] (MECSettings) at (\xLtwo,\yModel-4.0) {MECSettings};
+  --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (PathSettings.west);
+  --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (P2GMemSettings.west);
+  --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (OVCSettings.west);
+
+  \node[setting] (HPCSettings) at (\xLtwo,\yModel-7.0) {HPCSettings};
+  --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (AttractorSettings.west);
+  --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (GroundLocSettings.west);
+  --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (HebbianUpdateSettings.west);
+
+  \node[setting] (AutoencoderSettings) at (\xLtwo,\yModel-9.0) {AutoencoderSettings};
+
+  % --- Level-1 settings (column 1; grouped by owning configuration) ---
+  \node[setting] (TEMSettings) at (\xLone,\yModel-0.0) {TEMSettings};
+  --- \draw[setting_edge] (TEMSettings.east) to[out=0,in=180] (AutoencoderSettings.west);
+  --- \draw[setting_edge] (TEMSettings.east) to[out=0,in=180] (LECSettings.west);
+  --- \draw[setting_edge] (TEMSettings.east) to[out=0,in=180] (LECProjectionSettings.west);
+  --- \draw[setting_edge] (TEMSettings.east) to[out=0,in=180] (MECSettings.west);
+  --- \draw[setting_edge] (TEMSettings.east) to[out=0,in=180] (MECProjectionSettings.west);
+  --- \draw[setting_edge] (TEMSettings.east) to[out=0,in=180] (HPCSettings.west);
+
+  \node[setting] (SpaceContractSettings) at (\xLone,\yShareda-0.0) {SpaceContractSettings};
+
+  \node[setting] (EnvironmentSettings) at (\xLone,\yData-0.0) {EnvironmentSettings};
+  \node[setting] (RolloutSettings) at (\xLone,\yData-1.0) {RolloutSettings};
+  \node[setting] (EvalSettings) at (\xLone,\yData-2.0) {EvalSettings};
+  \node[setting] (ExplorationSettings) at (\xLone,\yData-3.0) {ExplorationSettings};
+  \node[setting] (ShinySettings) at (\xLone,\yData-4.0) {ShinySettings};
+
+  \node[setting] (WalkCurriculumSettings) at (\xLone,\ySharedb-0.0) {WalkCurriculumSettings (shared)};
+
+  \node[setting] (LossSettings) at (\xLone,\yTrain-0.0) {LossSettings};
+  \node[setting] (LRScheduleSettings) at (\xLone,\yTrain-1.0) {LRScheduleSettings};
+  \node[setting] (HebbianScheduleSettings) at (\xLone,\yTrain-2.0) {HebbianScheduleSettings};
+  \node[setting] (P2GOffsetScheduleSettings) at (\xLone,\yTrain-3.0) {P2GOffsetScheduleSettings};
+
+  % --- Configurations (left column) ---
+  \node[configuration] (TEMModelConfig) at (\xCfg,\yModel-0.5) {TEMModelConfig};
+  --- \draw[config_edge] (TEMModelConfig.east) to[out=0,in=180] (TEMSettings.west);
+  --- \draw[config_edge] (TEMModelConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
+  \node[configuration] (DataConfig) at (\xCfg,\yData-1.5) {DataConfig};
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvironmentSettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (RolloutSettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EvalSettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (ExplorationSettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (ShinySettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);
+  \node[configuration] (TrainerConfig) at (\xCfg,\yTrain-1.0) {TrainerConfig};
+  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);
+  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (LossSettings.west);
+  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (LRScheduleSettings.west);
+  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (HebbianScheduleSettings.west);
+  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (P2GOffsetScheduleSettings.west);
+
+\end{tikzpicture}
+
+\end{document}

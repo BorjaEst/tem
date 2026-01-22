@@ -70,7 +70,8 @@ class TEMModel(nn.Module):
         self._settings = settings or TEMSettings()
         n_features = settings.n_features  # Number of LEC features (compressed observation)
         n_grids = settings.n_grids  # Number of MEC grid cells per frequency
-        n_ovc = settings.n_ovc  # Number of OVC cells per frequency (or None)
+        n_ovc = settings.n_ovc if settings.n_ovc != "off" else []  # Number of MEC OVC cells per frequency
+        n_ovc = settings.n_ovc if settings.n_ovc != "merged" else None  # Merge OVC with grid cells
         n_hippocampal = settings.n_hippocampal  # Number of HPC place cells per frequency
         f_initial = settings.f_initial  # Initial firing rate for all cells
 

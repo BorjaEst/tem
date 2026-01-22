@@ -11,12 +11,12 @@ Notes:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Union
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from torch_tem.types import Reduction, Scalar
+from torch_tem.types import OVCLayout, Reduction, Scalar
 
 Activation = Literal["leaky_relu", "sigmoid", "none"]
 ProjectionMode = Literal["identity", "tiling", "low_rank", "random"]
@@ -666,15 +666,14 @@ class TEMSettings(BaseModel):
         description="LEC projection module settings.",
     )
     n_grids: List[int] = Field(
-        default_factory=lambda: [30, 30, 24, 18],
+        default_factory=lambda: [30, 30, 24, 18, 18],
         frozen=True,
         description="Number of MEC neurons per frequency module.",
     )
-    n_ovc: Optional[List[int]] = Field(
-        # default=None,
-        default=[18],
+    n_ovc: Union[Literal["off", "merged"], List[int]] = Field(
+        default="merged",
         frozen=True,
-        description="Number of OVC neurons per frequency module. None: no OVC cells.",
+        description="Number of OVC neurons per frequency module. 'merged' to merge with n_grids.",
     )
     mec_settings: MECSettings = Field(
         default_factory=MECSettings,

@@ -14,7 +14,6 @@ each stage.
 
 from typing import List, Optional
 
-import numpy as np
 import torch
 from torch import Tensor, nn
 

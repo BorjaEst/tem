@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence, Tuple
+from itertools import tee
+from typing import List, Optional, Sequence, Tuple
 
 import torch
 from torch import Tensor, nn
@@ -14,13 +15,13 @@ from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import TEMSettings
-from torch_tem.types import LocationBelief, Walk
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Observation, OVCLayout, Walk
 
 
 @dataclass
 class TEMLabel:
-    o: Tensor  # True sensory observation (for loss computation)
-    locations: List[Tensor]  # True locations (for loss computation)
+    o: Observation  # True sensory observation (for loss computation)
+    locations: List[LocationLabel]  # True locations (for loss computation)
 
 
 @dataclass
@@ -30,30 +31,29 @@ class TEMState:
     hpc_state: HPCState
 
     def detach(self) -> "TEMState":
-        return TEMState(
-            lec_state=self.lec_state.detach(),
-            mec_state=self.mec_state.detach(),
-            hpc_state=self.hpc_state.detach(),
-        )
+        lec_state: LECState = self.lec_state.detach()
+        mec_state: MECState = self.mec_state.detach()
+        hpc_state: HPCState = self.hpc_state.detach()
+        return TEMState(lec_state, mec_state, hpc_state)
 
 
 @dataclass
 class TEMInference:
-    g_inf: List[Tensor]
-    p_inf: List[Tensor]
-    p_xi: List[Tensor]
+    g_inf: AbstractLocation
+    p_inf: GroundedLocation
+    p_xi: GroundedLocation
 
 
 @dataclass
 class TEMGenerative:
-    g_gen: List[Tensor]
-    p_gen_gg: List[Tensor]
-    p_gen_gi: List[Tensor]
+    g_gen: AbstractLocation
+    p_gen_gg: GroundedLocation
+    p_gen_gi: GroundedLocation
 
 
 @dataclass
 class TEMReconstruction:
-    o_hat: Sequence[Tensor]
+    o_hat: Sequence[Observation]
     o_logits: Sequence[Tensor]
 
 
@@ -123,7 +123,7 @@ class TEMModel(nn.Module):
         return self.mec.n_grids
 
     @property
-    def n_ovc(self) -> Optional[List[int]]:
+    def n_ovc(self) -> OVCLayout:
         """Return the number of MEC OVC cells per frequency (or None)."""
         return self.mec.n_ovc
 
@@ -132,12 +132,14 @@ class TEMModel(nn.Module):
         """Return the number of HPC place cells per frequency."""
         return self.hpc.shape
 
-    def forward(self, o, locations, a_prev, state: TEMState) -> tuple[TEMOutput, TEMState]:
+    def forward(self, o: Observation, locations: List[LocationLabel], a_prev: List[Optional[int]], state: TEMState) -> tuple[TEMOutput, TEMState]:
         mec_state, lec_state, hpc_state = state.mec_state, state.lec_state, state.hpc_state
         c = self.autoencoder.encode(o)
         device = o.device
 
         # Handle reset boundaries: where a_prev is None, reset state to priors before transition
+        # TODO: This responsability to reset state should go somewhere else, e.g., in the Rollout class
+        # TODO: Then we do not need None actions, and use a Tensor[int] for a_prev
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
             # Reset g to priors for envs with no previous action
@@ -217,30 +219,38 @@ class TEMModel(nn.Module):
         return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
 
 
-class Rollout(Iterator[TEMState]):
+class Rollout(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
+    """ """
+
+    # TODO: Add docstring
+
     def __init__(self, model: TEMModel, walk: Walk, initial: Optional[TEMState] = None):
-        self.model = model
-        self.walk = list(walk)  # Materialize for predictable indexing
+        """ """
+        # TODO: Add docstring
+        self.model = model  # TEM model to rollout
+        self.walk = iter(walk)  # Walk to rollout over
 
-        if len(self.walk) == 0:
-            raise ValueError("Rollout requires at least 1 timestep in walk")
+        # Peek at first observation to get batch size and device
+        _, first_observation, _ = next(tee(self.walk)[0])  # Peek at first observation
+        batch_size, device = first_observation.shape[0], first_observation.device
 
-        # Extract first step to determine batch size and initialize state
-        locations_0, o_0, _ = self.walk[0]
-
-        # Determine initial state
-        state = initial or model.init_state(batch_size=o_0.shape[0], device=o_0.device)
-
-        # Initialize prev-values for first forward pass
-        self._a_prev = [None for _ in range(o_0.shape[0])]
-        self._state = state
-
-        # Track current position in walk
-        self._idx = 0
+        # Initialize state and previous actions
+        self._state = initial or model.init_state(batch_size, device)
+        self._a_prev = [None for _ in range(first_observation.shape[0])]
 
     def __iter__(self) -> "Rollout":
         """Return self as iterator."""
         return self
+
+    @property
+    def state(self) -> TEMState:
+        """Return current TEM state."""
+        return self._state
+
+    @property
+    def previous_action(self) -> List[Optional[int]]:
+        """Return previous actions."""
+        return self._a_prev
 
     def __next__(self) -> TEMState:
         """Process next timestep and return state.
@@ -251,25 +261,8 @@ class Rollout(Iterator[TEMState]):
         Raises:
             StopIteration: When all timesteps have been processed.
         """
-        if self._idx >= len(self.walk):
-            raise StopIteration
-
-        # Get current timestep
-        locations, o, a = self.walk[self._idx]
-        self._idx += 1
-
-        # Run model forward
-        output, state = self.model(o, locations, self._a_prev, self._state)
-
-        # Build state with updated components
-        state.g = locations
-        state.a_prev = a
-
-        # Update prev-values for next iteration
-        self._a_prev = a
-        self._state = state
-
-        # Build labels for current timestep
-        labels = TEMLabel(o=o, locations=locations)
-
-        return output, labels, state
+        locations, observation, action = next(self.walk)
+        output, self._state = self.model(observation, locations, self.previous_action, self._state)
+        labels = TEMLabel(observation, locations)
+        self._a_prev = action  # Update action for next iteration
+        return output, labels, self.state

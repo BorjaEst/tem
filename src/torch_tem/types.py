@@ -13,7 +13,7 @@ Longer background notes live in `docs/foundations.md`.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, TypeAlias
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, TypeAlias, Union
 
 from torch import Tensor
 
@@ -328,3 +328,4 @@ Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)
 # ....
 Reduction: TypeAlias = Literal["none", "sum", "mean"]
 Scalar: TypeAlias = int | float | Tensor
+OVCLayout: TypeAlias = Union[Literal["off", "merged"], List[int]]

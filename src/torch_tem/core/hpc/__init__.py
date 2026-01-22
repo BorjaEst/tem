@@ -291,7 +291,7 @@ class HPCModel(nn.Module):
             return self.attractor(p_query, state.memory[1], masks=self.masks_full)
         raise ValueError(f"Invalid mode '{mode}'. Expected 'full' or 'hierarchical'.")
 
-    def update(self, p_inf: List[Tensor], p_gen_gi: List[Tensor], p_xi: List[Tensor], state: HPCState) -> HPCState:
+    def update(self, p_inf: List[Tensor], p_gen_gi: List[Tensor], p_xi: Optional[List[Tensor]], state: HPCState) -> HPCState:
         """Apply a Hebbian write to the memory matrices.
 
         The update is applied to the hierarchical memory, and optionally to the
@@ -303,14 +303,13 @@ class HPCModel(nn.Module):
                 abstract location.
             p_xi: Grounded location retrieved from sensory features (x-cued
                 recall). This is expected to be present when full memory writes
-                are enabled.
+                are enabled. If `None`, full memory is not updated.
             state: Current `HPCState`.
 
         Returns:
             A new `HPCState` with updated `memory` and unchanged `transition`.
         """
         m_hier, m_full = state.memory
-        p_inf, p_xi, p_gen_gi = [torch.cat(p, dim=1) for p in (p_inf, p_xi, p_gen_gi)]
         m_hier = self.memory_system(m_hier, p_inf, p_gen_gi, mask=self.update_mask)
-        m_full = self.memory_system(m_full, p_inf, p_xi) if not self.settings.common_memory else m_hier
+        m_full = self.memory_system(m_full, p_inf, p_xi) if not self.settings.common_memory and p_xi else m_hier
         return HPCState(state.location, memory=[m_hier, m_full])

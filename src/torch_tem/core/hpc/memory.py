@@ -59,7 +59,7 @@ class HebbianUpdate(nn.Module):
         """Return Hebbian update settings."""
         return self._settings
 
-    def forward(self, memory: Tensor, p_inf: Tensor, p_gen: Tensor, *, mask: Optional[Tensor] = None) -> Tensor:
+    def forward(self, memory: Tensor, p_inf: List[Tensor], p_gen: List[Tensor], *, mask: Optional[Tensor] = None) -> Tensor:
         """Apply a Hebbian write update.
 
         Args:
@@ -74,6 +74,7 @@ class HebbianUpdate(nn.Module):
             Updated memory matrix with decay and clamping applied.
         """
         eta, hebbian_decay = self.runtime.eta, self.runtime.hebbian_decay
+        p_inf, p_gen = [torch.cat(p, dim=1) for p in (p_inf, p_gen)]
         update = torch.squeeze(torch.unsqueeze(p_inf + p_gen, 2) @ torch.unsqueeze(p_inf - p_gen, 1))
         update = update * mask.to(dtype=memory.dtype) if mask is not None else update
         return self.clamp_memory(hebbian_decay * memory + eta * update)

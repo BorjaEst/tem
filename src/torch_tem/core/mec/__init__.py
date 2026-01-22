@@ -241,7 +241,7 @@ class MECModel(nn.Module):
 
         return g_gen, state.new(cells_next, transition.uncertainty)
 
-    def inference(self, p_x: GroundedLocation, locations: list[LocationLabel], state: MECState) -> Tuple[AbstractLocation, MECState]:
+    def inference(self, p_x: Optional[GroundedLocation], locations: list[LocationLabel], state: MECState) -> Tuple[AbstractLocation, MECState]:
         """Run inference by fusing memory and OVC cues into the state.
 
         Args:
@@ -253,11 +253,11 @@ class MECModel(nn.Module):
             A tuple `(g_inf, new_state)` where `g_inf` is the inferred grid code
             and `new_state` is the updated MEC state.
         """
+        transition: LocationBelief = state.location
         # Step 1: Correct path integration with memory-based inference
-        transition = self.p2g_correction(p_x, state.location)
-
+        transition = self.p2g_correction(p_x, transition) if p_x is not None else transition
         # Step 2: Apply OVC correction from shiny landmarks.
-        transition = self.ovc_correction(locations, transition)
+        transition = self.ovc_correction(locations, transition) if self._n_ovc_modules is not 0 else transition
 
         # Apply central sampling policy (legacy parity: g_inf is sampled when do_sample=True)
         if self.settings.do_sample:

@@ -27,13 +27,15 @@ class OVCCorrection(nn.Module):
     def __init__(self, n_ovc: Optional[List[int]], mec_shape: List[int], *, settings: Optional[OVCSettings] = None):
         super().__init__()
         self._settings = settings or OVCSettings()
-        self._shape = n_ovc if n_ovc is not None else mec_shape
-        self._n_freq = len(self.shape)
+        n_freq_ovc = None if n_ovc is None else len(n_ovc)
+        self._ovc_start, self._ovc_count = utils.resolve_ovc_slice(len(mec_shape), n_freq_ovc)
+        self._shape = mec_shape[self._ovc_start : self._ovc_start + self._ovc_count]
+        self._n_freq = len(self._shape)
 
-        # Shiny cue → mean and uncertainty
+        # Shiny cue → mean and uncertainty.
         hidden_dim = [settings.hidden_dim] * self.n_freq
-        self.g_shiny_mlp = MLP([1] * self.n_freq, self.shape, [torch.relu, None], hidden_dim)
-        self.uncertainty_mlp = MLP([1] * self.n_freq, self.shape, [torch.relu, torch.exp], hidden_dim)
+        self.g_shiny_mlp = MLP([1] * self.n_freq, self.shape, hidden_dim=hidden_dim)
+        self.uncertainty_mlp = MLP([1] * self.n_freq, self.shape, [torch.tanh, torch.exp], hidden_dim=hidden_dim)
 
     @property
     def settings(self) -> OVCSettings:
@@ -49,6 +51,11 @@ class OVCCorrection(nn.Module):
     def n_freq(self) -> int:
         """Return the number of OVC frequency modules."""
         return self._n_freq
+
+    @property
+    def ovc_start(self) -> int:
+        """Return the starting index (into MEC frequencies) for OVC correction."""
+        return self._ovc_start
 
     def forward(self, locations: list[dict], transition: Transition) -> Transition:
         """Apply OVC correction to environments with shiny cues.
@@ -68,7 +75,7 @@ class OVCCorrection(nn.Module):
             return transition
 
         shiny_input = self._extract_shiny_cues(locations, shiny_mask, transition.mean[0].device)
-        freqs = range(self.start, self.start + self.n_freq)
+        freqs = range(self.ovc_start, self.ovc_start + self.n_freq)
 
         correction = self._predict_correction(shiny_input)
         return utils.inv_var_trans(transition, correction, shiny_mask, freqs)
@@ -116,7 +123,7 @@ class OVCCorrection(nn.Module):
         """
         # Predict mean with legacy nonlinearity (abs → leaky_relu)
         mu_g = [torch.abs(mu) for mu in self.g_shiny_mlp(shiny_input)]
-        mu_g_shiny = [torch.nn.functional.leaky_relu(g_f, negative_slope=0.1) for g_f in mu_g]
+        mu_g_shiny = [utils.leaky_relu(torch.clamp(g_f, min=-1.0, max=1.0)) for g_f in mu_g]
 
         # Predict uncertainty
         sigma_g_shiny = self.uncertainty_mlp(shiny_input)

@@ -41,7 +41,7 @@ class MECState:
     """
 
     transition: Transition  # State and uncertainty over abstract locations
-    _n_ovc: Optional[int] = None  # Cached number of OVC modules
+    _n_ovc_modules: Optional[int] = None  # Cached number of OVC modules
 
     def new(self, cells: AbstractLocation, uncertanty: MultiScaleCode) -> "MECState":
         """Return a new state with an updated transition.
@@ -96,9 +96,9 @@ class MECState:
     @property
     def ovc_cells(self) -> Optional[List[Tensor]]:
         """Return only the OVC activations, or `None` if not present."""
-        if self._n_ovc is None:
+        if self._n_ovc_modules is None:
             return None
-        return self.cells[len(self.cells) - self._n_ovc :]
+        return self.cells[len(self.cells) - self._n_ovc_modules :]
 
 
 class MECModel(nn.Module):
@@ -127,6 +127,7 @@ class MECModel(nn.Module):
         self._n_actions = n_actions
         self._shape = n_grids + (n_ovc if n_ovc is not None else [])
         self._n_grids, self._n_ovc = n_grids, n_ovc
+        self._n_ovc_modules = None if n_ovc is None else len(n_ovc)
         self._n_freq = len(self.shape)  # Total number of frequency modules
 
         # Prior: learned "default phase" of the grid code at reset
@@ -152,7 +153,7 @@ class MECModel(nn.Module):
         g0 = [g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.cells_init]
         sigma_0 = [std.unsqueeze(0).expand(batch_size, -1).to(device) for std in self.uncertainty_init]
         transition = Transition(mean=g0, uncertainty=sigma_0)
-        return MECState(transition, _n_ovc=self._n_ovc)
+        return MECState(transition, _n_ovc_modules=self._n_ovc_modules)
 
     def set_runtime(self, *, p2g_uncertainty_offset: float) -> None:
         """Set runtime hyperparameters.
@@ -255,8 +256,8 @@ class MECModel(nn.Module):
         # Step 1: Correct path integration with memory-based inference
         transition = self.p2g_correction(p_x, state.transition)
 
-        # Step 2: Apply OVC correction from shiny landmarks (if enabled)
-        transition = self.ovc_correction(locations, transition) if self.n_ovc is not None else transition
+        # Step 2: Apply OVC correction from shiny landmarks.
+        transition = self.ovc_correction(locations, transition)
 
         # Apply central sampling policy (legacy parity: g_inf is sampled when do_sample=True)
         if self.settings.do_sample:

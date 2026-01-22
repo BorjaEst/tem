@@ -94,9 +94,9 @@
   \node[setting] (P2GOffsetScheduleSettings) at (\xSetA,\yTrain-3.0) {P2GOffsetScheduleSettings};
 
   % --- Configurations (left column) ---
-  \node[configuration] (TEMModelConfig) at (\xCfg,\yModel-0.5) {TEMModelConfig};
-  --- \draw[config_edge] (TEMModelConfig.east) to[out=0,in=180] (TEMSettings.west);
-  --- \draw[config_edge] (TEMModelConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
+  \node[configuration] (ModelConfig) at (\xCfg,\yModel-0.5) {ModelConfig};
+  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (TEMSettings.west);
+  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
   \node[configuration] (DataConfig) at (\xCfg,\yData-1.5) {DataConfig};
   --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
   --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvironmentSettings.west);

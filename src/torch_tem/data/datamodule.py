@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch.utils.data import DataLoader, IterableDataset
 
 from torch_tem import data, settings
+from torch_tem.data.env_validation import validate_envs_against_contract
 
 
 class DataConfig(BaseModel):
@@ -40,10 +41,15 @@ class DataConfig(BaseModel):
     Note:
         Walk curriculum settings (walk) are shared with TrainerConfig to coordinate
         walk length annealing between data generation and training loop.
+        Space contract (space) is shared across the entire run to ensure consistency.
     """
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    space: settings.SpaceContractSettings = Field(
+        default_factory=settings.SpaceContractSettings,
+        description="Space contract: observation and action space dimensions.",
+    )
     env: settings.EnvironmentSettings = Field(
         default_factory=settings.EnvironmentSettings,
         description="Environment generation settings.",
@@ -79,6 +85,7 @@ class TEMDataModule(pl.LightningDataModule):
         self.dataset: Optional[TEMDataset] = None
         self.val_dataset: Optional[TEMDataset] = None
         self.test_dataset: Optional[TEMDataset] = None
+        self._validated = False  # Track whether env validation has been performed
 
     def setup(self, stage: str = None):
         """Setup is called on every process in DDP.
@@ -86,6 +93,12 @@ class TEMDataModule(pl.LightningDataModule):
         Create the dataset here (not in train_dataloader) to ensure it's only
         created once per process, even if train_dataloader is called multiple times.
         """
+        # Defense-in-depth: validate env files against contract (idempotent)
+        # This ensures alternate entrypoints that bypass run.py validation still fail fast
+        if not self._validated:
+            validate_envs_against_contract(self.data_settings.env.envs, self.data_settings.space)
+            self._validated = True
+
         if stage in (None, "fit") and self.dataset is None:
             self.dataset = TEMDataset(
                 self.data_settings,

@@ -38,6 +38,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch_tem import callbacks, core, data, losses, settings, training
 from torch_tem.callbacks import FigureCallbackSettings, FiguresCallback
 from torch_tem.data.datamodule import DataConfig
+from torch_tem.data.env_validation import validate_envs_against_contract
 from torch_tem.settings import CheckpointSettings, LoggerSettings, TEMSettings
 from torch_tem.training import TrainerConfig
 
@@ -94,6 +95,10 @@ class RunArguments(BaseSettings):
     # =========================================================================
     # Leaf settings (data generation)
     # =========================================================================
+    space: settings.SpaceContractSettings = Field(
+        default_factory=settings.SpaceContractSettings,
+        description="Space contract: observation and action space dimensions.",
+    )
     env: settings.EnvironmentSettings = Field(
         default_factory=settings.EnvironmentSettings,
         description="Environment generation settings.",
@@ -186,6 +191,7 @@ class RunArguments(BaseSettings):
         The walk settings are shared with trainer to maintain single source of truth.
         """
         return DataConfig(
+            space=self.space,  # Shared reference
             env=self.env,
             rollout=self.rollout,
             eval=self.eval,
@@ -238,15 +244,24 @@ if __name__ == "__main__":
     # Pydantic Settings will automatically parse sys.argv when cli_parse_args=True
     args = RunArguments()
 
-    # Step 2: Seed all RNGs for deterministic training
+    # Step 2: Validate environment files against space contract (fast fail)
+    # This ensures all env JSON files match the expected observation/action dimensions
+    # before we spend time initializing the model and trainer
+    validate_envs_against_contract(args.env.envs, args.space)
+
+    # Step 3: Seed all RNGs for deterministic training
     # workers=True ensures DataLoader workers are also seeded
     seed_everything(args.seed, workers=True)
 
-    # Step 3: Construct the TEM model from architecture parameters
-    # TEMModel now accepts Parameters object directly (backwards compatible with legacy dict)
-    tem_model = core.TEMModel(n_observations=45, n_actions=4, settings=args.model)
+    # Step 4: Construct the TEM model from architecture parameters and space contract
+    # Use contract dimensions (not hardcoded values) for observation/action spaces
+    tem_model = core.TEMModel(
+        n_observations=args.space.n_observations,
+        n_actions=args.space.n_actions_move,
+        settings=args.model,
+    )
 
-    # Step 4: Build the PyTorch Lightning Trainer
+    # Step 5: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control
     callbacks_list = [ModelCheckpoint(**args.checkpoint.model_dump())]
 
@@ -265,7 +280,7 @@ if __name__ == "__main__":
         enable_progress_bar=args.enable_progress_bar,
     )
 
-    # Step 5: Start training
+    # Step 6: Start training
     # The LightningModule wraps the TEM model and defines the training loop
     # The DataModule generates batches of walk data on-the-fly
     trainer.fit(

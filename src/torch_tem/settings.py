@@ -23,6 +23,47 @@ ProjectionMode = Literal["identity", "tiling", "low_rank", "random"]
 InitStrategy = Literal["identity", "random"]
 
 
+class SpaceContractSettings(BaseModel):
+    """Space contract settings: observation and action space dimensions.
+
+    This defines the interface contract between the TEM model and environment files.
+    All environment JSON files must match these dimensions for training to proceed.
+
+    Action Encoding Semantics:
+        When action0_is_noop=True (default):
+            - Action 0 (and None) encode as all-zeros (no-op/static action)
+            - Actions 1..n_actions_move encode as one-hot of length n_actions_move
+            - Total actions in env files must be n_actions_move + 1
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    n_observations: int = Field(
+        default=45,
+        ge=1,
+        description="Number of discrete observation states (model input dimensionality).",
+    )
+    n_actions_move: int = Field(
+        default=4,
+        ge=1,
+        description="Number of movement actions (excluding no-op if action0_is_noop=True).",
+    )
+    action0_is_noop: bool = Field(
+        default=True,
+        description="Whether action 0 represents a no-op/self-loop (encoded as all-zeros).",
+    )
+
+    @computed_field
+    @property
+    def n_actions_total(self) -> int:
+        """Total number of actions expected in environment files.
+
+        Returns:
+            n_actions_move + 1 if action0_is_noop, else n_actions_move
+        """
+        return self.n_actions_move + 1 if self.action0_is_noop else self.n_actions_move
+
+
 class EnvironmentSettings(BaseModel):
     """Environment generation settings."""
 

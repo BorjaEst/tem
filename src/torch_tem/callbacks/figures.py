@@ -44,7 +44,7 @@ class FigureCallbackSettings(BaseModel):
         description="Enable figure generation during training.",
     )
     every_n_steps: Optional[int] = Field(
-        default=1000,
+        default=100,
         description="Generate figures every N global steps (None = disabled).",
     )
     on_validation_end: bool = Field(
@@ -152,68 +152,99 @@ class FiguresCallback(Callback):
             batch: Training batch (chunk, visited) for rollout extraction.
             global_step: Current global training step.
         """
-        # Extract TEM model from Lightning module
-        if not hasattr(pl_module, "tem"):
-            return  # Not a TEM model, skip
-
-        tem_model: TEMModel = pl_module.tem
         chunk, _visited = batch
+        trace = self._try_extract_trace(pl_module.tem, chunk, global_step)
+        if trace is None:
+            return
 
-        # Create a fresh rollout for figure generation
-        # (Don't use the cached state, start clean for diagnostic clarity)
+        base_dir = self._get_figure_base_dir(trainer)
+        self._generate_and_persist_all(trainer, trace, base_dir, global_step)
+
+    def _try_extract_trace(self, tem_model: TEMModel, chunk: Any, global_step: int):
+        """Create a fresh rollout and extract a plot-ready trace.
+
+        Returns:
+            TEMRolloutTrace or None if extraction fails.
+        """
         rollout = Rollout(tem_model, chunk, initial=None)
-
-        # Extract plot-ready trace
         try:
-            trace = extract_rollout_trace(
+            return extract_rollout_trace(
                 rollout,
                 max_steps=self.settings.max_trace_steps,
                 downsample_stride=self.settings.downsample_stride,
             )
         except (ValueError, RuntimeError) as e:
-            # Rollout extraction can fail if batch is empty or malformed
             print(f"[FiguresCallback] Skipping figure generation at step {global_step}: {e}")
-            return
+            return None
 
-        # Determine output directory (logger directory)
+    def _get_figure_base_dir(self, trainer: pl.Trainer) -> Path:
+        """Determine the directory where figure artifacts should be written."""
         if trainer.logger is not None and hasattr(trainer.logger, "log_dir"):
-            base_dir = Path(trainer.logger.log_dir)
-        else:
-            base_dir = Path("./figures_output")  # Fallback if no logger
+            return Path(trainer.logger.log_dir)
+        return Path("./figures_output")
 
-        # Generate each configured figure
+    def _generate_and_persist_all(
+        self,
+        trainer: pl.Trainer,
+        trace: Any,
+        base_dir: Path,
+        global_step: int,
+    ) -> None:
+        """Generate each configured figure and persist it to sinks."""
         for figure_name in self.settings.figures:
-            try:
-                fig = self._make_figure(figure_name, trace)
-            except Exception as e:
-                print(f"[FiguresCallback] Failed to generate figure '{figure_name}': {e}")
+            fig = self._try_make_figure(figure_name, trace)
+            if fig is None:
                 continue
 
-            # Save PDF
-            if self.settings.save_pdf:
-                pdf_path = make_figure_path(
-                    base_dir,
-                    figure_name,
-                    step=global_step,
-                    extension="pdf",
-                )
-                try:
-                    save_pdf(fig, pdf_path)
-                except OSError as e:
-                    print(f"[FiguresCallback] Failed to save PDF {pdf_path}: {e}")
+            self._maybe_save_pdf(fig, base_dir, figure_name, global_step)
+            self._maybe_log_tensorboard(trainer, fig, figure_name, global_step)
 
-            # Log to TensorBoard
-            if self.settings.log_tensorboard and trainer.logger is not None:
-                try:
-                    log_tensorboard_figure(
-                        trainer.logger,
-                        tag=f"figures/{figure_name}",
-                        fig=fig,
-                        global_step=global_step,
-                        close=True,  # Close figure after logging
-                    )
-                except (AttributeError, RuntimeError) as e:
-                    print(f"[FiguresCallback] Failed to log figure to TensorBoard: {e}")
+    def _try_make_figure(self, figure_name: str, trace: Any):
+        """Safely build a figure; returns None on failure."""
+        try:
+            return self._make_figure(figure_name, trace)
+        except Exception as e:
+            print(f"[FiguresCallback] Failed to generate figure '{figure_name}': {e}")
+            return None
+
+    def _maybe_save_pdf(
+        self,
+        fig: Any,
+        base_dir: Path,
+        figure_name: str,
+        global_step: int,
+    ) -> None:
+        """Save the figure to disk (PDF) if enabled."""
+        if not self.settings.save_pdf:
+            return
+
+        pdf_path = make_figure_path(base_dir, figure_name, step=global_step, extension="pdf")
+        try:
+            save_pdf(fig, pdf_path)
+        except OSError as e:
+            print(f"[FiguresCallback] Failed to save PDF {pdf_path}: {e}")
+
+    def _maybe_log_tensorboard(
+        self,
+        trainer: pl.Trainer,
+        fig: Any,
+        figure_name: str,
+        global_step: int,
+    ) -> None:
+        """Log the figure preview to TensorBoard if enabled."""
+        if not self.settings.log_tensorboard or trainer.logger is None:
+            return
+
+        try:
+            log_tensorboard_figure(
+                trainer.logger,
+                tag=f"figures/{figure_name}",
+                fig=fig,
+                global_step=global_step,
+                close=True,
+            )
+        except (AttributeError, RuntimeError) as e:
+            print(f"[FiguresCallback] Failed to log figure to TensorBoard: {e}")
 
     def _make_figure(self, figure_name: str, trace):
         """Dispatch to the appropriate figure module.

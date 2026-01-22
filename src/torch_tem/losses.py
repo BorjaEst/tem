@@ -238,7 +238,7 @@ class AbstractLocationLoss(nn.Module):
                 $0.5 sum_f ||g_{inf}^f - g_{gen}^f||^2$
 
             nll:
-                Uncertainty-weighted nll divergence. Requires :class:`Transition`
+                Uncertainty-weighted nll divergence. Requires :class:`LocationBelief`
                 input with mean and uncertainty:
     <<<<<<< Updated upstream
                 $sum_f D_{KL}(g_{inf}^f || mathcal{N}(g_{gen}^f, sigma_{gen}^f))$

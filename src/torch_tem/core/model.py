@@ -14,7 +14,7 @@ from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import TEMSettings
-from torch_tem.types import Transition, Walk
+from torch_tem.types import LocationBelief, Walk
 
 
 @dataclass
@@ -142,7 +142,7 @@ class TEMModel(nn.Module):
         if torch.any(reset_mask):
             # Reset g to priors for envs with no previous action
             g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.cells_init[f].unsqueeze(0), mec_state.cells[f]) for f in range(self.mec.n_freq)]
-            mec_state.transition = Transition(g_reset, uncertainty=None)
+            mec_state = mec_state.new(g_reset, uncertainty=None)
 
         # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
         a = utils.one_hot_with_zero(a_prev, self.n_actions, device=device)
@@ -152,7 +152,7 @@ class TEMModel(nn.Module):
         x_ = self.lec_projection(x_inf)  # Project to memory format
         p_xi = self.hpc.recall(x_, hpc_state, mode="full") if self.settings.use_x_cued_recall else None
 
-        # Transition: MEC path integration (action-driven)
+        # LocationBelief: MEC path integration (action-driven)
         g_gen, mec_state = self.mec.generative(a, locations, mec_state)  # Updates mec state with g_path
         g_ = self.mec_projection(g_gen)
         p_gg = self.hpc.recall(g_, hpc_state, mode="hierarchical")

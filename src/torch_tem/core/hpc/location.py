@@ -5,7 +5,7 @@ from projected sensory features and projected abstract location.
 
 Notes:
     The uncertainty head is conceptually reusable across modules (e.g. MEC).
-    If refactoring towards a shared "Transition uncertainty" component, this
+    If refactoring towards a shared "LocationBelief uncertainty" component, this
     module is a likely consumer.
 """
 
@@ -19,7 +19,7 @@ from torch import Tensor, nn
 from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import GroundLocSettings
-from torch_tem.types import Transition
+from torch_tem.types import LocationBelief
 
 
 class GroundLocation(nn.Module):
@@ -53,7 +53,7 @@ class GroundLocation(nn.Module):
         """Return number of frequency modules."""
         return self._n_freq
 
-    def forward(self, x_: List[Tensor], g_: List[Tensor]) -> Transition:
+    def forward(self, x_: List[Tensor], g_: List[Tensor]) -> LocationBelief:
         """Infer grounded-location mean and uncertainty.
 
         Args:
@@ -61,14 +61,14 @@ class GroundLocation(nn.Module):
             g_: Projected abstract location per frequency module.
 
         Returns:
-            A `Transition` with:
+            A `LocationBelief` with:
 
             - `mean`: inferred grounded-location mean per frequency
             - `uncertainty`: inferred grounded-location uncertainty per frequency
         """
         mu_p = [self.activation(g_[f] * x_[f]) for f in range(self.n_freq)]
         sigma_p = self.uncertainty_mlp(mu_p)
-        return Transition(mean=mu_p, uncertainty=sigma_p)
+        return LocationBelief(mean=mu_p, uncertainty=sigma_p)
 
     def activation(self, p: Tensor) -> Tensor:
         """Apply the configured activation with clamping."""

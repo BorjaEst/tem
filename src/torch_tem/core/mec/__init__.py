@@ -21,12 +21,12 @@ from torch_tem.core.mec.ovc import OVCCorrection
 from torch_tem.core.mec.p2g import P2GMemory
 from torch_tem.core.mec.path import PathIntegrator
 from torch_tem.settings import MECSettings
-from torch_tem.types import AbstractLocation, MultiScaleCode, Transition
+from torch_tem.types import AbstractLocation, LocationBelief, MultiScaleCode
 
 __all__ = ["MECModel", "MECState"]
 
 
-@dataclass
+@dataclass()
 class MECState:
     """Container for MEC state.
 
@@ -40,15 +40,15 @@ class MECState:
             `cells`.
     """
 
-    transition: Transition  # State and uncertainty over abstract locations
+    location: LocationBelief  # State and uncertainty over abstract locations
     _n_ovc_modules: Optional[int] = None  # Cached number of OVC modules
 
-    def new(self, cells: AbstractLocation, uncertanty: MultiScaleCode) -> "MECState":
+    def new(self, cells: AbstractLocation, uncertainty: MultiScaleCode) -> "MECState":
         """Return a new state with an updated transition.
 
         Args:
             cells: New abstract location mean (multi-scale code).
-            uncertanty: New abstract location uncertainty (multi-scale code).
+            uncertainty: New abstract location uncertainty (multi-scale code).
                 Note: the parameter name preserves a legacy spelling.
 
         Returns:
@@ -60,7 +60,7 @@ class MECState:
             keeping autograd history.
         """
         copy = self.__dict__.copy()
-        copy.update({"transition": Transition(mean=cells, uncertainty=uncertanty)})
+        copy.update({"location": LocationBelief(mean=cells, uncertainty=uncertainty)})
         return MECState(**copy)
 
     def detach(self) -> "MECState":
@@ -79,19 +79,19 @@ class MECState:
     @property
     def cells(self) -> List[Tensor]:
         """Return grid + OVC activations."""
-        return self.transition.mean
+        return self.location.mean
 
     @property
     def uncertainty(self) -> Optional[List[Tensor]]:
         """Return grid + OVC uncertainties."""
-        return self.transition.uncertainty
+        return self.location.uncertainty
 
     @property
     def grid_cells(self) -> List[Tensor]:
         """Return only the grid-cell activations."""
-        if self._n_ovc is None:
+        if self._n_ovc_modules is None:
             return self.cells
-        return self.cells[: len(self.cells) - self._n_ovc]
+        return self.cells[: len(self.cells) - self._n_ovc_modules]
 
     @property
     def ovc_cells(self) -> Optional[List[Tensor]]:
@@ -152,7 +152,7 @@ class MECModel(nn.Module):
         """
         g0 = [g.unsqueeze(0).expand(batch_size, -1).to(device) for g in self.cells_init]
         sigma_0 = [std.unsqueeze(0).expand(batch_size, -1).to(device) for std in self.uncertainty_init]
-        transition = Transition(mean=g0, uncertainty=sigma_0)
+        transition = LocationBelief(mean=g0, uncertainty=sigma_0)
         return MECState(transition, _n_ovc_modules=self._n_ovc_modules)
 
     def set_runtime(self, *, p2g_uncertainty_offset: float) -> None:
@@ -254,7 +254,7 @@ class MECModel(nn.Module):
             and `new_state` is the updated MEC state.
         """
         # Step 1: Correct path integration with memory-based inference
-        transition = self.p2g_correction(p_x, state.transition)
+        transition = self.p2g_correction(p_x, state.location)
 
         # Step 2: Apply OVC correction from shiny landmarks.
         transition = self.ovc_correction(locations, transition)

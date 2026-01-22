@@ -17,7 +17,7 @@ from torch import Tensor, nn
 from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import P2GMemSettings
-from torch_tem.types import Transition
+from torch_tem.types import LocationBelief
 
 
 @dataclass
@@ -30,7 +30,7 @@ class P2GMemory(nn.Module):
 
     The model predicts a grid-code mean from `p_x` and estimates uncertainty
     using memory-quality features. The result is fused with a reference
-    `Transition` (typically from path integration).
+    `LocationBelief` (typically from path integration).
     """
 
     def __init__(self, n_p: List[int], mec_shape: List[int], settings: P2GMemSettings):
@@ -74,7 +74,7 @@ class P2GMemory(nn.Module):
         """Return the number of frequency modules."""
         return self._n_freq
 
-    def forward(self, p_x: List[Tensor], transition: Transition) -> Transition:
+    def forward(self, p_x: List[Tensor], transition: LocationBelief) -> LocationBelief:
         """Infer a corrected grid-code transition from place cells.
 
         Args:
@@ -82,14 +82,14 @@ class P2GMemory(nn.Module):
             transition: Reference transition to correct (e.g., path integration).
 
         Returns:
-            A fused `Transition` after memory-based correction.
+            A fused `LocationBelief` after memory-based correction.
         """
         g_ref, sigma_ref = transition.mean, transition.uncertainty  # Unpack for clarity
 
         mu = self._inference_mean(p_x)
         sigma = self._inference_uncertainty(g_ref, err=utils.squared_error(mu, g_ref))
 
-        correction = Transition(mean=mu, uncertainty=sigma)
+        correction = LocationBelief(mean=mu, uncertainty=sigma)
         return utils.inv_var_trans(transition, correction)
 
     def _inference_mean(self, p_x: List[Tensor]) -> List[Tensor]:

@@ -666,12 +666,13 @@ class TEMSettings(BaseModel):
         description="LEC projection module settings.",
     )
     n_grids: List[int] = Field(
-        default_factory=lambda: [30, 30, 24, 18, 18],
+        default_factory=lambda: [30, 30, 24, 18],
         frozen=True,
         description="Number of MEC neurons per frequency module.",
     )
     n_ovc: Optional[List[int]] = Field(
-        default=None,
+        # default=None,
+        default=[18],
         frozen=True,
         description="Number of OVC neurons per frequency module. None: no OVC cells.",
     )

@@ -83,7 +83,7 @@ Location: TypeAlias = GroundedLocation | AbstractLocation
 
 
 @dataclass(frozen=True)
-class Transition:
+class LocationBelief:
     """Probabilistic abstract location estimate with uncertainty quantification.
 
     Represents a Gaussian estimate of abstract location across multiple
@@ -136,7 +136,7 @@ Notes:
     Actions drive the transition/path-integration dynamics.
 """
 
-Location = Tensor
+LocationLabel = Tensor
 """Ground-truth environment location label (ℓ) for supervision and evaluation.
 
 This represents the environment-provided notion of "true" location (e.g., a

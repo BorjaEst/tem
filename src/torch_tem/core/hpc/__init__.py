@@ -37,7 +37,7 @@ from torch_tem.core.hpc.attractor import AttractorNetwork
 from torch_tem.core.hpc.location import GroundLocation
 from torch_tem.core.hpc.memory import HebbianUpdate
 from torch_tem.settings import HPCSettings
-from torch_tem.types import GroundedLocation, Matrix, MultiScaleCode, Transition
+from torch_tem.types import GroundedLocation, LocationBelief, Matrix, MultiScaleCode
 
 __all__ = ["HPCModel", "HPCState"]
 
@@ -47,7 +47,7 @@ class HPCState:
     """Container for HPC state.
 
     Attributes:
-        transition: A `Transition` over grounded location codes. `transition.mean`
+        transition: A `LocationBelief` over grounded location codes. `transition.mean`
             is a multi-scale code (one tensor per frequency module). The
             uncertainty may be `None` when not modeled/used.
         memory: Hebbian memory matrices.
@@ -61,10 +61,10 @@ class HPCState:
             the same underlying tensor.
     """
 
-    transition: Transition  # State and uncertainty over grounded locations
+    location: LocationBelief  # State and uncertainty over grounded locations
     memory: List[Matrix]  # Memory matrices
 
-    def new(self, cells: GroundedLocation, uncertanty: MultiScaleCode) -> "HPCState":
+    def new(self, cells: GroundedLocation, uncertainty: MultiScaleCode) -> "HPCState":
         """Return a new state with an updated transition.
 
         This is a convenience helper used throughout TEM to keep state updates
@@ -72,7 +72,7 @@ class HPCState:
 
         Args:
             cells: New grounded location mean (multi-scale code).
-            uncertanty: New grounded location uncertainty (multi-scale code).
+            uncertainty: New grounded location uncertainty (multi-scale code).
                 Note: the parameter name preserves a legacy spelling.
 
         Returns:
@@ -84,7 +84,7 @@ class HPCState:
             keeping autograd history.
         """
         copy = self.__dict__.copy()
-        copy.update({"transition": Transition(mean=cells, uncertainty=uncertanty)})
+        copy.update({"location": LocationBelief(mean=cells, uncertainty=uncertainty)})
         return HPCState(**copy)
 
     def detach(self) -> "HPCState":
@@ -100,17 +100,17 @@ class HPCState:
         mean = [v.detach() for v in self.cells]
         uncertainty = [v.detach() for v in self.uncertainty] if self.uncertainty else None
         memory = [m.detach() for m in self.memory] if self.memory is not None else None
-        return HPCState(Transition(mean, uncertainty), memory)
+        return HPCState(LocationBelief(mean, uncertainty), memory)
 
     @property
     def cells(self) -> List[Tensor]:
         """Return grounded location features."""
-        return self.transition.mean
+        return self.location.mean
 
     @property
     def uncertainty(self) -> Optional[List[Tensor]]:
         """Return grounded location uncertainty."""
-        return self.transition.uncertainty
+        return self.location.uncertainty
 
 
 class HPCModel(nn.Module):
@@ -127,7 +127,7 @@ class HPCModel(nn.Module):
     Internally it delegates to three single-responsibility submodules:
 
     - `AttractorNetwork` (pattern completion): p_query + M -> p_recalled
-    - `GroundLocation` (distribution): x_, g_ -> Transition(p_mean, p_sigma)
+    - `GroundLocation` (distribution): x_, g_ -> LocationBelief(p_mean, p_sigma)
     - `HebbianUpdate` (write): M, p_inf, p_gen -> M'
     """
 
@@ -175,7 +175,7 @@ class HPCModel(nn.Module):
             - `memory`: output of `init_memory` (two matrices, shape `(B, S, S)`)
         """
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
-        transition = Transition(mean=p_init, uncertainty=None)
+        transition = LocationBelief(mean=p_init, uncertainty=None)
         return HPCState(transition, memory=self.init_memory(batch_size=batch_size, device=device))
 
     def init_memory(self, *, batch_size: int, device: torch.device) -> List[Tensor]:
@@ -247,7 +247,7 @@ class HPCModel(nn.Module):
             diagonal Gaussian (if `settings.do_sample=True`) or the provided
             mean, and `new_state` updates `transition` accordingly.
         """
-        transition = Transition(mean=p_g, uncertainty=state.uncertainty)
+        transition = LocationBelief(mean=p_g, uncertainty=state.uncertainty)
         p_gen = utils.sample_diag_gaussian(transition) if self.settings.do_sample else transition.mean
         return p_gen, state.new(p_gen, state.uncertainty)
 
@@ -313,4 +313,4 @@ class HPCModel(nn.Module):
         p_inf, p_xi, p_gen_gi = [torch.cat(p, dim=1) for p in (p_inf, p_xi, p_gen_gi)]
         m_hier = self.memory_system(m_hier, p_inf, p_gen_gi, mask=self.update_mask)
         m_full = self.memory_system(m_full, p_inf, p_xi) if not self.settings.common_memory else m_hier
-        return HPCState(state.transition, memory=[m_hier, m_full])
+        return HPCState(state.location, memory=[m_hier, m_full])

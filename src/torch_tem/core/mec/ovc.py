@@ -14,7 +14,7 @@ from torch import Tensor, nn
 from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import OVCSettings
-from torch_tem.types import Transition
+from torch_tem.types import LocationBelief
 
 
 class OVCCorrection(nn.Module):
@@ -57,7 +57,7 @@ class OVCCorrection(nn.Module):
         """Return the starting index (into MEC frequencies) for OVC correction."""
         return self._ovc_start
 
-    def forward(self, locations: list[dict], transition: Transition) -> Transition:
+    def forward(self, locations: list[dict], transition: LocationBelief) -> LocationBelief:
         """Apply OVC correction to environments with shiny cues.
 
         Args:
@@ -67,7 +67,7 @@ class OVCCorrection(nn.Module):
             transition: Reference transition to correct.
 
         Returns:
-            A corrected `Transition`. If no shiny cues are present, returns the
+            A corrected `LocationBelief`. If no shiny cues are present, returns the
             input transition unchanged.
         """
         shiny_mask = self._identify_shiny_envs(locations, transition.mean[0].device)
@@ -112,14 +112,14 @@ class OVCCorrection(nn.Module):
         shiny_tensor = torch.as_tensor(shiny_vals, dtype=torch.float32, device=device).unsqueeze(-1)
         return [shiny_tensor] * self.n_freq
 
-    def _predict_correction(self, shiny_input: List[Tensor]) -> Transition:
+    def _predict_correction(self, shiny_input: List[Tensor]) -> LocationBelief:
         """Predict mean and uncertainty for the OVC correction.
 
         Args:
             shiny_input: List of cue tensors (one per OVC module).
 
         Returns:
-            A `Transition` containing OVC correction mean and uncertainty.
+            A `LocationBelief` containing OVC correction mean and uncertainty.
         """
         # Predict mean with legacy nonlinearity (abs → leaky_relu)
         mu_g = [torch.abs(mu) for mu in self.g_shiny_mlp(shiny_input)]
@@ -128,4 +128,4 @@ class OVCCorrection(nn.Module):
         # Predict uncertainty
         sigma_g_shiny = self.uncertainty_mlp(shiny_input)
 
-        return Transition(mean=mu_g_shiny, uncertainty=sigma_g_shiny)
+        return LocationBelief(mean=mu_g_shiny, uncertainty=sigma_g_shiny)

@@ -11,14 +11,14 @@ import torch.nn.functional as F
 from scipy.special import comb
 from torch import Tensor
 
-from torch_tem.types import Matrix, Reduction, Transition, Vector
+from torch_tem.types import LocationBelief, Matrix, Reduction, Vector
 
 
-def sample_diag_gaussian(transition: Transition, *, scale: float = 1.0) -> List[Tensor]:
+def sample_diag_gaussian(transition: LocationBelief, *, scale: float = 1.0) -> List[Tensor]:
     """Sample a diagonal Gaussian distribution.
 
     Args:
-        transition: Transition object with mean and uncertainty.
+        transition: LocationBelief object with mean and uncertainty.
         scale: Optional noise scale multiplier.
 
     Returns:
@@ -28,7 +28,7 @@ def sample_diag_gaussian(transition: Transition, *, scale: float = 1.0) -> List[
     return [mu_f + float(scale) * sigma_f * torch.randn_like(mu_f) for mu_f, sigma_f in zip(mu, sigma)]
 
 
-def inv_var_trans(base: Transition, corr: Transition, mask: Optional[Tensor] = None, freqs: Optional[range] = None) -> Transition:
+def inv_var_trans(base: LocationBelief, corr: LocationBelief, mask: Optional[Tensor] = None, freqs: Optional[range] = None) -> LocationBelief:
     """Fuse correction into base using inverse-variance weighting.
 
     Supports selective fusion by frequency range and batch masking.
@@ -43,7 +43,7 @@ def inv_var_trans(base: Transition, corr: Transition, mask: Optional[Tensor] = N
         mu_f[idx], sigma_f[idx] = inv_var_weight([base.mean[f][idx], corr.mean[i]], [base.uncertainty[f][idx], corr.uncertainty[i]])
         mu_out[f], sigma_out[f] = mu_f, sigma_f
 
-    return Transition(mean=mu_out, uncertainty=sigma_out)
+    return LocationBelief(mean=mu_out, uncertainty=sigma_out)
 
 
 def inv_var_weight(mus, sigmas):

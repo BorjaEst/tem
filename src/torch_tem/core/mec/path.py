@@ -14,7 +14,7 @@ from torch import Tensor, nn
 from torch_tem import utils
 from torch_tem.modules import MLP
 from torch_tem.settings import PathSettings
-from torch_tem.types import Transition
+from torch_tem.types import LocationBelief
 
 
 class PathIntegrator(nn.Module):
@@ -34,13 +34,13 @@ class PathIntegrator(nn.Module):
         self._mat_shape = [(self._in_dims[f_to], mec_shape[f_to]) for f_to in range(self.n_freq)]
         self._settings = settings
 
-        # Transition weights (action-conditioned)
+        # LocationBelief weights (action-conditioned)
         hidden_dim = [settings.hidden_dim] * self.n_freq
         self.MLP_D_a = MLP([n_a] * self.n_freq, self.shape, [torch.tanh, None], hidden_dim, bias=[True, False])
         self.MLP_D_a.set_weights(1, 0.0)
         self.D_no_a = nn.ParameterList([nn.Parameter(torch.zeros(m)) for m in self._mat_shape])  # Non-directional, per-frequency matrix
 
-        # Transition uncertainty
+        # LocationBelief uncertainty
         self.uncertainty_mlp = MLP(mec_shape, mec_shape, [torch.tanh, torch.exp], [2 * g for g in mec_shape])
 
     @property
@@ -63,7 +63,7 @@ class PathIntegrator(nn.Module):
         """Return the number of frequency modules."""
         return self._n_freq
 
-    def forward(self, a: Tensor, g_prev: List[Tensor], no_direc_mask: Tensor | None = None) -> Transition:
+    def forward(self, a: Tensor, g_prev: List[Tensor], no_direc_mask: Tensor | None = None) -> LocationBelief:
         """Compute the transition distribution for a single step.
 
         Args:
@@ -73,11 +73,11 @@ class PathIntegrator(nn.Module):
                 environments that should use the non-directional transition.
 
         Returns:
-            A `Transition` with mean and uncertainty per frequency.
+            A `LocationBelief` with mean and uncertainty per frequency.
         """
         mu = self.mean(a, g_prev, no_direc_mask)
         sigma = self.uncertainty_mlp(g_prev)
-        return Transition(mean=mu, uncertainty=sigma)
+        return LocationBelief(mean=mu, uncertainty=sigma)
 
     def mean(self, a: Tensor, g: List[Tensor], no_direc_mask: Tensor | None) -> List[Tensor]:
         """Compute the mean transition update.

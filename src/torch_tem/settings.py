@@ -16,7 +16,7 @@ from typing import Dict, List, Literal, Optional, Union
 import torch
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from torch_tem.types import OVCLayout, Reduction, Scalar
+from torch_tem.types import Reduction, Scalar
 
 Activation = Literal["leaky_relu", "sigmoid", "none"]
 ProjectionMode = Literal["identity", "tiling", "low_rank", "random"]

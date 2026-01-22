@@ -15,7 +15,7 @@ from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import TEMSettings
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Observation, OVCLayout, Walk
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Observation, Walk
 
 
 @dataclass
@@ -124,7 +124,7 @@ class TEMModel(nn.Module):
         return self.mec.n_grids
 
     @property
-    def n_ovc(self) -> OVCLayout:
+    def n_ovc(self) -> Optional[List[int]]:
         """Return the number of MEC OVC cells per frequency (or None)."""
         return self.mec.n_ovc
 

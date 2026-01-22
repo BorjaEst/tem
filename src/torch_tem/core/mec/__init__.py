@@ -21,7 +21,7 @@ from torch_tem.core.mec.ovc import OVCCorrection
 from torch_tem.core.mec.p2g import P2GMemory
 from torch_tem.core.mec.path import PathIntegrator
 from torch_tem.settings import MECSettings
-from torch_tem.types import AbstractLocation, LocationBelief, MultiScaleCode
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationBelief, LocationLabel, MultiScaleCode
 
 __all__ = ["MECModel", "MECState"]
 
@@ -206,7 +206,7 @@ class MECModel(nn.Module):
         """
         raise NotImplementedError("MEC forward not implemented. Use generative() or inference().")
 
-    def generative(self, a: Tensor, locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
+    def generative(self, action: Tensor, locations: list[LocationLabel], state: MECState) -> Tuple[AbstractLocation, MECState]:
         """Run the generative (path integration) update.
 
         Args:
@@ -222,10 +222,10 @@ class MECModel(nn.Module):
         # Build no-direction mask for shiny environments
         shiny_envs = [loc.get("shiny") is not None for loc in locations]
         any_shiny = any(shiny_envs)
-        no_direc_mask = torch.tensor(shiny_envs, device=a.device, dtype=torch.bool) if any_shiny else None
+        no_direc_mask = torch.tensor(shiny_envs, device=action.device, dtype=torch.bool) if any_shiny else None
 
         # 1) Action-driven transition for the state (legacy g_path)
-        transition = self.path_integration(a, state.cells, no_direc_mask=None)
+        transition = self.path_integration(action, state.cells, no_direc_mask=None)
         if self.settings.do_sample:
             cells_next = utils.sample_diag_gaussian(transition)
         else:
@@ -233,7 +233,7 @@ class MECModel(nn.Module):
 
         # 2) g_gen: reuse mu when possible, only compute no_direc when needed
         if any_shiny:
-            g_gen = self._clamp(self.path_integration.mean(a, state.cells, no_direc_mask))
+            g_gen = self._clamp(self.path_integration.mean(action, state.cells, no_direc_mask))
         elif self.settings.do_sample:
             g_gen = cells_next  # legacy: g_gen == sampled g when no shiny
         else:
@@ -241,7 +241,7 @@ class MECModel(nn.Module):
 
         return g_gen, state.new(cells_next, transition.uncertainty)
 
-    def inference(self, p_x: List[Tensor], locations: list[dict], state: MECState) -> Tuple[List[Tensor], MECState]:
+    def inference(self, p_x: GroundedLocation, locations: list[LocationLabel], state: MECState) -> Tuple[AbstractLocation, MECState]:
         """Run inference by fusing memory and OVC cues into the state.
 
         Args:
@@ -268,7 +268,7 @@ class MECModel(nn.Module):
 
         return g_inf, state.new(cells_next, transition.uncertainty)
 
-    def _clamp(self, g: List[Tensor]) -> List[Tensor]:
+    def _clamp(self, g: AbstractLocation) -> AbstractLocation:
         """Clamp activations for numerical stability.
 
         Args:

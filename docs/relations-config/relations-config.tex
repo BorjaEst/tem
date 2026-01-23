@@ -69,6 +69,10 @@
 
   \node[setting] (AutoencoderSettings) at (\xSetB,\yModel-9.0) {AutoencoderSettings};
 
+  \node[setting] (LRSchedulerSettings) at (\xSetB,\yTrain-3.0) {LRSchedulerSettings};
+  \node[setting] (MemoryScheduleSettings) at (\xSetB,\yTrain-4.0) {MemoryScheduleSettings};
+  \node[setting] (UncertaintyScheduleSettings) at (\xSetB,\yTrain-5.0) {UncertaintyScheduleSettings};
+
   % --- Level-1 settings (column 1; grouped by owning configuration) ---
   \node[setting] (TEMSettings) at (\xSetA,\yModel-0.0) {TEMSettings};
   --- \draw[setting_edge] (TEMSettings.east) to[out=0,in=180] (AutoencoderSettings.west);
@@ -89,9 +93,11 @@
   \node[setting] (WalkCurriculumSettings) at (\xSetA,\ySharedb-0.0) {WalkCurriculumSettings};
 
   \node[setting] (LossSettings) at (\xSetA,\yTrain-0.0) {LossSettings};
-  \node[setting] (LRScheduleSettings) at (\xSetA,\yTrain-1.0) {LRScheduleSettings};
-  \node[setting] (HebbianScheduleSettings) at (\xSetA,\yTrain-2.0) {HebbianScheduleSettings};
-  \node[setting] (P2GOffsetScheduleSettings) at (\xSetA,\yTrain-3.0) {P2GOffsetScheduleSettings};
+  \node[setting] (OptimizerSettings) at (\xSetA,\yTrain-2.0) {OptimizerSettings};
+  \node[setting] (SchedulerSettings) at (\xSetA,\yTrain-4.0) {SchedulerSettings};
+  --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (LRSchedulerSettings.west);
+  --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (MemoryScheduleSettings.west);
+  --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (UncertaintyScheduleSettings.west);
 
   % --- Configurations (left column) ---
   \node[configuration] (ModelConfig) at (\xCfg,\yModel-0.5) {ModelConfig};
@@ -108,9 +114,8 @@
   \node[configuration] (TrainerConfig) at (\xCfg,\yTrain-1.0) {TrainerConfig};
   --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);
   --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (LossSettings.west);
-  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (LRScheduleSettings.west);
-  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (HebbianScheduleSettings.west);
-  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (P2GOffsetScheduleSettings.west);
+  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (OptimizerSettings.west);
+  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (SchedulerSettings.west);
 
 \end{tikzpicture}
 

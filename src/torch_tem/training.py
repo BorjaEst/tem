@@ -18,8 +18,8 @@ Key Features:
         initial state for the next batch (maintains RNN continuity).
 
     Curriculum scheduling:
-        Learning rate, Hebbian parameters, and walk length are scheduled
-        dynamically during training.
+        Hebbian parameters and walk length are scheduled dynamically during training.
+        Learning rate scheduling is handled via a Lightning lr_scheduler.
 
 Architecture Note
 -----------------
@@ -44,6 +44,7 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 from torch.optim import Adam
+from torch.optim.lr_scheduler import ExponentialLR
 
 from torch_tem import losses, metrics, settings
 from torch_tem.core.model import Rollout, TEMLabel, TEMModel, TEMOutput, TEMState
@@ -56,11 +57,11 @@ class TrainerConfig(BaseModel):
 
     This Config class composes low-level '*Settings' from settings.py to provide
     complete configuration for TEMLightningModule and Lightning Trainer. It aggregates
-    Lightning infrastructure settings with schedule configuration for loss weights,
-    learning rate, Hebbian plasticity, and p2g variance offset.
+    Lightning infrastructure settings with runtime schedules and PyTorch/Lightning
+    optimization components (optimizer + lr_scheduler).
 
     Architecture:
-        - Composes settings.LossSettings, settings.LRScheduleSettings, etc.
+        - Composes settings.LossSettings, settings.OptimizerSettings, and settings.SchedulerSettings.
         - Used by TEMLightningModule
         - Instantiated from RunArguments in run.py (prevents parameter duplication)
 
@@ -89,18 +90,16 @@ class TrainerConfig(BaseModel):
         description="Walk length curriculum settings (shared with DataConfig).",
     )
 
-    # Training schedules (leaf settings)
-    lr: settings.LRScheduleSettings = Field(
-        default_factory=settings.LRScheduleSettings,
-        description="Learning rate schedule settings.",
+    # PyTorch/Lightning optimization components
+    optimizer: settings.OptimizerSettings = Field(
+        default_factory=settings.OptimizerSettings,
+        description="Optimizer settings (e.g., Adam hyperparameters).",
     )
-    hebbian: settings.HebbianScheduleSettings = Field(
-        default_factory=settings.HebbianScheduleSettings,
-        description="Hebbian memory plasticity schedule settings.",
-    )
-    p2g_offset: settings.P2GOffsetScheduleSettings = Field(
-        default_factory=settings.P2GOffsetScheduleSettings,
-        description="Place-to-grid variance offset schedule settings.",
+
+    # Schedulers (LR scheduler + runtime hyperparameter schedules)
+    scheduler: settings.SchedulerSettings = Field(
+        default_factory=settings.SchedulerSettings,
+        description="Schedulers grouped by what they control (lr/memory/uncertainty).",
     )
 
 
@@ -314,8 +313,8 @@ class TEMLightningModule(pl.LightningModule):
     def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
         """Update runtime hyperparameters before training step.
 
-        Applies curriculum scheduling to learning rate, Hebbian parameters,
-        and walk length based on global step count.
+        Applies curriculum scheduling to Hebbian parameters and walk length based on
+        global step count.
 
         Args:
             batch: Training batch (unused).
@@ -346,16 +345,6 @@ class TEMLightningModule(pl.LightningModule):
         """
         eta, hebbian_decay, p2g_uncertainty_offset, _ = self._compute_schedule(self.global_step)
         self.tem.set_runtime(eta, hebbian_decay, p2g_uncertainty_offset)
-
-    def on_before_optimizer_step(self, optimizer) -> None:
-        """Apply learning rate schedule before optimizer step.
-
-        Args:
-            optimizer: The optimizer being used (Adam).
-        """
-        lr = self._compute_lr(self.global_step)
-        for group in optimizer.param_groups:
-            group["lr"] = lr
 
     def _maybe_set_walk_length_center(self, walk_length_center: float) -> None:
         """Update datamodule walk length curriculum if available.
@@ -410,31 +399,11 @@ class TEMLightningModule(pl.LightningModule):
         self.log(f"{prefix}Accuracies/o_gen_gg", accuracies.o_gen_gg)
 
     def configure_optimizers(self):
-        """Configure optimizer for training.
-
-        Returns:
-            Adam optimizer with initial learning rate from schedule settings.
-
-        Note:
-            Learning rate is updated dynamically in :meth:`on_before_optimizer_step`
-            according to the exponential decay schedule.
-        """
-        return Adam(self.tem.parameters(), lr=self.trainer_settings.lr.lr_max)
-
-    def _compute_lr(self, iteration: int) -> float:
-        """Compute learning rate using exponential decay schedule.
-
-        Args:
-            iteration: Current global step.
-
-        Returns:
-            Learning rate (clamped to lr_min).
-        """
-        lr = self.trainer_settings.lr
-        return max(
-            lr.lr_min + (lr.lr_max - lr.lr_min) * (lr.lr_decay_rate ** (iteration / lr.lr_decay_steps)),
-            lr.lr_min,
-        )
+        """Configure optimizer and LR scheduler for training."""
+        config = self.trainer_settings.optimizer
+        optimizer = Adam(self.tem.parameters(), config.lr, config.betas, config.eps, config.weight_decay)
+        scheduler = ExponentialLR(optimizer, self.trainer_settings.scheduler.lr.gamma)
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
     def _compute_schedule(self, iteration: int) -> tuple[float, float, float, float]:
         """Compute all scheduled hyperparameters for current iteration.
@@ -450,8 +419,8 @@ class TEMLightningModule(pl.LightningModule):
                 walk_length_center: Target mean walk length for curriculum.
         """
         walk = self.trainer_settings.walk
-        hebbian = self.trainer_settings.hebbian
-        p2g = self.trainer_settings.p2g_offset
+        hebbian = self.trainer_settings.scheduler.memory
+        p2g = self.trainer_settings.scheduler.uncertainty
 
         # Hebbian memory parameters
         eta = min((iteration + 1) / hebbian.eta_it, 1) * hebbian.eta

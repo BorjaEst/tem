@@ -197,31 +197,47 @@ class WalkCurriculumSettings(BaseModel):
         return 0.2 * (self.walk_it_max - self.walk_it_min)
 
 
-class LRScheduleSettings(BaseModel):
-    """Learning rate schedule settings."""
+class OptimizerSettings(BaseModel):
+    """Optimizer configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
-    lr_max: float = Field(
+    lr: float = Field(
         default=9.4e-4,
-        description="Maximum learning rate.",
+        description="Base learning rate (optimizer initial LR; scheduler will update during training).",
     )
-    lr_min: float = Field(
-        default=8e-5,
-        description="Minimum learning rate.",
+    betas: tuple[float, float] = Field(
+        default=(0.9, 0.999),
+        description="Adam betas.",
     )
-    lr_decay_rate: float = Field(
-        default=0.5,
-        description="Exponential decay rate.",
+    eps: float = Field(
+        default=1e-8,
+        description="Adam epsilon.",
     )
-    lr_decay_steps: int = Field(
-        default=4000,
-        description="Decay period in steps.",
+    weight_decay: float = Field(
+        default=0.0,
+        description="Weight decay.",
     )
 
 
-class HebbianScheduleSettings(BaseModel):
-    """Hebbian memory plasticity schedule settings."""
+class LRSchedulerSettings(BaseModel):
+    """Learning-rate scheduler configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    gamma: float = Field(
+        default=0.5 ** (1.0 / 4000.0),
+        gt=0.0,
+        le=1.0,
+        description="Multiplicative factor applied each scheduler step.",
+    )
+
+
+class MemoryScheduleSettings(BaseModel):
+    """Memory-related runtime schedules.
+
+    Controls Hebbian plasticity parameters applied to the memory system.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -243,8 +259,11 @@ class HebbianScheduleSettings(BaseModel):
     )
 
 
-class P2GOffsetScheduleSettings(BaseModel):
-    """Place-to-grid variance offset schedule settings."""
+class UncertaintyScheduleSettings(BaseModel):
+    """Uncertainty-related runtime schedules.
+
+    Controls uncertainty-related runtime parameters (e.g., additive p->g inference offset).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -263,6 +282,35 @@ class P2GOffsetScheduleSettings(BaseModel):
     offset_max: float = Field(
         default=10000.0,
         description="Maximum additive uncertainty offset applied to p->g inference (schedule start).",
+    )
+
+
+class SchedulerSettings(BaseModel):
+    """Scheduler configuration.
+
+    This groups all step-based policies under a single namespace.
+
+    PyTorch/Lightning modeling:
+        - ``lr`` config is used to construct a Lightning ``lr_scheduler`` returned
+          from ``LightningModule.configure_optimizers``.
+        - ``memory`` and ``uncertainty`` are runtime hyperparameter schedules applied
+          inside the training loop (they are not Lightning lr_schedulers).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    lr: LRSchedulerSettings = Field(
+        default_factory=LRSchedulerSettings,
+        description="Learning-rate scheduler policy (wired to Lightning lr_scheduler).",
+    )
+
+    memory: MemoryScheduleSettings = Field(
+        default_factory=MemoryScheduleSettings,
+        description="Memory schedules (e.g., Hebbian plasticity).",
+    )
+    uncertainty: UncertaintyScheduleSettings = Field(
+        default_factory=UncertaintyScheduleSettings,
+        description="Uncertainty schedules (e.g., p2g variance offset).",
     )
 
 

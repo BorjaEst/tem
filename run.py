@@ -20,7 +20,7 @@ Examples:
 
     Override schedule values:
 
-        python run.py --hebbian.eta 0.6 --lr.lr_max 0.0015
+        python run.py --scheduler.memory.eta 0.6 --optimizer.lr 0.0015
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ class RunArguments(BaseSettings):
     Example:
         Override walk curriculum and learning rate from CLI:
         ```bash
-        python run.py --walk.walk_it_min 30 --walk.walk_it_max 250 --lr.lr_max 0.001
+        python run.py --walk.walk_it_min 30 --walk.walk_it_max 250 --optimizer.lr 0.001
         ```
     """
 
@@ -121,23 +121,19 @@ class RunArguments(BaseSettings):
     )
 
     # =========================================================================
-    # Leaf settings (training schedules)
+    # Leaf settings (training)
     # =========================================================================
     loss: settings.LossSettings = Field(
         default_factory=settings.LossSettings,
         description="Loss settings including weights for each component.",
     )
-    lr: settings.LRScheduleSettings = Field(
-        default_factory=settings.LRScheduleSettings,
-        description="Learning rate schedule settings.",
+    optimizer: settings.OptimizerSettings = Field(
+        default_factory=settings.OptimizerSettings,
+        description="Optimizer settings (e.g., Adam hyperparameters).",
     )
-    hebbian: settings.HebbianScheduleSettings = Field(
-        default_factory=settings.HebbianScheduleSettings,
-        description="Hebbian memory plasticity schedule settings.",
-    )
-    p2g_offset: settings.P2GOffsetScheduleSettings = Field(
-        default_factory=settings.P2GOffsetScheduleSettings,
-        description="Place-to-grid variance offset schedule settings.",
+    scheduler: settings.SchedulerSettings = Field(
+        default_factory=settings.SchedulerSettings,
+        description="Schedulers grouped by what they control (lr/memory/uncertainty).",
     )
 
     # =========================================================================
@@ -212,9 +208,8 @@ class RunArguments(BaseSettings):
             log_every_n_steps=self.log_every_n_steps,
             enable_progress_bar=self.enable_progress_bar,
             loss=self.loss,
-            lr=self.lr,
-            hebbian=self.hebbian,
-            p2g_offset=self.p2g_offset,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
             walk=self.walk,  # Shared reference
         )
 

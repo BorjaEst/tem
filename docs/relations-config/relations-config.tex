@@ -82,12 +82,12 @@
   \node[setting] (SpaceContractSettings) at (\xSetA,\yShareda-0.0) {SpaceContractSettings};
 
   \node[setting] (EnvironmentSettings) at (\xSetA,\yData-0.0) {EnvironmentSettings};
-  \node[setting] (DataIteratorSettings) at (\xSetA,\yData-1.0) {DataIteratorSettings};
-  --- \draw[setting_edge] (DataIteratorSettings.east) to[out=0,in=180] (RolloutSettings.west);
-  --- \draw[setting_edge] (DataIteratorSettings.east) to[out=0,in=180] (EvalSettings.west);
-  \node[setting] (SamplingPolicySettings) at (\xSetA,\yData-3.0) {SamplingPolicySettings};
-  --- \draw[setting_edge] (SamplingPolicySettings.east) to[out=0,in=180] (ExplorationSettings.west);
-  --- \draw[setting_edge] (SamplingPolicySettings.east) to[out=0,in=180] (ShinySettings.west);
+  \node[setting] (RolloutStreamSettings) at (\xSetA,\yData-1.0) {RolloutStreamSettings};
+  --- \draw[setting_edge] (RolloutStreamSettings.east) to[out=0,in=180] (RolloutSettings.west);
+  --- \draw[setting_edge] (RolloutStreamSettings.east) to[out=0,in=180] (EvalSettings.west);
+  \node[setting] (EnvironmentSamplingSettings) at (\xSetA,\yData-3.0) {EnvironmentSamplingSettings};
+  --- \draw[setting_edge] (EnvironmentSamplingSettings.east) to[out=0,in=180] (ExplorationSettings.west);
+  --- \draw[setting_edge] (EnvironmentSamplingSettings.east) to[out=0,in=180] (ShinySettings.west);
 
   \node[setting] (WalkCurriculumSettings) at (\xSetA,\ySharedb-0.0) {WalkCurriculumSettings};
 
@@ -115,8 +115,8 @@
   \node[configuration] (DataConfig) at (\xCfg,\yData-1.5) {DataConfig};
   --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
   --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvironmentSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (DataIteratorSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (SamplingPolicySettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (RolloutStreamSettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvironmentSamplingSettings.west);
   --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);
   \node[configuration] (TrainerConfig) at (\xCfg,\yTrain-1.0) {TrainerConfig};
   --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);

@@ -157,21 +157,13 @@ class RunArguments(BaseSettings):
         default_factory=settings.EnvironmentSettings,
         description="Environment generation settings.",
     )
-    rollout: settings.RolloutSettings = Field(
-        default_factory=settings.RolloutSettings,
-        description="Batch and rollout chunking settings.",
+    iterator: settings.IteratorSettings = Field(
+        default_factory=settings.IteratorSettings,
+        description="Iterator protocol settings (rollout chunking + eval protocol).",
     )
-    eval: settings.EvalSettings = Field(
-        default_factory=settings.EvalSettings,
-        description="Validation and test dataset settings.",
-    )
-    exploration: settings.ExplorationSettings = Field(
-        default_factory=settings.ExplorationSettings,
-        description="World exploration behavior settings.",
-    )
-    shiny: settings.ShinySettings = Field(
-        default_factory=settings.ShinySettings,
-        description="Shiny environment generation settings.",
+    policy: settings.PolicySettings = Field(
+        default_factory=settings.PolicySettings,
+        description="Data generation policies (exploration + shiny).",
     )
 
     # =========================================================================
@@ -265,10 +257,8 @@ class RunArguments(BaseSettings):
         return DataConfig(
             space=self.space,  # Shared reference
             env=self.env,
-            rollout=self.rollout,
-            eval=self.eval,
-            exploration=self.exploration,
-            shiny=self.shiny,
+            iterator=self.iterator,
+            policy=self.policy,
             walk=self.walk,  # Shared reference
         )
 

@@ -175,6 +175,21 @@ class ShinySettings(BaseModel):
         }
 
 
+class PolicySettings(BaseModel):
+    """Grouped policy settings for data generation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    exploration: ExplorationSettings = Field(
+        default_factory=ExplorationSettings,
+        description="World exploration behavior settings.",
+    )
+    shiny: ShinySettings = Field(
+        default_factory=ShinySettings,
+        description="Shiny environment generation settings.",
+    )
+
+
 class WalkCurriculumSettings(BaseModel):
     """Walk length curriculum settings (shared runtime curriculum)."""
 
@@ -194,6 +209,21 @@ class WalkCurriculumSettings(BaseModel):
     def walk_it_window(self) -> float:
         """Width of window from which walk lengths are sampled."""
         return 0.2 * (self.walk_it_max - self.walk_it_min)
+
+
+class IteratorSettings(BaseModel):
+    """Grouped iterator protocol settings for data generation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rollout: RolloutSettings = Field(
+        default_factory=RolloutSettings,
+        description="Batch and rollout chunking settings.",
+    )
+    eval: EvalSettings = Field(
+        default_factory=EvalSettings,
+        description="Validation and test dataset settings.",
+    )
 
 
 class OptimizerSettings(BaseModel):

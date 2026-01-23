@@ -47,6 +47,11 @@
   \node[setting,font=\scriptsize] (GroundLocSettings) at (\xSetB,\yModel-7.0) {GroundLocSettings};
   \node[setting,font=\scriptsize] (HebbianUpdateSettings) at (\xSetB,\yModel-8.0) {HebbianUpdateSettings};
 
+  \node[setting] (RolloutSettings) at (\xSetB,\yData-1.0) {RolloutSettings};
+  \node[setting] (EvalSettings) at (\xSetB,\yData-2.0) {EvalSettings};
+  \node[setting] (ExplorationSettings) at (\xSetB,\yData-3.0) {ExplorationSettings};
+  \node[setting] (ShinySettings) at (\xSetB,\yData-4.0) {ShinySettings};
+
   \node[setting] (LRSchedulerSettings) at (\xSetB,\yTrain-0.0) {LRSchedulerSettings};
   \node[setting] (MemoryScheduleSettings) at (\xSetB,\yTrain-1.0) {MemoryScheduleSettings};
   \node[setting] (UncertaintyScheduleSettings) at (\xSetB,\yTrain-2.0) {UncertaintyScheduleSettings};
@@ -77,10 +82,12 @@
   \node[setting] (SpaceContractSettings) at (\xSetA,\yShareda-0.0) {SpaceContractSettings};
 
   \node[setting] (EnvironmentSettings) at (\xSetA,\yData-0.0) {EnvironmentSettings};
-  \node[setting] (RolloutSettings) at (\xSetA,\yData-1.0) {RolloutSettings};
-  \node[setting] (EvalSettings) at (\xSetA,\yData-2.0) {EvalSettings};
-  \node[setting] (ExplorationSettings) at (\xSetA,\yData-3.0) {ExplorationSettings};
-  \node[setting] (ShinySettings) at (\xSetA,\yData-4.0) {ShinySettings};
+  \node[setting] (IteratorSettings) at (\xSetA,\yData-1.0) {IteratorSettings};
+  --- \draw[setting_edge] (IteratorSettings.east) to[out=0,in=180] (RolloutSettings.west);
+  --- \draw[setting_edge] (IteratorSettings.east) to[out=0,in=180] (EvalSettings.west);
+  \node[setting] (PolicySettings) at (\xSetA,\yData-3.0) {PolicySettings};
+  --- \draw[setting_edge] (PolicySettings.east) to[out=0,in=180] (ExplorationSettings.west);
+  --- \draw[setting_edge] (PolicySettings.east) to[out=0,in=180] (ShinySettings.west);
 
   \node[setting] (WalkCurriculumSettings) at (\xSetA,\ySharedb-0.0) {WalkCurriculumSettings};
 
@@ -108,10 +115,8 @@
   \node[configuration] (DataConfig) at (\xCfg,\yData-1.5) {DataConfig};
   --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
   --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvironmentSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (RolloutSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EvalSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (ExplorationSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (ShinySettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (IteratorSettings.west);
+  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (PolicySettings.west);
   --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);
   \node[configuration] (TrainerConfig) at (\xCfg,\yTrain-1.0) {TrainerConfig};
   --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);

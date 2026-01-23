@@ -25,9 +25,7 @@ class EnvironmentValidationError(ValueError):
     pass
 
 
-def validate_envs_against_contract(
-    env_paths: list[Path], contract: SpaceContractSettings
-) -> None:
+def validate_envs_against_contract(env_paths: list[Path], contract: SpaceContractSettings) -> None:
     """Validate all environment JSON files against the space contract.
 
     Performs strict validation to ensure:
@@ -71,32 +69,23 @@ def _validate_single_env(env_path: Path, contract: SpaceContractSettings) -> Non
     """
     # Step 1: File existence and JSON parsing
     if not env_path.exists():
-        raise EnvironmentValidationError(
-            f"Environment file not found: {env_path}"
-        )
+        raise EnvironmentValidationError(f"Environment file not found: {env_path}")
 
     try:
         with open(env_path, "r") as f:
             env = json.load(f)
     except json.JSONDecodeError as e:
-        raise EnvironmentValidationError(
-            f"Invalid JSON in {env_path}: {e}"
-        ) from e
+        raise EnvironmentValidationError(f"Invalid JSON in {env_path}: {e}") from e
 
     # Step 2: Required keys
     required_keys = ["n_observations", "n_actions", "n_locations", "locations", "adjacency"]
     missing_keys = [key for key in required_keys if key not in env]
     if missing_keys:
-        raise EnvironmentValidationError(
-            f"Environment {env_path} missing required keys: {missing_keys}"
-        )
+        raise EnvironmentValidationError(f"Environment {env_path} missing required keys: {missing_keys}")
 
     # Step 3: Contract dimension match
     if env["n_observations"] != contract.n_observations:
-        raise EnvironmentValidationError(
-            f"Environment {env_path} n_observations mismatch: "
-            f"expected {contract.n_observations}, got {env['n_observations']}"
-        )
+        raise EnvironmentValidationError(f"Environment {env_path} n_observations mismatch: " f"expected {contract.n_observations}, got {env['n_observations']}")
 
     if env["n_actions"] != contract.n_actions_total:
         raise EnvironmentValidationError(
@@ -110,91 +99,61 @@ def _validate_single_env(env_path: Path, contract: SpaceContractSettings) -> Non
     locations = env["locations"]
 
     if len(locations) != n_locations:
-        raise EnvironmentValidationError(
-            f"Environment {env_path} location count mismatch: "
-            f"n_locations={n_locations} but len(locations)={len(locations)}"
-        )
+        raise EnvironmentValidationError(f"Environment {env_path} location count mismatch: " f"n_locations={n_locations} but len(locations)={len(locations)}")
 
     adjacency = env["adjacency"]
     if len(adjacency) != n_locations:
-        raise EnvironmentValidationError(
-            f"Environment {env_path} adjacency matrix row count mismatch: "
-            f"expected {n_locations}, got {len(adjacency)}"
-        )
+        raise EnvironmentValidationError(f"Environment {env_path} adjacency matrix row count mismatch: " f"expected {n_locations}, got {len(adjacency)}")
 
     for i, row in enumerate(adjacency):
         if len(row) != n_locations:
-            raise EnvironmentValidationError(
-                f"Environment {env_path} adjacency matrix row {i} column count mismatch: "
-                f"expected {n_locations}, got {len(row)}"
-            )
+            raise EnvironmentValidationError(f"Environment {env_path} adjacency matrix row {i} column count mismatch: " f"expected {n_locations}, got {len(row)}")
 
     # Step 5: Location-level validation
     for loc in locations:
         loc_id = loc.get("id")
-        
+
         # Validate observation ID range
         obs_id = loc.get("observation")
         if obs_id is None:
-            raise EnvironmentValidationError(
-                f"Environment {env_path} location {loc_id} missing 'observation' field"
-            )
+            raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} missing 'observation' field")
         if not (0 <= obs_id < contract.n_observations):
-            raise EnvironmentValidationError(
-                f"Environment {env_path} location {loc_id} has observation ID {obs_id} "
-                f"outside valid range [0, {contract.n_observations})"
-            )
+            raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} has observation ID {obs_id} " f"outside valid range [0, {contract.n_observations})")
 
         # Validate actions structure
         actions = loc.get("actions")
         if actions is None:
-            raise EnvironmentValidationError(
-                f"Environment {env_path} location {loc_id} missing 'actions' field"
-            )
+            raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} missing 'actions' field")
         if len(actions) != env["n_actions"]:
-            raise EnvironmentValidationError(
-                f"Environment {env_path} location {loc_id} has {len(actions)} actions, "
-                f"expected {env['n_actions']}"
-            )
+            raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} has {len(actions)} actions, " f"expected {env['n_actions']}")
 
         # Validate action 0 no-op rule
         if contract.action0_is_noop:
             action0 = actions[0]
             transition = action0.get("transition")
             if transition is None:
-                raise EnvironmentValidationError(
-                    f"Environment {env_path} location {loc_id} action 0 missing 'transition' field"
-                )
+                raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} action 0 missing 'transition' field")
             if len(transition) != n_locations:
-                raise EnvironmentValidationError(
-                    f"Environment {env_path} location {loc_id} action 0 transition length mismatch: "
-                    f"expected {n_locations}, got {len(transition)}"
-                )
+                raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} action 0 transition length mismatch: " f"expected {n_locations}, got {len(transition)}")
 
             # Check for strict self-loop: transition[loc_id] == 1, all others == 0
             if loc_id is not None:
                 if transition[loc_id] != 1:
                     raise EnvironmentValidationError(
-                        f"Environment {env_path} location {loc_id} action 0 is not a self-loop: "
-                        f"transition[{loc_id}] = {transition[loc_id]} (expected 1)"
+                        f"Environment {env_path} location {loc_id} action 0 is not a self-loop: " f"transition[{loc_id}] = {transition[loc_id]} (expected 1)"
                     )
                 for i, prob in enumerate(transition):
                     if i != loc_id and prob != 0:
                         raise EnvironmentValidationError(
-                            f"Environment {env_path} location {loc_id} action 0 is not a no-op: "
-                            f"transition[{i}] = {prob} (expected 0 for all i != {loc_id})"
+                            f"Environment {env_path} location {loc_id} action 0 is not a no-op: " f"transition[{i}] = {prob} (expected 0 for all i != {loc_id})"
                         )
 
         # Validate all action transition lengths
         for action_idx, action in enumerate(actions):
             transition = action.get("transition")
             if transition is None:
-                raise EnvironmentValidationError(
-                    f"Environment {env_path} location {loc_id} action {action_idx} "
-                    f"missing 'transition' field"
-                )
+                raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} action {action_idx} " f"missing 'transition' field")
             if len(transition) != n_locations:
                 raise EnvironmentValidationError(
-                    f"Environment {env_path} location {loc_id} action {action_idx} "
-                    f"transition length mismatch: expected {n_locations}, got {len(transition)}"
+                    f"Environment {env_path} location {loc_id} action {action_idx} " f"transition length mismatch: expected {n_locations}, got {len(transition)}"
                 )

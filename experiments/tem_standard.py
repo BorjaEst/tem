@@ -305,20 +305,15 @@ if __name__ == "__main__":
     # Pydantic Settings will automatically parse sys.argv when cli_parse_args=True
     args = RunArguments()
 
-    # Step 2: Validate environment files against space contract (fast fail)
-    # This ensures all env JSON files match the expected observation/action dimensions
-    # before we spend time initializing the model and trainer
-    validate_envs_against_contract(args.env.envs, args.space)
-
-    # Step 3: Seed all RNGs for deterministic training
+    # Step 2: Seed all RNGs for deterministic training
     # workers=True ensures DataLoader workers are also seeded
     seed_everything(args.seed, workers=True)
 
-    # Step 4: Construct the TEM model from architecture parameters and space contract
+    # Step 3: Construct the TEM model from architecture parameters and space contract
     # Use contract dimensions (not hardcoded values) for observation/action spaces
     tem_model = TEMModel(args.model)
 
-    # Step 5: Build the PyTorch Lightning Trainer
+    # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control
     callbacks_list = [ModelCheckpoint(**args.checkpoint.model_dump())]
 
@@ -337,7 +332,7 @@ if __name__ == "__main__":
         enable_progress_bar=args.enable_progress_bar,
     )
 
-    # Step 6: Start training
+    # Step 5: Start training
     # The LightningModule wraps the TEM model and defines the training loop
     # The DataModule generates batches of walk data on-the-fly
     trainer.fit(

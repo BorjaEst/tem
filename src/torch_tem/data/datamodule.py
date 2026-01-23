@@ -55,12 +55,12 @@ class DataConfig(BaseModel):
         default_factory=settings.EnvironmentSettings,
         description="Environment generation settings.",
     )
-    iterator: settings.IteratorSettings = Field(
-        default_factory=settings.IteratorSettings,
+    iterator: settings.DataIteratorSettings = Field(
+        default_factory=settings.DataIteratorSettings,
         description="Iterator protocol settings (rollout chunking + eval protocol).",
     )
-    policy: settings.PolicySettings = Field(
-        default_factory=settings.PolicySettings,
+    policy: settings.SamplingPolicySettings = Field(
+        default_factory=settings.SamplingPolicySettings,
         description="Data generation policies (exploration + shiny).",
     )
     walk: settings.WalkCurriculumSettings = Field(

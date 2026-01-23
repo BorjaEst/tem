@@ -175,7 +175,7 @@ class ShinySettings(BaseModel):
         }
 
 
-class PolicySettings(BaseModel):
+class SamplingPolicySettings(BaseModel):
     """Grouped policy settings for data generation."""
 
     model_config = ConfigDict(extra="forbid")
@@ -211,7 +211,7 @@ class WalkCurriculumSettings(BaseModel):
         return 0.2 * (self.walk_it_max - self.walk_it_min)
 
 
-class IteratorSettings(BaseModel):
+class DataIteratorSettings(BaseModel):
     """Grouped iterator protocol settings for data generation."""
 
     model_config = ConfigDict(extra="forbid")

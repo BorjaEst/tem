@@ -36,7 +36,7 @@
     \def\yTop{0.0}
     \def\yLeaf{-1.0}
     \def\yRes{-1.0}
-    \def\yComp{-1.0}
+    \def\yComp{-5.0}
 
     % Headers
     \node[title] at (\xLeaf,\yTop-0.0) {Leaf settings};
@@ -46,13 +46,14 @@
     \node[title] at (\xComp,\yTop-0.0) {Runtime systems};
 
     % Runtime nodes (providers + consumers)
-    \node[component] (DataPipeline) at (\xComp,\yComp-3.0) {DataPipeline};
-    \node[component] (RolloutStream) at (\xComp,\yComp-4.0) {RolloutStream};
-    \node[component] (Model) at (\xComp,\yComp-5.0) {Model};
+    \node[component] (DataPipeline) at (\xComp,\yComp-0.0) {DataPipeline};
+    \node[component] (RolloutStream) at (\xComp,\yComp-2.0) {RolloutStream};
+    \node[component] (Model) at (\xComp,\yComp-4.0) {Model};
     \node[component] (TrainingLoop) at (\xComp,\yComp-6.0) {TrainingLoop};
 
     % Resolved specs (column 2)
     \node[resolved] (ObservationSpaceSpec) at (\xSpec,\yRes-3.0) {ObservationSpaceSpec};
+    --- \draw[consume_edge] (ObservationSpaceSpec.east) to[out=0,in=180] (Model.west);
     \node[resolved] (ActionSpaceSpec) at (\xSpec,\yRes-4.0) {ActionSpaceSpec};
     \node[resolved] (EnvironmentSetSpec) at (\xSpec,\yRes-7.0) {EnvironmentSetSpec};
     \node[resolved] (RolloutBatchSpec) at (\xSpec,\yRes-10.0) {RolloutBatchSpec};
@@ -75,6 +76,7 @@
     \node[setting] (HPCSettings) at (\xLeaf,\yLeaf-4.0) {HPCSettings};
     \node[setting] (AutoencoderSettings) at (\xLeaf,\yLeaf-5.0) {AutoencoderSettings};
     \node[setting] (SpaceContractSettings) at (\xLeaf,\yLeaf-6.0) {SpaceContractSettings};
+    --- \draw[resolve_edge] (SpaceContractSettings.east) to[out=0,in=180] (ObservationSpaceSpec.west);
     \node[setting] (EnvironmentSettings) at (\xLeaf,\yLeaf-7.0) {EnvironmentSettings};
     \node[setting] (RolloutStreamSettings) at (\xLeaf,\yLeaf-8.0) {RolloutStreamSettings};
     \node[setting] (EnvSamplingSettings) at (\xLeaf,\yLeaf-9.0) {EnvSamplingSettings};
@@ -82,11 +84,6 @@
     \node[setting] (LossSettings) at (\xLeaf,\yLeaf-13.0) {LossSettings};
     \node[setting] (OptimizerSettings) at (\xLeaf,\yLeaf-14.0) {OptimizerSettings};
     \node[setting] (SchedulerSettings) at (\xLeaf,\yLeaf-15.0) {SchedulerSettings};
-
-    % Edges: settings
-    \draw[resolve_edge] (SpaceContractSettings.east) to[out=0,in=180] (ObservationSpaceSpec.west);
-    \draw[consume_edge] (ObservationSpaceSpec.east) to[out=0,in=180] (Model.west);
-
 
 \end{tikzpicture}
 

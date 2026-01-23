@@ -12,6 +12,8 @@
     setting/.style={rectangle, draw=orange!70, fill=orange!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
     config/.style={rectangle, draw=green!70, fill=green!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small\bfseries, align=left},
     resolved/.style={rectangle, draw=gray!65, fill=gray!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
+    plan/.style={rectangle, draw=gray!65, fill=gray!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
+    state/.style={rectangle, draw=teal!70, fill=teal!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
     component/.style={rectangle, draw=purple!70, fill=purple!8, thick, minimum width=3.8cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
     provider/.style={rectangle, draw=black!55, fill=black!4, thick, minimum width=3.8cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
     compile_edge/.style={->,>=Stealth,thick,blue!70},
@@ -25,8 +27,10 @@
 
     % Columns
     \def\xLeaf{0}
-    \def\xRes{8.0}
-    \def\xComp{16.0}
+    \def\xSpec{8.0}
+    \def\xPlan{12.0}
+    \def\xStat{16.0}
+    \def\xComp{22.0}
 
     % Rows
     \def\yTop{0.0}
@@ -36,7 +40,9 @@
 
     % Headers
     \node[title] at (\xLeaf,\yTop-0.0) {Leaf settings};
-    \node[title] at (\xRes,\yTop-0.0) {Resolved concepts};
+    \node[title] at (\xSpec,\yTop-0.0) {Resolved specs};
+    \node[title] at (\xPlan,\yTop-0.0) {Resolved plans};
+    \node[title] at (\xStat,\yTop-0.0) {Runtime state};
     \node[title] at (\xComp,\yTop-0.0) {Runtime systems};
 
     % Runtime nodes (providers + consumers)
@@ -45,17 +51,21 @@
     \node[component] (Model) at (\xComp,\yComp-5.0) {Model};
     \node[component] (TrainingLoop) at (\xComp,\yComp-6.0) {TrainingLoop};
 
-    % Resolved concepts (column 2)
-    \node[resolved] (ModelArchitecturePlan) at (\xRes,\yRes-2.0) {ModelArchitecturePlan};
-    \node[resolved] (ObservationSpaceSpec) at (\xRes,\yRes-3.0) {ObservationSpaceSpec};
-    \node[resolved] (ActionSpaceSpec) at (\xRes,\yRes-4.0) {ActionSpaceSpec};
-    \node[resolved] (EnvironmentSetSpec) at (\xRes,\yRes-7.0) {EnvironmentSetSpec};
-    \node[resolved] (RolloutBatchSpec) at (\xRes,\yRes-10.0) {RolloutBatchSpec};
-    \node[resolved] (RolloutGenSpec) at (\xRes,\yRes-11.0) {RolloutGenSpec};
-    \node[resolved] (CurriculumState) at (\xRes,\yRes-12.0) {CurriculumState};
-    \node[resolved] (SchedulePlan) at (\xRes,\yRes-13.0) {SchedulePlan};
-    \node[resolved] (OptimizerPlan) at (\xRes,\yRes-14.0) {OptimizerPlan};
-    \node[resolved] (LossPlan) at (\xRes,\yRes-15.0) {LossPlan};
+    % Resolved specs (column 2)
+    \node[resolved] (ObservationSpaceSpec) at (\xSpec,\yRes-3.0) {ObservationSpaceSpec};
+    \node[resolved] (ActionSpaceSpec) at (\xSpec,\yRes-4.0) {ActionSpaceSpec};
+    \node[resolved] (EnvironmentSetSpec) at (\xSpec,\yRes-7.0) {EnvironmentSetSpec};
+    \node[resolved] (RolloutBatchSpec) at (\xSpec,\yRes-10.0) {RolloutBatchSpec};
+    \node[resolved] (RolloutGenSpec) at (\xSpec,\yRes-11.0) {RolloutGenSpec};
+
+    % Resolved plans (column 3)
+    \node[plan] (ModelArchitecturePlan) at (\xPlan,\yRes-2.0) {ModelArchitecturePlan};
+    \node[plan] (SchedulePlan) at (\xPlan,\yRes-13.0) {SchedulePlan};
+    \node[plan] (OptimizerPlan) at (\xPlan,\yRes-14.0) {OptimizerPlan};
+    \node[plan] (LossPlan) at (\xPlan,\yRes-15.0) {LossPlan};
+
+    % Runtime state (column 4)
+    \node[state] (CurriculumState) at (\xStat,\yRes-12.0) {CurriculumState};
 
     % Leaf settings (column 1)
     \node[setting] (LECProjectionSettings) at (\xLeaf,\yLeaf-0.0) {LECProjectionSettings};

@@ -8,35 +8,29 @@
 
 \tikzset{
     title/.style={font=\small\bfseries,align=left},
-    arguments/.style={rectangle, draw=blue!70, fill=blue!8, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small\bfseries, align=left},
     setting/.style={rectangle, draw=orange!70, fill=orange!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
-    config/.style={rectangle, draw=green!70, fill=green!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small\bfseries, align=left},
-    resolved/.style={rectangle, draw=gray!65, fill=gray!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
+    specs/.style={rectangle, draw=gray!65, fill=gray!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
     plan/.style={rectangle, draw=gray!65, fill=gray!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
     state/.style={rectangle, draw=teal!70, fill=teal!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
     component/.style={rectangle, draw=purple!70, fill=purple!8, thick, minimum width=3.8cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
-    provider/.style={rectangle, draw=black!55, fill=black!4, thick, minimum width=3.8cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
-    compile_edge/.style={->,>=Stealth,thick,blue!70},
-    share_edge/.style={->,>=Stealth,thick,green!70},
     resolve_edge/.style={->,>=Stealth,thick,gray!70},
     consume_edge/.style={->,>=Stealth,thick,purple!70},
-    call_edge/.style={->,>=Stealth,thick,black!55,dashed},
 }
 
 \begin{tikzpicture}
 
     % Columns
     \def\xLeaf{0}
-    \def\xSpec{8.0}
+    \def\xSpec{7.0}
     \def\xPlan{12.0}
-    \def\xStat{16.0}
-    \def\xComp{22.0}
+    \def\xComp{17.0}
+    \def\xStat{24.0}
 
     % Rows
-    \def\yTop{0.0}
+    \def\yTop{-0.0}
     \def\yLeaf{-1.0}
     \def\yRes{-1.0}
-    \def\yComp{-5.0}
+    \def\yComp{-1.0}
 
     % Headers
     \node[title] at (\xLeaf,\yTop-0.0) {Leaf settings};
@@ -45,45 +39,113 @@
     \node[title] at (\xStat,\yTop-0.0) {Runtime state};
     \node[title] at (\xComp,\yTop-0.0) {Runtime systems};
 
-    % Runtime nodes (providers + consumers)
-    \node[component] (DataPipeline) at (\xComp,\yComp-0.0) {DataPipeline};
-    \node[component] (RolloutStream) at (\xComp,\yComp-2.0) {RolloutStream};
-    \node[component] (Model) at (\xComp,\yComp-4.0) {Model};
-    \node[component] (TrainingLoop) at (\xComp,\yComp-6.0) {TrainingLoop};
+    % Runtime state
+    \node[state] (RuntimeHyperparamsState) at (\xStat,\yRes-14.0) {RuntimeHyperparamsState};
+    \node[state] (CurriculumState) at (\xStat,\yRes-15.0) {CurriculumState};
+    \node[state] (VisitedMaskState) at (\xStat,\yRes-19.0) {VisitedMaskState};
+    \node[state] (TEMState) at (\xStat,\yRes-6.0) {TEMState};
 
-    % Resolved specs (column 2)
-    \node[resolved] (ObservationSpaceSpec) at (\xSpec,\yRes-3.0) {ObservationSpaceSpec};
-    --- \draw[consume_edge] (ObservationSpaceSpec.east) to[out=0,in=180] (Model.west);
-    \node[resolved] (ActionSpaceSpec) at (\xSpec,\yRes-4.0) {ActionSpaceSpec};
-    \node[resolved] (EnvironmentSetSpec) at (\xSpec,\yRes-7.0) {EnvironmentSetSpec};
-    \node[resolved] (RolloutBatchSpec) at (\xSpec,\yRes-10.0) {RolloutBatchSpec};
-    \node[resolved] (RolloutGenSpec) at (\xSpec,\yRes-11.0) {RolloutGenSpec};
+    % Runtime nodes
+    \node[component] (Model) at (\xComp,\yComp-6.0) {Model};
+    \node[component] (DataPipeline) at (\xComp,\yComp-11.0) {DataPipeline};
+    \node[component] (TrainingLoop) at (\xComp,\yComp-17.0) {TrainingLoop};
 
-    % Resolved plans (column 3)
-    \node[plan] (ModelArchitecturePlan) at (\xPlan,\yRes-2.0) {ModelArchitecturePlan};
-    \node[plan] (SchedulePlan) at (\xPlan,\yRes-13.0) {SchedulePlan};
-    \node[plan] (OptimizerPlan) at (\xPlan,\yRes-14.0) {OptimizerPlan};
-    \node[plan] (LossPlan) at (\xPlan,\yRes-15.0) {LossPlan};
+    % Resolved plans
+    \node[plan] (ModelArchitecturePlan) at (\xPlan,\yRes-2.5) {ModelArchitecturePlan};
+    \node[plan] (DataPipelinePlan) at (\xPlan,\yRes-10.0) {DataPipelinePlan};
+    \node[plan] (RolloutProtocolPlan) at (\xPlan,\yRes-13.0) {RolloutProtocolPlan};
+    \node[plan] (SchedulePlan) at (\xPlan,\yRes-16.0) {SchedulePlan};
+    \node[plan] (OptimizerPlan) at (\xPlan,\yRes-17.0) {OptimizerPlan};
+    \node[plan] (LossPlan) at (\xPlan,\yRes-18.0) {LossPlan};
 
-    % Runtime state (column 4)
-    \node[state] (CurriculumState) at (\xStat,\yRes-12.0) {CurriculumState};
+    % Resolved specs 
+    \node[specs] (ObservationSpaceSpec) at (\xSpec,\yRes-5.0) {ObservationSpaceSpec};
+    \node[specs] (ActionSpaceSpec) at (\xSpec,\yRes-6.0) {ActionSpaceSpec};
+    \node[specs] (ActionEncodingSpec) at (\xSpec,\yRes-7.0) {ActionEncodingSpec};
+    \node[specs] (EnvironmentSetSpec) at (\xSpec,\yRes-9.0) {EnvironmentSetSpec};
+    \node[specs] (EnvValidationSpec) at (\xSpec,\yRes-10.0) {EnvValidationSpec};
+    \node[specs] (EvalProtocolSpec) at (\xSpec,\yRes-11.0) {EvalProtocolSpec};
+    \node[specs] (RolloutBatchSpec) at (\xSpec,\yRes-12.0) {RolloutBatchSpec};
+    \node[specs] (RolloutGenSpec) at (\xSpec,\yRes-13.0) {RolloutGenSpec};
+    \node[specs] (WalkCurriculumSpec) at (\xSpec,\yRes-15.0) {WalkCurriculumSpec};
 
-    % Leaf settings (column 1)
+    % Leaf settings
     \node[setting] (LECProjectionSettings) at (\xLeaf,\yLeaf-0.0) {LECProjectionSettings};
     \node[setting] (LECSettings) at (\xLeaf,\yLeaf-1.0) {LECSettings};
     \node[setting] (MECProjectionSettings) at (\xLeaf,\yLeaf-2.0) {MECProjectionSettings};
     \node[setting] (MECSettings) at (\xLeaf,\yLeaf-3.0) {MECSettings};
     \node[setting] (HPCSettings) at (\xLeaf,\yLeaf-4.0) {HPCSettings};
     \node[setting] (AutoencoderSettings) at (\xLeaf,\yLeaf-5.0) {AutoencoderSettings};
+
     \node[setting] (SpaceContractSettings) at (\xLeaf,\yLeaf-6.0) {SpaceContractSettings};
-    --- \draw[resolve_edge] (SpaceContractSettings.east) to[out=0,in=180] (ObservationSpaceSpec.west);
-    \node[setting] (EnvironmentSettings) at (\xLeaf,\yLeaf-7.0) {EnvironmentSettings};
-    \node[setting] (RolloutStreamSettings) at (\xLeaf,\yLeaf-8.0) {RolloutStreamSettings};
-    \node[setting] (EnvSamplingSettings) at (\xLeaf,\yLeaf-9.0) {EnvSamplingSettings};
-    \node[setting] (CurriculumSettings) at (\xLeaf,\yLeaf-12.0) {CurriculumSettings};
-    \node[setting] (LossSettings) at (\xLeaf,\yLeaf-13.0) {LossSettings};
-    \node[setting] (OptimizerSettings) at (\xLeaf,\yLeaf-14.0) {OptimizerSettings};
-    \node[setting] (SchedulerSettings) at (\xLeaf,\yLeaf-15.0) {SchedulerSettings};
+    \node[setting] (EnvironmentSettings) at (\xLeaf,\yLeaf-9.5) {EnvironmentSettings};
+    \node[setting] (RolloutStreamSettings) at (\xLeaf,\yLeaf-11.5) {RolloutStreamSettings};
+    \node[setting] (EnvSamplingSettings) at (\xLeaf,\yLeaf-13.0) {EnvSamplingSettings};
+
+    \node[setting] (CurriculumSettings) at (\xLeaf,\yLeaf-15.0) {CurriculumSettings};
+    \node[setting] (SchedulerSettings) at (\xLeaf,\yLeaf-16.0) {SchedulerSettings};
+    \node[setting] (OptimizerSettings) at (\xLeaf,\yLeaf-17.0) {OptimizerSettings};
+    \node[setting] (LossSettings) at (\xLeaf,\yLeaf-18.0) {LossSettings};
+
+    % --- Resolve (leaf settings -> specs/plans) ---
+    \draw[resolve_edge] (SpaceContractSettings.east) to[out=0,in=180] (ObservationSpaceSpec.west);
+    \draw[resolve_edge] (SpaceContractSettings.east) to[out=0,in=180] (ActionSpaceSpec.west);
+    \draw[resolve_edge] (SpaceContractSettings.east) to[out=0,in=180] (ActionEncodingSpec.west);
+    \draw[resolve_edge] (EnvironmentSettings.east) to[out=0,in=180] (EnvironmentSetSpec.west);
+    \draw[resolve_edge] (EnvironmentSettings.east) to[out=0,in=180] (EnvValidationSpec.west);
+    \draw[resolve_edge] (RolloutStreamSettings.east) to[out=0,in=180] (RolloutBatchSpec.west);
+    \draw[resolve_edge] (RolloutStreamSettings.east) to[out=0,in=180] (EvalProtocolSpec.west);
+    \draw[resolve_edge] (EnvSamplingSettings.east) to[out=0,in=180] (RolloutGenSpec.west);
+    \draw[resolve_edge] (CurriculumSettings.east) to[out=0,in=180] (WalkCurriculumSpec.west);
+
+    \draw[resolve_edge] (LECSettings.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+    \draw[resolve_edge] (MECSettings.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+    \draw[resolve_edge] (HPCSettings.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+    \draw[resolve_edge] (AutoencoderSettings.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+    \draw[resolve_edge] (LECProjectionSettings.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+    \draw[resolve_edge] (MECProjectionSettings.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+
+    \draw[resolve_edge] (SchedulerSettings.east) to[out=0,in=180] (SchedulePlan.west);
+    \draw[resolve_edge] (WalkCurriculumSpec.east) to[out=0,in=180] (SchedulePlan.west);
+    \draw[resolve_edge] (OptimizerSettings.east) to[out=0,in=180] (OptimizerPlan.west);
+    \draw[resolve_edge] (LossSettings.east) to[out=0,in=180] (LossPlan.west);
+
+    % --- Resolve (specs -> plans) ---
+    \draw[resolve_edge] (EnvironmentSetSpec.east) to[out=0,in=180] (DataPipelinePlan.west);
+    \draw[resolve_edge] (EnvValidationSpec.east) to[out=0,in=180] (DataPipelinePlan.west);
+    \draw[resolve_edge] (EvalProtocolSpec.east) to[out=0,in=180] (DataPipelinePlan.west);
+    \draw[resolve_edge] (WalkCurriculumSpec.east) to[out=0,in=180] (DataPipelinePlan.west);
+
+    \draw[resolve_edge] (RolloutBatchSpec.east) to[out=0,in=180] (RolloutProtocolPlan.west);
+    \draw[resolve_edge] (RolloutGenSpec.east) to[out=0,in=180] (RolloutProtocolPlan.west);
+
+    % --- Consume (specs/plans/state -> runtime systems) ---
+    \draw[consume_edge] (ModelArchitecturePlan.east) to[out=0,in=180] (Model.west);
+
+    \draw[consume_edge] (DataPipelinePlan.east) to[out=0,in=180] (DataPipeline.west);
+    \draw[consume_edge] (RolloutProtocolPlan.east) to[out=0,in=180] (DataPipeline.west);
+    \draw[consume_edge] (RolloutProtocolPlan.east) to[out=0,in=180] (TrainingLoop.west);
+
+    \draw[consume_edge] (LossPlan.east) to[out=0,in=180] (TrainingLoop.west);
+    \draw[consume_edge] (OptimizerPlan.east) to[out=0,in=180] (TrainingLoop.west);
+    \draw[consume_edge] (SchedulePlan.east) to[out=0,in=180] (TrainingLoop.west);
+
+    % Runtime state is produced/updated by runtime systems during execution
+    \draw[resolve_edge] (TrainingLoop.east) to[out=0,in=180] (RuntimeHyperparamsState.west);
+    \draw[consume_edge] (Model.east) to[out=0,in=180] (RuntimeHyperparamsState.west);
+    \draw[resolve_edge] (TrainingLoop.east) to[out=0,in=180] (CurriculumState.west);
+    \draw[consume_edge] (DataPipeline.east) to[out=0,in=180] (CurriculumState.west);
+
+    % Visited mask persists across batches (datapipeline owns it; training loop mutates it)
+    \draw[resolve_edge] (DataPipeline.east) to[out=0,in=180] (VisitedMaskState.west);
+    \draw[consume_edge] (TrainingLoop.east) to[out=0,in=180] (VisitedMaskState.west) ;
+    \draw[resolve_edge] (TrainingLoop.east) to[out=0,in=180] (VisitedMaskState.west);
+
+    \draw[resolve_edge] (Model.east) to[out=0,in=180] (TEMState.west);
+    \draw[resolve_edge] (ObservationSpaceSpec.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+    \draw[resolve_edge] (ActionSpaceSpec.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+    \draw[resolve_edge] (ActionEncodingSpec.east) to[out=0,in=180] (ModelArchitecturePlan.west);
+
 
 \end{tikzpicture}
 

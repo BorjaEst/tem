@@ -85,7 +85,7 @@ def _validate_single_env(env_path: Path, contract: SpaceContractSettings) -> Non
 
     # Step 3: Contract dimension match
     if env["n_observations"] != contract.n_observations:
-        raise EnvironmentValidationError(f"Environment {env_path} n_observations mismatch: " f"expected {contract.n_observations}, got {env['n_observations']}")
+        raise EnvironmentValidationError(f"Environment {env_path} n_observations mismatch: expected {contract.n_observations}, got {env['n_observations']}")
 
     if env["n_actions"] != contract.n_actions_total:
         raise EnvironmentValidationError(
@@ -99,15 +99,15 @@ def _validate_single_env(env_path: Path, contract: SpaceContractSettings) -> Non
     locations = env["locations"]
 
     if len(locations) != n_locations:
-        raise EnvironmentValidationError(f"Environment {env_path} location count mismatch: " f"n_locations={n_locations} but len(locations)={len(locations)}")
+        raise EnvironmentValidationError(f"Environment {env_path} location count mismatch: n_locations={n_locations} but len(locations)={len(locations)}")
 
     adjacency = env["adjacency"]
     if len(adjacency) != n_locations:
-        raise EnvironmentValidationError(f"Environment {env_path} adjacency matrix row count mismatch: " f"expected {n_locations}, got {len(adjacency)}")
+        raise EnvironmentValidationError(f"Environment {env_path} adjacency matrix row count mismatch: expected {n_locations}, got {len(adjacency)}")
 
     for i, row in enumerate(adjacency):
         if len(row) != n_locations:
-            raise EnvironmentValidationError(f"Environment {env_path} adjacency matrix row {i} column count mismatch: " f"expected {n_locations}, got {len(row)}")
+            raise EnvironmentValidationError(f"Environment {env_path} adjacency matrix row {i} column count mismatch: expected {n_locations}, got {len(row)}")
 
     # Step 5: Location-level validation
     for loc in locations:
@@ -118,14 +118,14 @@ def _validate_single_env(env_path: Path, contract: SpaceContractSettings) -> Non
         if obs_id is None:
             raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} missing 'observation' field")
         if not (0 <= obs_id < contract.n_observations):
-            raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} has observation ID {obs_id} " f"outside valid range [0, {contract.n_observations})")
+            raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} has observation ID {obs_id} outside valid range [0, {contract.n_observations})")
 
         # Validate actions structure
         actions = loc.get("actions")
         if actions is None:
             raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} missing 'actions' field")
         if len(actions) != env["n_actions"]:
-            raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} has {len(actions)} actions, " f"expected {env['n_actions']}")
+            raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} has {len(actions)} actions, expected {env['n_actions']}")
 
         # Validate action 0 no-op rule
         if contract.action0_is_noop:
@@ -134,26 +134,26 @@ def _validate_single_env(env_path: Path, contract: SpaceContractSettings) -> Non
             if transition is None:
                 raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} action 0 missing 'transition' field")
             if len(transition) != n_locations:
-                raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} action 0 transition length mismatch: " f"expected {n_locations}, got {len(transition)}")
+                raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} action 0 transition length mismatch: expected {n_locations}, got {len(transition)}")
 
             # Check for strict self-loop: transition[loc_id] == 1, all others == 0
             if loc_id is not None:
                 if transition[loc_id] != 1:
                     raise EnvironmentValidationError(
-                        f"Environment {env_path} location {loc_id} action 0 is not a self-loop: " f"transition[{loc_id}] = {transition[loc_id]} (expected 1)"
+                        f"Environment {env_path} location {loc_id} action 0 is not a self-loop: transition[{loc_id}] = {transition[loc_id]} (expected 1)"
                     )
                 for i, prob in enumerate(transition):
                     if i != loc_id and prob != 0:
                         raise EnvironmentValidationError(
-                            f"Environment {env_path} location {loc_id} action 0 is not a no-op: " f"transition[{i}] = {prob} (expected 0 for all i != {loc_id})"
+                            f"Environment {env_path} location {loc_id} action 0 is not a no-op: transition[{i}] = {prob} (expected 0 for all i != {loc_id})"
                         )
 
         # Validate all action transition lengths
         for action_idx, action in enumerate(actions):
             transition = action.get("transition")
             if transition is None:
-                raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} action {action_idx} " f"missing 'transition' field")
+                raise EnvironmentValidationError(f"Environment {env_path} location {loc_id} action {action_idx} missing 'transition' field")
             if len(transition) != n_locations:
                 raise EnvironmentValidationError(
-                    f"Environment {env_path} location {loc_id} action {action_idx} " f"transition length mismatch: expected {n_locations}, got {len(transition)}"
+                    f"Environment {env_path} location {loc_id} action {action_idx} transition length mismatch: expected {n_locations}, got {len(transition)}"
                 )

@@ -163,17 +163,6 @@ class ShinySettings(BaseModel):
         description="Returns to shiny object after finding.",
     )
 
-    @computed_field
-    @property
-    def shiny_dict(self) -> dict:
-        """Dict consumed by torch_tem.data.World(shiny=...)."""
-        return {
-            "gamma": self.shiny_gamma,
-            "beta": self.shiny_beta,
-            "n": self.shiny_n,
-            "returns": self.shiny_returns,
-        }
-
 
 class EnvSamplingSettings(BaseModel):
     """Grouped policy settings for data generation."""

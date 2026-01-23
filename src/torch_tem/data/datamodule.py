@@ -231,7 +231,7 @@ class TEMDataset(IterableDataset):
             data.World(
                 graph,
                 randomise_observations=self.data_settings.env.randomise_observations,
-                shiny=(self.data_settings.policy.shiny.shiny_dict if rng.random() < self.data_settings.policy.shiny.shiny_rate else None),
+                shiny=self._maybe_build_shiny_config(rng),
             )
             for graph in rng.choice(self.env_paths, self.data_settings.iterator.rollout.batch_size)
         ]
@@ -286,7 +286,7 @@ class TEMDataset(IterableDataset):
                 self.environments[env_i] = data.World(
                     self.env_paths[rng.integers(len(self.env_paths))],
                     randomise_observations=self.data_settings.env.randomise_observations,
-                    shiny=(self.data_settings.policy.shiny.shiny_dict if rng.random() < self.data_settings.policy.shiny.shiny_rate else None),
+                    shiny=self._maybe_build_shiny_config(rng),
                 )
                 self.visited[env_i] = [False for _ in range(self.environments[env_i].n_locations)]
                 walk = self.environments[env_i].generate_walks(
@@ -307,3 +307,24 @@ class TEMDataset(IterableDataset):
             chunk[i_step][1] = torch.stack(step[1], dim=0)
 
         return chunk, self.visited
+
+    def _maybe_build_shiny_config(self, rng: np.random.Generator) -> Optional[dict[str, Any]]:
+        """Build the shiny config dict consumed by `data.World`.
+
+        Parameters:
+            rng: Local RNG (seeded for val/test, unseeded for training).
+
+        Returns:
+            Dict with keys expected by `data.World(shiny=...)`, or None if shiny
+            sampling does not trigger for this batch/environment.
+        """
+        shiny_settings = self.data_settings.policy.shiny
+        if rng.random() >= shiny_settings.shiny_rate:
+            return None
+
+        return {
+            "gamma": shiny_settings.shiny_gamma,
+            "beta": shiny_settings.shiny_beta,
+            "n": shiny_settings.shiny_n,
+            "returns": shiny_settings.shiny_returns,
+        }

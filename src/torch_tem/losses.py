@@ -686,7 +686,7 @@ class TEMLoss(nn.Module):
 
     Note:
         Default ``reduction="none"`` produces per-environment vectors ``(B,)``
-        to support visit masking in :class:`~torch_tem.training.TEMLightningModule`.
+        to support visit masking in :class:`~torch_tem.training.TrainingLoop`.
     """
 
     def __init__(self, config: LossSettings):

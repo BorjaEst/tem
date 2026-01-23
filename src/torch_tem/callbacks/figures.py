@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch_tem.diagnostics import extract_rollout_trace
 from torch_tem.figures import tem_overview
 from torch_tem.figures.sinks import log_tensorboard_figure, make_figure_path, save_pdf
-from torch_tem.model import Rollout, TEMModel
+from torch_tem.model import Model, RolloutStream
 
 
 class FigureCallbackSettings(BaseModel):
@@ -148,7 +148,7 @@ class FiguresCallback(Callback):
 
         Args:
             trainer: Lightning Trainer instance.
-            pl_module: TEMLightningModule instance.
+            pl_module: TrainingLoop instance.
             batch: Training batch (chunk, visited) for rollout extraction.
             global_step: Current global training step.
         """
@@ -160,13 +160,13 @@ class FiguresCallback(Callback):
         base_dir = self._get_figure_base_dir(trainer)
         self._generate_and_persist_all(trainer, trace, base_dir, global_step)
 
-    def _try_extract_trace(self, tem_model: TEMModel, chunk: Any, global_step: int):
+    def _try_extract_trace(self, tem_model: Model, chunk: Any, global_step: int):
         """Create a fresh rollout and extract a plot-ready trace.
 
         Returns:
             TEMRolloutTrace or None if extraction fails.
         """
-        rollout = Rollout(tem_model, chunk, initial=None)
+        rollout = RolloutStream(tem_model, chunk, initial=None)
         try:
             return extract_rollout_trace(
                 rollout,

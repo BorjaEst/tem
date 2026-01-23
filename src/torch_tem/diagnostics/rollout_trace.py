@@ -5,7 +5,7 @@ and environment states over time. These dataclasses isolate figure rendering
 from simulation logic and GPU memory.
 
 Key Principle:
-    Figures consume these dataclasses, NOT TEMModel or live Rollout objects.
+    Figures consume these dataclasses, NOT Model or live RolloutStream objects.
     All tensors are detached and moved to CPU before storage.
 """
 

@@ -1,6 +1,6 @@
 """PyTorch Lightning training infrastructure for TEM.
 
-Provides :class:`TEMLightningModule`, a Lightning wrapper that implements the
+Provides :class:`TrainingLoop`, a Lightning wrapper that implements the
 complete TEM training loop with visit-masked loss accumulation and curriculum
 scheduling.
 
@@ -30,8 +30,8 @@ Settings composition:
 
 See Also:
     :class:`torch_tem.losses.TEMLoss`: Loss computation
-    :class:`torch_tem.model.TEMModel`: Core TEM model
-    :class:`torch_tem.model.Rollout`: Streaming rollout iterator
+    :class:`torch_tem.model.Model`: Core TEM model
+    :class:`torch_tem.model.RolloutStream`: Streaming rollout iterator
 """
 
 from __future__ import annotations
@@ -49,20 +49,20 @@ from torch.optim.lr_scheduler import ExponentialLR
 from torch_tem import losses, metrics, settings
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.metrics import AccuracyO
-from torch_tem.model import Rollout, TEMLabel, TEMModel, TEMOutput, TEMState
+from torch_tem.model import Model, RolloutStream, TEMLabel, TEMOutput, TEMState
 
 
 class TrainerConfig(BaseModel):
     """Composite configuration for TEM training (Lightning trainer + schedules).
 
     This Config class composes low-level '*Settings' from settings.py to provide
-    complete configuration for TEMLightningModule and Lightning Trainer. It aggregates
+    complete configuration for TrainingLoop and Lightning Trainer. It aggregates
     Lightning infrastructure settings with runtime schedules and PyTorch/Lightning
     optimization components (optimizer + lr_scheduler).
 
     Architecture:
         - Composes settings.LossSettings, settings.OptimizerSettings, and settings.SchedulerSettings.
-        - Used by TEMLightningModule
+        - Used by TrainingLoop
         - Instantiated from RunArguments in run.py (prevents parameter duplication)
 
     Note:
@@ -103,7 +103,7 @@ class TrainerConfig(BaseModel):
     )
 
 
-class TEMLightningModule(pl.LightningModule):
+class TrainingLoop(pl.LightningModule):
     """PyTorch Lightning module for TEM training.
 
     Integrates TEM model training with PyTorch Lightning, handling:
@@ -125,7 +125,7 @@ class TEMLightningModule(pl.LightningModule):
         trainer_settings: Combined trainer and schedule configuration.
     """
 
-    def __init__(self, model: TEMModel, training: TrainerConfig):
+    def __init__(self, model: Model, training: TrainerConfig):
         """Initialize the Lightning module.
 
         Args:
@@ -139,7 +139,7 @@ class TEMLightningModule(pl.LightningModule):
         params = {"trainer": training.model_dump()}
         self.save_hyperparameters(params)
 
-        self.tem: TEMModel = model
+        self.tem: Model = model
         self.prev_state: Optional[TEMState] = None
 
         self.loss_fn = losses.TEMLoss(training.loss)
@@ -177,7 +177,7 @@ class TEMLightningModule(pl.LightningModule):
         accum = AccumLoss.zero(device=self.device)
         acc_counts = AccuracyO.zero(device=self.device)
 
-        for output, labels, state in Rollout(self.tem, chunk, prev_state):
+        for output, labels, state in RolloutStream(self.tem, chunk, prev_state):
             step_contrib, acc_increments = self.model_iteration(output, labels, state, visited)
 
             # Accumulate loss and accuracies

@@ -6,7 +6,7 @@ Tolman-Eichenbaum Machine (TEM) implementation in this repository.
 It wires together:
 
 - Settings parsing via Pydantic Settings (`RunArguments`).
-- Model construction (`torch_tem.model.TEMModel`).
+- Model construction (`torch_tem.model.Model`).
 - Lightning `Trainer`, logger, and checkpoint callback.
 - Training loop defined in `torch_tem.training`.
 
@@ -39,7 +39,7 @@ from torch_tem import callbacks, data, losses, settings, training
 from torch_tem.callbacks import FigureCallbackSettings, FiguresCallback
 from torch_tem.data.datamodule import DataConfig
 from torch_tem.data.env_validation import validate_envs_against_contract
-from torch_tem.model import TEMConfig, TEMModel
+from torch_tem.model import Model, TEMConfig
 from torch_tem.settings import CheckpointSettings, LoggerSettings
 from torch_tem.training import TrainerConfig
 
@@ -229,7 +229,7 @@ class RunArguments(BaseSettings):
     def model(self) -> TEMConfig:
         """Compose TEMConfig from leaf settings.
 
-        Creates the aggregate model configuration consumed by TEMModel.
+        Creates the aggregate model configuration consumed by Model.
         """
         return TEMConfig(
             space_contract=self.space,  # Shared reference
@@ -251,7 +251,7 @@ class RunArguments(BaseSettings):
     def data(self) -> DataConfig:
         """Compose DataConfig from leaf settings.
 
-        Creates the aggregate data configuration consumed by TEMDataModule.
+        Creates the aggregate data configuration consumed by DataPipeline.
         The walk settings are shared with trainer to maintain single source of truth.
         """
         return DataConfig(
@@ -266,7 +266,7 @@ class RunArguments(BaseSettings):
     def trainer(self) -> TrainerConfig:
         """Compose TrainerConfig from leaf settings and Lightning kwargs.
 
-        Creates the aggregate training configuration consumed by TEMLightningModule.
+        Creates the aggregate training configuration consumed by TrainingLoop.
         The walk settings are shared with data to maintain single source of truth.
         """
         return TrainerConfig(
@@ -311,7 +311,7 @@ if __name__ == "__main__":
 
     # Step 3: Construct the TEM model from architecture parameters and space contract
     # Use contract dimensions (not hardcoded values) for observation/action spaces
-    tem_model = TEMModel(args.model)
+    tem_model = Model(args.model)
 
     # Step 4: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control
@@ -337,9 +337,9 @@ if __name__ == "__main__":
     # The DataModule generates batches of walk data on-the-fly
     trainer.fit(
         # Lightning module: training step, optimizer, schedule computation
-        training.TEMLightningModule(tem_model, args.trainer),
+        training.TrainingLoop(tem_model, args.trainer),
         # Data module: generates environment walks and batches
-        datamodule=data.TEMDataModule(args.data),
+        datamodule=data.DataPipeline(args.data),
         # Optional: resume from checkpoint
         ckpt_path=str(args.ckpt_path) if args.ckpt_path else None,
     )

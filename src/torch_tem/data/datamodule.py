@@ -1,6 +1,6 @@
 """PyTorch Lightning DataModule for TEM training data generation.
 
-This module provides TEMDataModule and TEMDataset for streaming on-the-fly
+This module provides DataPipeline and TEMDataset for streaming on-the-fly
 batch generation during TEM training.
 
 Architecture Note
@@ -29,13 +29,13 @@ class DataConfig(BaseModel):
     """Composite configuration for TEM data generation (Lightning datamodule + dataset).
 
     This Config class composes low-level '*Settings' from settings.py to provide
-    complete configuration for TEMDataModule and TEMDataset. It aggregates settings
+    complete configuration for DataPipeline and TEMDataset. It aggregates settings
     for environment generation, rollout chunking, evaluation protocols, exploration
     behavior, shiny environment sampling, and walk length curriculum.
 
     Architecture:
         - Composes settings.EnvironmentSettings, settings.RolloutSettings, etc.
-        - Used by TEMDataModule and TEMDataset
+        - Used by DataPipeline and TEMDataset
         - Instantiated from RunArguments in run.py (prevents parameter duplication)
 
     Note:
@@ -69,7 +69,7 @@ class DataConfig(BaseModel):
     )
 
 
-class TEMDataModule(pl.LightningDataModule):
+class DataPipeline(pl.LightningDataModule):
     """Lightning DataModule for TEM training."""
 
     def __init__(self, data_settings: DataConfig):

@@ -23,7 +23,7 @@ from torch_tem.settings import HebbianUpdateSettings
 class Runtime:
     """Runtime hyperparameters for Hebbian memory.
 
-    These are set by the training loop (see `TEMModel.set_runtime`) and are not
+    These are set by the training loop (see `Model.set_runtime`) and are not
     part of the static settings tree.
 
     Attributes:

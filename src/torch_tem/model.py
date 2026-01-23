@@ -129,7 +129,7 @@ class TEMOutput:
     reconstruction: TEMReconstruction
 
 
-class TEMModel(nn.Module):
+class Model(nn.Module):
     def __init__(self, config: Optional[TEMConfig] = None):
         super().__init__()
         self._config = config or TEMConfig()
@@ -206,7 +206,7 @@ class TEMModel(nn.Module):
         device = o.device
 
         # Handle reset boundaries: where a_prev is None, reset state to priors before transition
-        # TODO: This responsability to reset state should go somewhere else, e.g., in the Rollout class
+        # TODO: This responsability to reset state should go somewhere else, e.g., in the RolloutStream class
         # TODO: Then we do not need None actions, and use a Tensor[int] for a_prev
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
@@ -287,12 +287,12 @@ class TEMModel(nn.Module):
         return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
 
 
-class Rollout(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
+class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
     """ """
 
     # TODO: Add docstring
 
-    def __init__(self, model: TEMModel, walk: Walk, initial: Optional[TEMState] = None):
+    def __init__(self, model: Model, walk: Walk, initial: Optional[TEMState] = None):
         """ """
         # TODO: Add docstring
         self.model = model  # TEM model to rollout
@@ -306,7 +306,7 @@ class Rollout(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
         self._state = initial or model.init_state(batch_size, device)
         self._a_prev = [None for _ in range(first_observation.shape[0])]
 
-    def __iter__(self) -> "Rollout":
+    def __iter__(self) -> "RolloutStream":
         """Return self as iterator."""
         return self
 

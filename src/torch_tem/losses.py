@@ -48,7 +48,7 @@ from torch import Tensor
 from torch.distributions import Normal
 
 from torch_tem import utils
-from torch_tem.core import TEMLabel, TEMOutput, TEMState
+from torch_tem.model import TEMLabel, TEMOutput, TEMState
 from torch_tem.settings import AbstractLocationSettings  # fmt: skip
 from torch_tem.settings import GroundedLocationSettings  # fmt: skip
 from torch_tem.settings import LossSettings  # fmt: skip

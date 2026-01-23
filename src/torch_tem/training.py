@@ -30,8 +30,8 @@ Settings composition:
 
 See Also:
     :class:`torch_tem.losses.TEMLoss`: Loss computation
-    :class:`torch_tem.core.model.TEMModel`: Core TEM model
-    :class:`torch_tem.core.model.Rollout`: Streaming rollout iterator
+    :class:`torch_tem.model.TEMModel`: Core TEM model
+    :class:`torch_tem.model.Rollout`: Streaming rollout iterator
 """
 
 from __future__ import annotations
@@ -47,9 +47,9 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import ExponentialLR
 
 from torch_tem import losses, metrics, settings
-from torch_tem.core.model import Rollout, TEMLabel, TEMModel, TEMOutput, TEMState
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.metrics import AccuracyO
+from torch_tem.model import Rollout, TEMLabel, TEMModel, TEMOutput, TEMState
 
 
 class TrainerConfig(BaseModel):
@@ -203,7 +203,7 @@ class TEMLightningModule(pl.LightningModule):
                 If None, memory is freshly initialized.
 
         Returns:
-            Fresh :class:`~torch_tem.core.model.TEMState` with given memory.
+            Fresh :class:`~torch_tem.model.TEMState` with given memory.
 
         Raises:
             ValueError: If chunk is empty.

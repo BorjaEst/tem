@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from torch_tem import analyse, core, data, figures
+from torch_tem import analyse, data, figures
+from torch_tem.model import Rollout, TEMModel
 
 # Set random seeds for reproducibility
 np.random.seed(0)
@@ -34,7 +35,7 @@ model_spec.loader.exec_module(model)
 # Load the parameters of the model
 params = torch.load("../Summaries/" + date + "/run" + run + "/model/params_" + index + ".pt", weights_only=False)
 # Create a new tem model with the loaded parameters
-tem = core.TEMModel(params)
+tem = TEMModel(params)
 # Load the model weights after training
 model_weights = torch.load("../Summaries/" + date + "/run" + run + "/model/tem_" + index + ".pt", weights_only=False)
 # Set the model weights to the loaded trained model weights
@@ -64,7 +65,7 @@ for i_step, step in enumerate(model_input):
 
 # Run a forward pass through the model using this data, without accumulating gradients
 with torch.no_grad():
-    forward = list(core.Rollout(tem, model_input))
+    forward = list(Rollout(tem, model_input))
 
 # Decide whether to include stay-still actions as valid occasions for inference
 include_stay_still = True

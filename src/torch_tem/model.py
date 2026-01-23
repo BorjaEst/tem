@@ -3,19 +3,84 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import tee
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Literal, Optional, Sequence, Tuple, Union
 
 import torch
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from torch import Tensor, nn
 
 from torch_tem import utils
-from torch_tem.core.hpc import HPCModel, HPCState
-from torch_tem.core.lec import LECModel, LECState
-from torch_tem.core.mec import MECModel, MECState
 from torch_tem.modules.autoencoder import AutoencoderModule
+from torch_tem.modules.hpc import HPCModel, HPCState
+from torch_tem.modules.lec import LECModel, LECState
+from torch_tem.modules.mec import MECModel, MECState
 from torch_tem.modules.projection import ProjectionModule
-from torch_tem.settings import TEMSettings
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Observation, Walk
+from torch_tem.settings import AutoencoderSettings, HPCSettings, LECProjectionSettings, LECSettings, MECProjectionSettings, MECSettings, SpaceContractSettings
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Observation, Reduction, Scalar, Walk
+
+
+class TEMConfig(BaseModel):
+    """Complete settings tree for TEM model configuration."""
+
+    model_config = ConfigDict(extra="ignore", strict=False, arbitrary_types_allowed=True)
+
+    space_contract: SpaceContractSettings = Field(
+        default_factory=SpaceContractSettings,
+        description="Settings for the space contract used by the model.",
+    )
+    autoencoder: AutoencoderSettings = Field(
+        default_factory=AutoencoderSettings,
+        description="Autoencoder module settings.",
+    )
+    f_initial: List[float] = Field(
+        default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01],
+        frozen=True,
+        description="Initial spatial frequencies for multi-scale modules.",
+    )
+    n_features: int = Field(
+        default=10,
+        frozen=True,
+        description="Number of LEC context features.",
+    )
+    lec_settings: LECSettings = Field(
+        default_factory=LECSettings,
+        description="LEC module settings.",
+    )
+    lec_projection: LECProjectionSettings = Field(
+        default_factory=LECProjectionSettings,
+        description="LEC projection module settings.",
+    )
+    n_grids: List[int] = Field(
+        default_factory=lambda: [30, 30, 24, 18, 18],
+        frozen=True,
+        description="Number of MEC neurons per frequency module.",
+    )
+    n_ovc: Union[Literal["off", "merged"], List[int]] = Field(
+        default="merged",
+        frozen=True,
+        description="Number of OVC neurons per frequency module. 'merged' to merge with n_grids.",
+    )
+    mec_settings: MECSettings = Field(
+        default_factory=MECSettings,
+        description="MEC module settings.",
+    )
+    mec_projection: MECProjectionSettings = Field(
+        default_factory=MECProjectionSettings,
+        description="MEC projection module settings.",
+    )
+    n_hippocampal: List[int] = Field(
+        default_factory=lambda: [100, 100, 80, 60, 60],
+        frozen=True,
+        description="Number of HPC neurons per frequency module.",
+    )
+    hpc_settings: HPCSettings = Field(
+        default_factory=HPCSettings,
+        description="HPC module settings.",
+    )
+    use_x_cued_recall: bool = Field(
+        default=True,
+        description="Whether to use inferred ground location while inferring new abstract location",
+    )
 
 
 @dataclass
@@ -65,27 +130,29 @@ class TEMOutput:
 
 
 class TEMModel(nn.Module):
-    def __init__(self, n_observations: int, n_actions: int, settings: Optional[TEMSettings] = None):
+    def __init__(self, config: Optional[TEMConfig] = None):
         super().__init__()
-        self._settings = settings or TEMSettings()
-        n_features = settings.n_features  # Number of LEC features (compressed observation)
-        n_grids = settings.n_grids  # Number of MEC grid cells per frequency
-        n_ovc = settings.n_ovc if settings.n_ovc != "off" else []  # Number of MEC OVC cells per frequency
-        n_ovc = settings.n_ovc if settings.n_ovc != "merged" else None  # Merge OVC with grid cells
-        n_hippocampal = settings.n_hippocampal  # Number of HPC place cells per frequency
-        f_initial = settings.f_initial  # Initial firing rate for all cells
+        self._config = config or TEMConfig()
+        n_observations = config.space_contract.n_observations  # Number of observation dimensions
+        n_actions = config.space_contract.n_actions_move  # Number of possible discrete actions
+        n_features = config.n_features  # Number of LEC features (compressed observation)
+        n_grids = config.n_grids  # Number of MEC grid cells per frequency
+        n_ovc = config.n_ovc if config.n_ovc != "off" else []  # Number of MEC OVC cells per frequency
+        n_ovc = config.n_ovc if config.n_ovc != "merged" else None  # Merge OVC with grid cells
+        n_hippocampal = config.n_hippocampal  # Number of HPC place cells per frequency
+        f_initial = config.f_initial  # Initial firing rate for all cells
 
         # Autoencoder module for observation compression/decoding
-        self.autoencoder = AutoencoderModule(n_observations, n_features, settings=settings.autoencoder)
+        self.autoencoder = AutoencoderModule(n_observations, n_features, settings=config.autoencoder)
 
         # Entorhinal Hippocampal Circuit components
-        self.lec = lec = LECModel(n_features, f_initial, settings=settings.lec_settings)
-        self.mec = mec = MECModel(n_actions, n_hippocampal, n_grids, n_ovc, f_initial, settings=settings.mec_settings)
-        self.hpc = hpc = HPCModel(len(n_grids), n_hippocampal, f_initial, settings=settings.hpc_settings)
+        self.lec = lec = LECModel(n_features, f_initial, settings=config.lec_settings)
+        self.mec = mec = MECModel(n_actions, n_hippocampal, n_grids, n_ovc, f_initial, settings=config.mec_settings)
+        self.hpc = hpc = HPCModel(len(n_grids), n_hippocampal, f_initial, settings=config.hpc_settings)
 
         # Projection modules
-        self.lec_projection = ProjectionModule(lec, hpc, settings=settings.lec_projection)
-        self.mec_projection = ProjectionModule(mec, hpc, settings=settings.mec_projection)
+        self.lec_projection = ProjectionModule(lec, hpc, settings=config.lec_projection)
+        self.mec_projection = ProjectionModule(mec, hpc, settings=config.mec_projection)
 
     def set_runtime(self, eta: float, hebbian_decay: float, p2g_uncertainty_offset: float) -> None:
         """Set runtime hyperparameters (called by training loop each step).
@@ -99,9 +166,9 @@ class TEMModel(nn.Module):
         self.hpc.set_runtime(eta=eta, hebbian_decay=hebbian_decay)
 
     @property
-    def settings(self) -> TEMSettings:
+    def config(self) -> TEMConfig:
         """Return TEM settings object constructed from model parameters."""
-        return self._settings
+        return self._config
 
     @property
     def n_observations(self) -> int:
@@ -153,7 +220,7 @@ class TEMModel(nn.Module):
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
         x_inf, lec_state = self.lec.inference(c, lec_state)
         x_ = self.lec_projection(x_inf)  # Project to memory format
-        p_xi = self.hpc.recall(x_, hpc_state, mode="full") if self.settings.use_x_cued_recall else None
+        p_xi = self.hpc.recall(x_, hpc_state, mode="full") if self.config.use_x_cued_recall else None
 
         # LocationBelief: MEC path integration (action-driven)
         g_gen, mec_state = self.mec.generative(a, locations, mec_state)  # Updates mec state with g_path

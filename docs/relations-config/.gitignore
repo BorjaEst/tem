@@ -351,4 +351,5 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-# End of https://www.gitignore.io/api/tex,linux,macos,windows
+# Include pdf (are compiled files)
+*.pdf

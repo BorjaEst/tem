@@ -6,7 +6,7 @@ Tolman-Eichenbaum Machine (TEM) implementation in this repository.
 It wires together:
 
 - Settings parsing via Pydantic Settings (`RunArguments`).
-- Model construction (`torch_tem.core.model.TEMModel`).
+- Model construction (`torch_tem.model.TEMModel`).
 - Lightning `Trainer`, logger, and checkpoint callback.
 - Training loop defined in `torch_tem.training`.
 
@@ -26,7 +26,7 @@ Examples:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Literal, Optional, Union
 
 import torch
 from lightning.pytorch import Trainer, seed_everything
@@ -35,11 +35,12 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import callbacks, core, data, losses, settings, training
+from torch_tem import callbacks, data, losses, settings, training
 from torch_tem.callbacks import FigureCallbackSettings, FiguresCallback
 from torch_tem.data.datamodule import DataConfig
 from torch_tem.data.env_validation import validate_envs_against_contract
-from torch_tem.settings import CheckpointSettings, LoggerSettings, TEMSettings
+from torch_tem.model import TEMConfig, TEMModel
+from torch_tem.settings import CheckpointSettings, LoggerSettings
 from torch_tem.training import TrainerConfig
 
 # Configure PyTorch for better performance on modern GPUs
@@ -83,13 +84,66 @@ class RunArguments(BaseSettings):
     # =========================================================================
     # Core settings
     # =========================================================================
-    model: TEMSettings = Field(
-        default_factory=TEMSettings,
-        description="Model architecture parameters.",
-    )
     seed: int = Field(
         default=0,
         description="Random seed for reproducibility.",
+    )
+    f_initial: List[float] = Field(
+        default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01],
+        frozen=True,
+        description="Initial spatial frequencies for multi-scale modules.",
+    )
+    n_features: int = Field(
+        default=10,
+        frozen=True,
+        description="Number of LEC context features.",
+    )
+    n_grids: List[int] = Field(
+        default_factory=lambda: [30, 30, 24, 18, 18],
+        frozen=True,
+        description="Number of MEC neurons per frequency module.",
+    )
+    n_ovc: Union[Literal["off", "merged"], List[int]] = Field(
+        default="merged",
+        frozen=True,
+        description="Number of OVC neurons per frequency module. 'merged' to merge with n_grids.",
+    )
+    use_x_cued_recall: bool = Field(
+        default=True,
+        description="Whether to use inferred ground location while inferring new abstract location",
+    )
+
+    # =========================================================================
+    # Leaf settings (model architecture)
+    # =========================================================================
+    autoencoder: settings.AutoencoderSettings = Field(
+        default_factory=settings.AutoencoderSettings,
+        description="Autoencoder module settings.",
+    )
+    lec_settings: settings.LECSettings = Field(
+        default_factory=settings.LECSettings,
+        description="LEC module settings.",
+    )
+    lec_projection: settings.LECProjectionSettings = Field(
+        default_factory=settings.LECProjectionSettings,
+        description="LEC projection module settings.",
+    )
+    mec_settings: settings.MECSettings = Field(
+        default_factory=settings.MECSettings,
+        description="MEC module settings.",
+    )
+    mec_projection: settings.MECProjectionSettings = Field(
+        default_factory=settings.MECProjectionSettings,
+        description="MEC projection module settings.",
+    )
+    n_hippocampal: List[int] = Field(
+        default_factory=lambda: [100, 100, 80, 60, 60],
+        frozen=True,
+        description="Number of HPC neurons per frequency module.",
+    )
+    hpc_settings: settings.HPCSettings = Field(
+        default_factory=settings.HPCSettings,
+        description="HPC module settings.",
     )
 
     # =========================================================================
@@ -180,6 +234,28 @@ class RunArguments(BaseSettings):
     # Aggregate settings (compose leaf settings for modules)
     # =========================================================================
     @property
+    def model(self) -> TEMConfig:
+        """Compose TEMConfig from leaf settings.
+
+        Creates the aggregate model configuration consumed by TEMModel.
+        """
+        return TEMConfig(
+            space_contract=self.space,  # Shared reference
+            autoencoder=self.autoencoder,
+            lec_settings=self.lec_settings,
+            mec_settings=self.mec_settings,
+            hpc_settings=self.hpc_settings,
+            lec_projection=self.lec_projection,
+            mec_projection=self.mec_projection,
+            n_features=self.n_features,
+            n_grids=self.n_grids,
+            n_ovc=self.n_ovc,
+            n_hippocampal=self.n_hippocampal,
+            f_initial=self.f_initial,
+            use_x_cued_recall=self.use_x_cued_recall,
+        )
+
+    @property
     def data(self) -> DataConfig:
         """Compose DataConfig from leaf settings.
 
@@ -250,11 +326,7 @@ if __name__ == "__main__":
 
     # Step 4: Construct the TEM model from architecture parameters and space contract
     # Use contract dimensions (not hardcoded values) for observation/action spaces
-    tem_model = core.TEMModel(
-        n_observations=args.space.n_observations,
-        n_actions=args.space.n_actions_move,
-        settings=args.model,
-    )
+    tem_model = TEMModel(args.model)
 
     # Step 5: Build the PyTorch Lightning Trainer
     # This wires together logging, checkpointing, and training control

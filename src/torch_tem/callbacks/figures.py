@@ -17,10 +17,10 @@ import lightning.pytorch as pl
 from lightning.pytorch.callbacks import Callback
 from pydantic import BaseModel, ConfigDict, Field
 
-from torch_tem.core.model import Rollout, TEMModel
 from torch_tem.diagnostics import extract_rollout_trace
 from torch_tem.figures import tem_overview
 from torch_tem.figures.sinks import log_tensorboard_figure, make_figure_path, save_pdf
+from torch_tem.model import Rollout, TEMModel
 
 
 class FigureCallbackSettings(BaseModel):

@@ -11,8 +11,8 @@ from typing import List, Optional
 
 import numpy as np
 
-from torch_tem.core.model import Rollout, TEMLabel, TEMOutput, TEMState
 from torch_tem.diagnostics.rollout_trace import TEMRolloutTrace
+from torch_tem.model import Rollout, TEMLabel, TEMOutput, TEMState
 
 
 def extract_rollout_trace(rollout: Rollout, *, max_steps: Optional[int] = None, downsample_stride: int = 1) -> TEMRolloutTrace:
@@ -33,7 +33,7 @@ def extract_rollout_trace(rollout: Rollout, *, max_steps: Optional[int] = None, 
         ValueError: If rollout is empty or produces no steps.
 
     Example:
-        >>> from torch_tem.core.model import Rollout
+        >>> from torch_tem.model import Rollout
         >>> rollout = Rollout(model, chunk)
         >>> trace = extract_rollout_trace(rollout, max_steps=100)
         >>> # trace.o_predicted is a NumPy array on CPU

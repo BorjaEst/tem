@@ -13,11 +13,10 @@ import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-import torch_tem.core.model as model
-
 # Own module imports
 import torch_tem.data as data
 import torch_tem.figures as figures
+import torch_tem.model as model
 import torch_tem.parameters as parameters
 from torch_tem.modules import LSTM
 

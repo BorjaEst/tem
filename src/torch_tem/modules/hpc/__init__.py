@@ -33,9 +33,9 @@ import torch
 from torch import Tensor, nn
 
 from torch_tem import utils
-from torch_tem.core.hpc.attractor import AttractorNetwork
-from torch_tem.core.hpc.location import GroundLocation
-from torch_tem.core.hpc.memory import HebbianUpdate
+from torch_tem.modules.hpc.attractor import AttractorNetwork
+from torch_tem.modules.hpc.location import GroundLocation
+from torch_tem.modules.hpc.memory import HebbianUpdate
 from torch_tem.settings import HPCSettings
 from torch_tem.types import GroundedLocation, LocationBelief, Matrix, MultiScaleCode
 

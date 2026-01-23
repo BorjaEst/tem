@@ -175,7 +175,7 @@ class ShinySettings(BaseModel):
         }
 
 
-class EnvironmentSamplingSettings(BaseModel):
+class EnvSamplingSettings(BaseModel):
     """Grouped policy settings for data generation."""
 
     model_config = ConfigDict(extra="forbid")
@@ -190,7 +190,7 @@ class EnvironmentSamplingSettings(BaseModel):
     )
 
 
-class WalkCurriculumSettings(BaseModel):
+class CurriculumSettings(BaseModel):
     """Walk length curriculum settings (shared runtime curriculum)."""
 
     model_config = ConfigDict(extra="forbid")

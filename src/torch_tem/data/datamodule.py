@@ -59,12 +59,12 @@ class DataConfig(BaseModel):
         default_factory=settings.RolloutStreamSettings,
         description="Iterator protocol settings (rollout chunking + eval protocol).",
     )
-    policy: settings.EnvironmentSamplingSettings = Field(
-        default_factory=settings.EnvironmentSamplingSettings,
+    policy: settings.EnvSamplingSettings = Field(
+        default_factory=settings.EnvSamplingSettings,
         description="Data generation policies (exploration + shiny).",
     )
-    walk: settings.WalkCurriculumSettings = Field(
-        default_factory=settings.WalkCurriculumSettings,
+    walk: settings.CurriculumSettings = Field(
+        default_factory=settings.CurriculumSettings,
         description="Walk length curriculum settings.",
     )
 

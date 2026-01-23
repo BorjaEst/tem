@@ -7,122 +7,122 @@
 \begin{document}
 
 \tikzset{
-  configuration/.style={ rectangle, draw=green!70, fill=green!10, thick, minimum width=3.2cm, minimum height=6mm, rounded corners=2pt, font=\small\bfseries, align=left },
-  setting/.style={ rectangle, draw=orange!70, fill=orange!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left },
-  blank/.style={draw=none,fill=none,inner sep=0pt},
-  title/.style={font=\small\bfseries,align=left},
-  config_edge/.style={->,>=Stealth,thick,green!70},
-  setting_edge/.style={->,>=Stealth,thick,orange!70},
+    configuration/.style={ rectangle, draw=green!70, fill=green!10, thick, minimum width=3.2cm, minimum height=6mm, rounded corners=2pt, font=\small\bfseries, align=left },
+    setting/.style={ rectangle, draw=orange!70, fill=orange!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left },
+    blank/.style={draw=none,fill=none,inner sep=0pt},
+    title/.style={font=\small\bfseries,align=left},
+    config_edge/.style={->,>=Stealth,thick,green!70},
+    setting_edge/.style={->,>=Stealth,thick,orange!70},
 }
 
 \begin{tikzpicture}
 
-  % --- Layout anchors: fixed columns by hierarchy depth ---
-  \def\xCfg{0}
-  \def\xSetA{7.8}
-  \def\xSetB{14.4}
+    % --- Layout anchors: fixed columns by hierarchy depth ---
+    \def\xCfg{0}
+    \def\xSetA{7.8}
+    \def\xSetB{14.4}
 
-  % Vertical anchors (compact, grouped)
-  \def\yModel{-0.0}
-  \def\yShareda{-10.0}
-  \def\yData{-11.0}
-  \def\ySharedb{-17.0}
-  \def\yTrain{-18.0}
+    % Vertical anchors (compact, grouped)
+    \def\yModel{-0.0}
+    \def\yShareda{-10.0}
+    \def\yData{-11.0}
+    \def\ySharedb{-17.0}
+    \def\yTrain{-18.0}
 
-  % --- Headers ---
-  \node[title] (hdr_cfg) at (\xCfg,1.4) {Configurations};
-  \node[title] (hdr_l1) at (\xSetA,1.4) {Leaf settings};
-  \node[title] (hdr_l2) at (\xSetB,1.4) {Nested settings};
+    % --- Headers ---
+    \node[title] (hdr_cfg) at (\xCfg,1.4) {Configurations};
+    \node[title] (hdr_l1) at (\xSetA,1.4) {Leaf settings};
+    \node[title] (hdr_l2) at (\xSetB,1.4) {Nested settings};
 
-  % --- Level-2 model settings (column 2) ---
-  \node[setting,font=\scriptsize] (FreqFilterSettings) at (\xSetB,\yModel-0.0) {FreqFilterSettings};
-  \node[setting,font=\scriptsize] (FeatureNormSettings) at (\xSetB,\yModel-1.0) {FeatureNormSettings};
-  \node[setting,font=\scriptsize] (ReconstructionSettings) at (\xSetB,\yModel-2.0) {ReconstructionSettings};
+    % --- Level-2 model settings (column 2) ---
+    \node[setting,font=\scriptsize] (FreqFilterSettings) at (\xSetB,\yModel-0.0) {FreqFilterSettings};
+    \node[setting,font=\scriptsize] (FeatureNormSettings) at (\xSetB,\yModel-1.0) {FeatureNormSettings};
+    \node[setting,font=\scriptsize] (ReconstructionSettings) at (\xSetB,\yModel-2.0) {ReconstructionSettings};
 
-  \node[setting,font=\scriptsize] (PathSettings) at (\xSetB,\yModel-3.0) {PathSettings};
-  \node[setting,font=\scriptsize] (P2GMemSettings) at (\xSetB,\yModel-4.0) {P2GMemSettings};
-  \node[setting,font=\scriptsize] (OVCSettings) at (\xSetB,\yModel-5.0) {OVCSettings};
+    \node[setting,font=\scriptsize] (PathSettings) at (\xSetB,\yModel-3.0) {PathSettings};
+    \node[setting,font=\scriptsize] (P2GMemSettings) at (\xSetB,\yModel-4.0) {P2GMemSettings};
+    \node[setting,font=\scriptsize] (OVCSettings) at (\xSetB,\yModel-5.0) {OVCSettings};
 
-  \node[setting,font=\scriptsize] (AttractorSettings) at (\xSetB,\yModel-6.0) {AttractorSettings};
-  \node[setting,font=\scriptsize] (GroundLocSettings) at (\xSetB,\yModel-7.0) {GroundLocSettings};
-  \node[setting,font=\scriptsize] (HebbianUpdateSettings) at (\xSetB,\yModel-8.0) {HebbianUpdateSettings};
+    \node[setting,font=\scriptsize] (AttractorSettings) at (\xSetB,\yModel-6.0) {AttractorSettings};
+    \node[setting,font=\scriptsize] (GroundLocSettings) at (\xSetB,\yModel-7.0) {GroundLocSettings};
+    \node[setting,font=\scriptsize] (HebbianUpdateSettings) at (\xSetB,\yModel-8.0) {HebbianUpdateSettings};
 
-  \node[setting] (RolloutSettings) at (\xSetB,\yData-1.0) {RolloutSettings};
-  \node[setting] (EvalSettings) at (\xSetB,\yData-2.0) {EvalSettings};
-  \node[setting] (ExplorationSettings) at (\xSetB,\yData-3.0) {ExplorationSettings};
-  \node[setting] (ShinySettings) at (\xSetB,\yData-4.0) {ShinySettings};
+    \node[setting] (RolloutSettings) at (\xSetB,\yData-1.0) {RolloutSettings};
+    \node[setting] (EvalSettings) at (\xSetB,\yData-2.0) {EvalSettings};
+    \node[setting] (ExplorationSettings) at (\xSetB,\yData-3.0) {ExplorationSettings};
+    \node[setting] (ShinySettings) at (\xSetB,\yData-4.0) {ShinySettings};
 
-  \node[setting] (LRSchedulerSettings) at (\xSetB,\yTrain-0.0) {LRSchedulerSettings};
-  \node[setting] (MemoryScheduleSettings) at (\xSetB,\yTrain-1.0) {MemoryScheduleSettings};
-  \node[setting] (UncertaintyScheduleSettings) at (\xSetB,\yTrain-2.0) {UncertaintyScheduleSettings};
+    \node[setting] (LRSchedulerSettings) at (\xSetB,\yTrain-0.0) {LRSchedulerSettings};
+    \node[setting] (MemoryScheduleSettings) at (\xSetB,\yTrain-1.0) {MemoryScheduleSettings};
+    \node[setting] (UncertaintyScheduleSettings) at (\xSetB,\yTrain-2.0) {UncertaintyScheduleSettings};
 
-  \node[setting] (SensoryReconstructionSettings) at (\xSetB,\yTrain-3.0) {SensoryReconstructionSettings};
-  \node[setting] (AbstractLocationSettings) at (\xSetB,\yTrain-4.0) {AbstractLocationSettings};
-  \node[setting] (GroundedLocationSettings) at (\xSetB,\yTrain-5.0) {GroundedLocationSettings};
-  \node[setting] (RegularizationSettings) at (\xSetB,\yTrain-6.0) {RegularizationSettings};
-
-
-  % --- Level-1 settings (column 1; grouped by owning configuration) ---
-  \node[setting] (LECProjectionSettings) at (\xSetA,\yModel-0.0) {LECProjectionSettings};
-  \node[setting] (LECSettings) at (\xSetA,\yModel-1.0) {LECSettings};
-  --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (FreqFilterSettings.west);
-  --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (FeatureNormSettings.west);
-  --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (ReconstructionSettings.west);
-  \node[setting] (MECProjectionSettings) at (\xSetA,\yModel-3.0) {MECProjectionSettings};
-  \node[setting] (MECSettings) at (\xSetA,\yModel-4.0) {MECSettings};
-  --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (PathSettings.west);
-  --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (P2GMemSettings.west);
-  --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (OVCSettings.west);
-  \node[setting] (HPCSettings) at (\xSetA,\yModel-7.0) {HPCSettings};
-  --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (AttractorSettings.west);
-  --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (GroundLocSettings.west);
-  --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (HebbianUpdateSettings.west);
-  \node[setting] (AutoencoderSettings) at (\xSetA,\yModel-9.0) {AutoencoderSettings};
-
-  \node[setting] (SpaceContractSettings) at (\xSetA,\yShareda-0.0) {SpaceContractSettings};
-
-  \node[setting] (EnvironmentSettings) at (\xSetA,\yData-0.0) {EnvironmentSettings};
-  \node[setting] (RolloutStreamSettings) at (\xSetA,\yData-1.0) {RolloutStreamSettings};
-  --- \draw[setting_edge] (RolloutStreamSettings.east) to[out=0,in=180] (RolloutSettings.west);
-  --- \draw[setting_edge] (RolloutStreamSettings.east) to[out=0,in=180] (EvalSettings.west);
-  \node[setting] (EnvironmentSamplingSettings) at (\xSetA,\yData-3.0) {EnvironmentSamplingSettings};
-  --- \draw[setting_edge] (EnvironmentSamplingSettings.east) to[out=0,in=180] (ExplorationSettings.west);
-  --- \draw[setting_edge] (EnvironmentSamplingSettings.east) to[out=0,in=180] (ShinySettings.west);
-
-  \node[setting] (WalkCurriculumSettings) at (\xSetA,\ySharedb-0.0) {WalkCurriculumSettings};
-
-  \node[setting] (SchedulerSettings) at (\xSetA,\yTrain-0.0) {SchedulerSettings};
-  --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (LRSchedulerSettings.west);
-  --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (MemoryScheduleSettings.west);
-  --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (UncertaintyScheduleSettings.west);
-  \node[setting] (OptimizerSettings) at (\xSetA,\yTrain-2.0) {OptimizerSettings};
-  \node[setting] (LossSettings) at (\xSetA,\yTrain-4.0) {LossSettings};
-  --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (SensoryReconstructionSettings.west);
-  --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (AbstractLocationSettings.west);
-  --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (GroundedLocationSettings.west);
-  --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (RegularizationSettings.west);
+    \node[setting] (SensoryReconstructionSettings) at (\xSetB,\yTrain-3.0) {SensoryReconstructionSettings};
+    \node[setting] (AbstractLocationSettings) at (\xSetB,\yTrain-4.0) {AbstractLocationSettings};
+    \node[setting] (GroundedLocationSettings) at (\xSetB,\yTrain-5.0) {GroundedLocationSettings};
+    \node[setting] (RegularizationSettings) at (\xSetB,\yTrain-6.0) {RegularizationSettings};
 
 
-  % --- Configurations (left column) ---
-  \node[configuration] (ModelConfig) at (\xCfg,\yModel-0.5) {ModelConfig};
-  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (AutoencoderSettings.west);
-  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (LECSettings.west);
-  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (LECProjectionSettings.west);
-  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (MECSettings.west);
-  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (MECProjectionSettings.west);
-  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (HPCSettings.west);
-  --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
-  \node[configuration] (DataConfig) at (\xCfg,\yData-1.5) {DataConfig};
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvironmentSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (RolloutStreamSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvironmentSamplingSettings.west);
-  --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);
-  \node[configuration] (TrainerConfig) at (\xCfg,\yTrain-1.0) {TrainerConfig};
-  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (WalkCurriculumSettings.west);
-  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (LossSettings.west);
-  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (OptimizerSettings.west);
-  --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (SchedulerSettings.west);
+    % --- Level-1 settings (column 1; grouped by owning configuration) ---
+    \node[setting] (LECProjectionSettings) at (\xSetA,\yModel-0.0) {LECProjectionSettings};
+    \node[setting] (LECSettings) at (\xSetA,\yModel-1.0) {LECSettings};
+    --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (FreqFilterSettings.west);
+    --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (FeatureNormSettings.west);
+    --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (ReconstructionSettings.west);
+    \node[setting] (MECProjectionSettings) at (\xSetA,\yModel-3.0) {MECProjectionSettings};
+    \node[setting] (MECSettings) at (\xSetA,\yModel-4.0) {MECSettings};
+    --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (PathSettings.west);
+    --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (P2GMemSettings.west);
+    --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (OVCSettings.west);
+    \node[setting] (HPCSettings) at (\xSetA,\yModel-7.0) {HPCSettings};
+    --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (AttractorSettings.west);
+    --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (GroundLocSettings.west);
+    --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (HebbianUpdateSettings.west);
+    \node[setting] (AutoencoderSettings) at (\xSetA,\yModel-9.0) {AutoencoderSettings};
+
+    \node[setting] (SpaceContractSettings) at (\xSetA,\yShareda-0.0) {SpaceContractSettings};
+
+    \node[setting] (EnvironmentSettings) at (\xSetA,\yData-0.0) {EnvironmentSettings};
+    \node[setting] (RolloutStreamSettings) at (\xSetA,\yData-1.0) {RolloutStreamSettings};
+    --- \draw[setting_edge] (RolloutStreamSettings.east) to[out=0,in=180] (RolloutSettings.west);
+    --- \draw[setting_edge] (RolloutStreamSettings.east) to[out=0,in=180] (EvalSettings.west);
+    \node[setting] (EnvSamplingSettings) at (\xSetA,\yData-3.0) {EnvSamplingSettings};
+    --- \draw[setting_edge] (EnvSamplingSettings.east) to[out=0,in=180] (ExplorationSettings.west);
+    --- \draw[setting_edge] (EnvSamplingSettings.east) to[out=0,in=180] (ShinySettings.west);
+
+    \node[setting] (CurriculumSettings) at (\xSetA,\ySharedb-0.0) {CurriculumSettings};
+
+    \node[setting] (SchedulerSettings) at (\xSetA,\yTrain-0.0) {SchedulerSettings};
+    --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (LRSchedulerSettings.west);
+    --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (MemoryScheduleSettings.west);
+    --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (UncertaintyScheduleSettings.west);
+    \node[setting] (OptimizerSettings) at (\xSetA,\yTrain-2.0) {OptimizerSettings};
+    \node[setting] (LossSettings) at (\xSetA,\yTrain-4.0) {LossSettings};
+    --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (SensoryReconstructionSettings.west);
+    --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (AbstractLocationSettings.west);
+    --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (GroundedLocationSettings.west);
+    --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (RegularizationSettings.west);
+
+
+    % --- Configurations (left column) ---
+    \node[configuration] (ModelConfig) at (\xCfg,\yModel-0.5) {ModelConfig};
+    --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (AutoencoderSettings.west);
+    --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (LECSettings.west);
+    --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (LECProjectionSettings.west);
+    --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (MECSettings.west);
+    --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (MECProjectionSettings.west);
+    --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (HPCSettings.west);
+    --- \draw[config_edge] (ModelConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
+    \node[configuration] (DataConfig) at (\xCfg,\yData-1.5) {DataConfig};
+    --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (SpaceContractSettings.west);
+    --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvironmentSettings.west);
+    --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (RolloutStreamSettings.west);
+    --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (EnvSamplingSettings.west);
+    --- \draw[config_edge] (DataConfig.east) to[out=0,in=180] (CurriculumSettings.west);
+    \node[configuration] (TrainerConfig) at (\xCfg,\yTrain-1.0) {TrainerConfig};
+    --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (CurriculumSettings.west);
+    --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (LossSettings.west);
+    --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (OptimizerSettings.west);
+    --- \draw[config_edge] (TrainerConfig.east) to[out=0,in=180] (SchedulerSettings.west);
 
 \end{tikzpicture}
 

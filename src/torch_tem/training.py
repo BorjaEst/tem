@@ -85,8 +85,8 @@ class TrainerConfig(BaseModel):
     )
 
     # Walk curriculum bounds (referenced from DataConfig for annealing schedule)
-    walk: settings.WalkCurriculumSettings = Field(
-        default_factory=settings.WalkCurriculumSettings,
+    walk: settings.CurriculumSettings = Field(
+        default_factory=settings.CurriculumSettings,
         description="Walk length curriculum settings (shared with DataConfig).",
     )
 

@@ -35,10 +35,9 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import callbacks, data, losses, settings, training
+from torch_tem import data, settings, training
 from torch_tem.callbacks import FigureCallbackSettings, FiguresCallback
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.data.env_validation import validate_envs_against_contract
 from torch_tem.model import Model, TEMConfig
 from torch_tem.settings import CheckpointSettings, LoggerSettings
 from torch_tem.training import TrainerConfig

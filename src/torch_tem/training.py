@@ -238,7 +238,7 @@ class TrainingLoop(pl.LightningModule):
                 accuracy_counts: :class:`AccuracyO` with weighted accuracies.
         """
         step_losses = self.loss_fn(output, label, state)
-        step_acc = self.acc_o_fn(output.reconstruction.o_logits, label.o)
+        step_acc = self.acc_o_fn(output.reconstruction.o_logits, label.observation)
 
         losses_per_env: list[StepLoss] = []
         acc_total = AccuracyO.zero(device=self.device)

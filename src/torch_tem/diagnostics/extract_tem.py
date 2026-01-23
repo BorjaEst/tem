@@ -90,7 +90,7 @@ def extract_rollout_trace(rollout: RolloutStream, *, max_steps: Optional[int] = 
     for t, (output, label, state) in enumerate(zip(outputs, labels, states)):
         # Sensory reconstructions (use first output: o_p_inf)
         o_predicted[t] = output.reconstruction.o_hat[0].detach().cpu().numpy()
-        o_true[t] = label.o.detach().cpu().numpy()
+        o_true[t] = label.observation.detach().cpu().numpy()
 
         # Location representations
         for f in range(n_frequencies):

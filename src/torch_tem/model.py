@@ -16,7 +16,7 @@ from torch_tem.modules.lec import LECModel, LECState
 from torch_tem.modules.mec import MECModel, MECState
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import AutoencoderSettings, HPCSettings, LECProjectionSettings, LECSettings, MECProjectionSettings, MECSettings, SpaceContractSettings
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Observation, Reduction, Scalar, Walk
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MultiScaleCode, Observation, Reduction, Scalar, Walk
 
 
 class TEMConfig(BaseModel):
@@ -85,21 +85,19 @@ class TEMConfig(BaseModel):
 
 @dataclass
 class TEMLabel:
-    o: Observation  # True sensory observation (for loss computation)
+    observation: Observation  # True sensory observation (for loss computation)
     locations: List[LocationLabel]  # True locations (for loss computation)
 
 
 @dataclass
 class TEMState:
-    lec_state: LECState
-    mec_state: MECState
-    hpc_state: HPCState
+    lec: LECState
+    mec: MECState
+    hpc: HPCState
 
     def detach(self) -> "TEMState":
-        lec_state: LECState = self.lec_state.detach()
-        mec_state: MECState = self.mec_state.detach()
-        hpc_state: HPCState = self.hpc_state.detach()
-        return TEMState(lec_state, mec_state, hpc_state)
+        states = [x.detach() for x in (self.lec, self.mec, self.hpc)]
+        return TEMState(*states)
 
 
 @dataclass
@@ -146,13 +144,19 @@ class Model(nn.Module):
         self.autoencoder = AutoencoderModule(n_observations, n_features, settings=config.autoencoder)
 
         # Entorhinal Hippocampal Circuit components
-        self.lec = lec = LECModel(n_features, f_initial, settings=config.lec_settings)
-        self.mec = mec = MECModel(n_actions, n_hippocampal, n_grids, n_ovc, f_initial, settings=config.mec_settings)
-        self.hpc = hpc = HPCModel(len(n_grids), n_hippocampal, f_initial, settings=config.hpc_settings)
+        self.lec = LECModel(n_features, f_initial, settings=config.lec_settings)
+        self.mec = MECModel(n_actions, n_hippocampal, n_grids, n_ovc, f_initial, settings=config.mec_settings)
+        self.hpc = HPCModel(len(n_grids), n_hippocampal, f_initial, settings=config.hpc_settings)
 
         # Projection modules
-        self.lec_projection = ProjectionModule(lec, hpc, settings=config.lec_projection)
-        self.mec_projection = ProjectionModule(mec, hpc, settings=config.mec_projection)
+        self.lec_projection = ProjectionModule(self.lec, self.hpc, settings=config.lec_projection)
+        self.mec_projection = ProjectionModule(self.mec, self.hpc, settings=config.mec_projection)
+
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> TEMState:
+        lec_state = self.lec.init_state(batch_size, device)
+        state_mec = self.mec.init_state(batch_size, device)
+        hpc_state = self.hpc.init_state(batch_size, device)
+        return TEMState(lec_state, state_mec, hpc_state)
 
     def set_runtime(self, eta: float, hebbian_decay: float, p2g_uncertainty_offset: float) -> None:
         """Set runtime hyperparameters (called by training loop each step).
@@ -200,69 +204,77 @@ class Model(nn.Module):
         """Return the number of HPC place cells per frequency."""
         return self.hpc.shape
 
-    def forward(self, o: Observation, locations: List[LocationLabel], a_prev: List[Optional[int]], state: TEMState) -> tuple[TEMOutput, TEMState]:
-        mec_state, lec_state, hpc_state = state.mec_state, state.lec_state, state.hpc_state
-        c = self.autoencoder.encode(o)
-        device = o.device
+    def forward(self, observation: Observation, locations: List[LocationLabel], a_prev: List[Optional[int]], state: TEMState) -> tuple[TEMOutput, TEMState]:
+        state = self.setup_state(state, a_prev, observation.device)
+        device = observation.device  # Get device from observation tensor
+        actions = utils.one_hot_with_zero(a_prev, self.n_actions, device=device)
 
+        features = self.autoencoder.encode(observation)  # Encode observation to compressed format
+        inference, generative, state = self.step(features, locations, actions, state)
+        output = self.compute_output(inference, generative, observation)
+
+        # Build full output, state and return
+        return output, state
+
+    def setup_state(self, state: TEMState, a_prev: List[Optional[int]], device: torch.device) -> TEMState:
+        # Handle reset boundaries: where a_prev is None, reset state to priors before transition
         # Handle reset boundaries: where a_prev is None, reset state to priors before transition
         # TODO: This responsability to reset state should go somewhere else, e.g., in the RolloutStream class
         # TODO: Then we do not need None actions, and use a Tensor[int] for a_prev
+        state_lec, state_mec, state_hpc = state.lec, state.mec, state.hpc
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
             # Reset g to priors for envs with no previous action
-            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.cells_init[f].unsqueeze(0), mec_state.cells[f]) for f in range(self.mec.n_freq)]
-            mec_state = mec_state.new(g_reset, uncertainty=None)
+            g_reset = [torch.where(reset_mask.unsqueeze(-1), self.mec.cells_init[f].unsqueeze(0), state.mec.cells[f]) for f in range(self.mec.n_freq)]
+            state_mec = state.mec.new(g_reset, uncertainty=None)
+        return TEMState(state_lec, state_mec, state_hpc)
 
-        # Convert actions to one-hot format expected by MEC (use 0 for None, will be reset above)
-        a = utils.one_hot_with_zero(a_prev, self.n_actions, device=device)
-
+    def step(self, features: MultiScaleCode, locations: List[LocationLabel], actions: Tensor, state: TEMState) -> tuple[TEMInference, TEMGenerative, TEMState]:
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
-        x_inf, lec_state = self.lec.inference(c, lec_state)
+        x_inf, state.lec = self.lec.inference(features, state.lec)
         x_ = self.lec_projection(x_inf)  # Project to memory format
-        p_xi = self.hpc.recall(x_, hpc_state, mode="full") if self.config.use_x_cued_recall else None
+        p_xi = self.hpc.recall(x_, state.hpc, mode="full") if self.config.use_x_cued_recall else None
 
         # LocationBelief: MEC path integration (action-driven)
-        g_gen, mec_state = self.mec.generative(a, locations, mec_state)  # Updates mec state with g_path
+        g_gen, state.mec = self.mec.generative(actions, locations, state.mec)  # Updates mec state with g_path
         g_ = self.mec_projection(g_gen)
-        p_gg = self.hpc.recall(g_, hpc_state, mode="hierarchical")
+        p_gg = self.hpc.recall(g_, state.hpc, mode="hierarchical")
 
         # Infer abstract location by using state and sensory experience
-        g_inf, mec_state = self.mec.inference(p_xi, locations=locations, state=mec_state)
+        g_inf, state.mec = self.mec.inference(p_xi, locations=locations, state=state.mec)
         g_ = self.mec_projection(g_inf)
-        p_gi = self.hpc.recall(g_, hpc_state, mode="hierarchical")
+        p_gi = self.hpc.recall(g_, state.hpc, mode="hierarchical")
 
         # Generate grounded location from inferred abstract location
-        p_gen_gi, hpc_state = self.hpc.generative(p_gi, hpc_state)
-        p_gen_gg, hpc_state = self.hpc.generative(p_gg, hpc_state)
+        p_gen_gi, state.hpc = self.hpc.generative(p_gi, state.hpc)
+        p_gen_gg, state.hpc = self.hpc.generative(p_gg, state.hpc)
 
         # Infer grounded location from abstract location and sensory experience
-        p_inf, hpc_state = self.hpc.inference(x_, g_, hpc_state)
-
-        # Update memory (Hebbian write)
-        hpc_state = self.hpc.update(p_inf, p_gen_gi, p_xi, hpc_state)
-
-        # Build tem state
-        state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
+        p_inf, state.hpc = self.hpc.inference(x_, g_, state.hpc)
 
         # Build tem generative and inference interfaces
         generative = TEMGenerative(g_gen=g_gen, p_gen_gg=p_gen_gg, p_gen_gi=p_gen_gi)
         inference = TEMInference(g_inf=g_inf, p_inf=p_inf, p_xi=p_xi)
 
+        # Update memory and return new state
+        state.hpc = self.hpc.update(p_inf, p_gen_gi, p_xi, state.hpc)
+        return inference, generative, TEMState(state.lec, state.mec, state.hpc)
+
+    def compute_output(self, inference: TEMInference, generative: TEMGenerative, observation: Observation) -> TEMOutput:
         # Generate observation prediction from inferred grounded location
-        x = self.lec_projection.inverse(p_inf)
+        x = self.lec_projection.inverse(inference.p_inf)
         c_p_inf = self.lec.generative(x)
         o_p_inf_logits = self.autoencoder.decode(c_p_inf)
         o_p_inf = utils.softmax(o_p_inf_logits)
 
         # Generate observation from inferred grounded location
-        x = self.lec_projection.inverse(p_gen_gi)
+        x = self.lec_projection.inverse(generative.p_gen_gi)
         c_p_gen_gi = self.lec.generative(x)
         o_gen_gi_logits = self.autoencoder.decode(c_p_gen_gi)
         o_gen_gi = utils.softmax(o_gen_gi_logits)
 
         # Generate observation from generated grounded location
-        x = self.lec_projection.inverse(p_gen_gg)
+        x = self.lec_projection.inverse(generative.p_gen_gg)
         c_p_gen_gg = self.lec.generative(x)
         x_gen_gg_logits = self.autoencoder.decode(c_p_gen_gg)
         o_gen_gg = utils.softmax(x_gen_gg_logits)
@@ -270,21 +282,7 @@ class Model(nn.Module):
         # Return all generated observations and their corresponding logits
         o_hat, o_logits = (o_p_inf, o_gen_gi, o_gen_gg), (o_p_inf_logits, o_gen_gi_logits, x_gen_gg_logits)
         reconstructions = TEMReconstruction(o_hat=o_hat, o_logits=o_logits)
-
-        # Build full output, state and return
-        output = TEMOutput(inference=inference, generative=generative, reconstruction=reconstructions)
-        state = TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
-        return output, state
-
-    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> TEMState:
-        # Create initial LEC state (x starts as x_filtered since no scaling/normalization yet)
-        lec_state = self.lec.init_state(batch_size, device)
-        # Initialise previous abstract location by stacking abstract location prior
-        mec_state = self.mec.init_state(batch_size, device)
-        # Create initial HPC state with initialized memory
-        hpc_state = self.hpc.init_state(batch_size, device)
-        # And construct new iteration for that g, o, a, and M
-        return TEMState(lec_state=lec_state, mec_state=mec_state, hpc_state=hpc_state)
+        return TEMOutput(inference=inference, generative=generative, reconstruction=reconstructions)
 
 
 class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):

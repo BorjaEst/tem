@@ -720,8 +720,8 @@ class TEMLoss(nn.Module):
         p_inf, p_gen_gi, p_xi = output.inference.p_inf, output.generative.p_gen_gi, output.inference.p_xi
 
         # Raw (possibly per-env) losses
-        lx: LossX = self.loss_x_fn(output.reconstruction.o_logits, label.o)
-        lg: LossG = self.loss_g_fn(g_inf, g_gen, state.mec_state.uncertainty)
+        lx: LossX = self.loss_x_fn(output.reconstruction.o_logits, label.observation)
+        lg: LossG = self.loss_g_fn(g_inf, g_gen, state.mec.uncertainty)
         lp: LossP = self.loss_p_fn(p_inf, p_gen_gi, p_xi)
         lreg: LossReg = self.loss_reg_fn(g_inf, p_inf)
 

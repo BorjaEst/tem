@@ -65,8 +65,9 @@ class TrainerConfig(BaseModel):
         - Instantiated from RunArguments in run.py (prevents parameter duplication)
 
     Note:
-        Walk curriculum settings (walk) are shared with DataConfig to coordinate
-        walk length annealing between data generation and training loop.
+        Walk curriculum settings (walk) are shared with DataConfig as a single
+        runtime curriculum: the trainer schedules the current walk length, and the
+        data pipeline consumes it when generating walks.
     """
 
     model_config = ConfigDict(extra="allow")  # Allow extra Lightning kwargs

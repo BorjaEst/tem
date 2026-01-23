@@ -177,7 +177,7 @@ class ShinySettings(BaseModel):
 
 
 class WalkCurriculumSettings(BaseModel):
-    """Walk length curriculum settings (data-owned, training-controlled)."""
+    """Walk length curriculum settings (shared runtime curriculum)."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -39,8 +39,9 @@ class DataConfig(BaseModel):
         - Instantiated from RunArguments in run.py (prevents parameter duplication)
 
     Note:
-        Walk curriculum settings (walk) are shared with TrainerConfig to coordinate
-        walk length annealing between data generation and training loop.
+        Walk curriculum settings (walk) are shared with TrainerConfig as a single
+        runtime curriculum: the trainer schedules the current walk length, and the
+        data pipeline consumes it when generating walks.
         Space contract (space) is shared across the entire run to ensure consistency.
     """
 

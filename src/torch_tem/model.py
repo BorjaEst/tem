@@ -1,12 +1,35 @@
 from __future__ import annotations
 
+"""Core TEM model composition and rollout streaming.
+
+This module defines the top-level TEM model used throughout the package.
+It composes the three main circuit components:
+
+- LEC: sensory feature processing
+- MEC: abstract location dynamics (grid / optional OVC)
+- HPC: associative memory over grounded location codes
+
+The public entry points are:
+
+- `TEMConfig`: complete configuration tree for model construction.
+- `Model`: the TEM model wrapper exposing a TEM-compatible step interface.
+- `RolloutStream`: an iterator that streams a `Walk` through `Model`.
+
+Design notes:
+        - The model is intentionally stateful but uses explicit `TEMState` objects
+            (no hidden module state) to keep training/inference loops easy to reason
+            about.
+        - `RolloutStream` uses `a_prev=None` as an episode boundary signal; the
+            model resets relevant parts of state at those boundaries.
+"""
+
 from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import tee
 from typing import List, Literal, Optional, Sequence, Tuple, Union
 
 import torch
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor, nn
 
 from torch_tem import utils
@@ -16,7 +39,7 @@ from torch_tem.modules.lec import LECModel, LECState
 from torch_tem.modules.mec import MECModel, MECState
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import AutoencoderSettings, HPCSettings, LECProjectionSettings, LECSettings, MECProjectionSettings, MECSettings, SpaceContractSettings
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MultiScaleCode, Observation, Reduction, Scalar, Walk
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MultiScaleCode, Observation, Walk
 
 
 class TEMConfig(BaseModel):
@@ -85,23 +108,30 @@ class TEMConfig(BaseModel):
 
 @dataclass
 class TEMLabel:
+    """Ground-truth labels for a TEM step."""
+
     observation: Observation  # True sensory observation (for loss computation)
     locations: List[LocationLabel]  # True locations (for loss computation)
 
 
 @dataclass
 class TEMState:
+    """Container for the full recurrent TEM state."""
+
     lec: LECState
     mec: MECState
     hpc: HPCState
 
     def detach(self) -> "TEMState":
+        """Return a detached copy of the state."""
         states = [x.detach() for x in (self.lec, self.mec, self.hpc)]
         return TEMState(*states)
 
 
 @dataclass
 class TEMInference:
+    """Outputs from the inference path (conditioned on observation)."""
+
     g_inf: AbstractLocation
     p_inf: GroundedLocation
     p_xi: GroundedLocation
@@ -109,6 +139,8 @@ class TEMInference:
 
 @dataclass
 class TEMGenerative:
+    """Outputs from the generative path (conditioned on action/state)."""
+
     g_gen: AbstractLocation
     p_gen_gg: GroundedLocation
     p_gen_gi: GroundedLocation
@@ -116,19 +148,42 @@ class TEMGenerative:
 
 @dataclass
 class TEMReconstruction:
+    """Reconstructed observations and logits."""
+
     o_hat: Sequence[Observation]
     o_logits: Sequence[Tensor]
 
 
 @dataclass
 class TEMOutput:
+    """Top-level model output for a single step."""
+
     inference: TEMInference
     generative: TEMGenerative
     reconstruction: TEMReconstruction
 
 
 class Model(nn.Module):
+    """Top-level TEM model.
+
+    The model composes:
+        - `AutoencoderModule` for observation encode/decode.
+        - `LECModel` for sensory feature filtering.
+        - `MECModel` for abstract location dynamics.
+        - `HPCModel` for grounded location inference, recall, and Hebbian memory.
+        - `ProjectionModule`s to map between circuit spaces and memory space.
+
+    The main interaction method is `forward`, which consumes a single timestep
+    (observation + metadata + previous action + previous state) and returns the
+    model output and next state.
+    """
+
     def __init__(self, config: Optional[TEMConfig] = None):
+        """Initialize the TEM model.
+
+        Args:
+            config: Optional configuration tree. When `None`, defaults are used.
+        """
         super().__init__()
         self._config = config or TEMConfig()
         n_observations = config.space_contract.n_observations  # Number of observation dimensions
@@ -153,6 +208,15 @@ class Model(nn.Module):
         self.mec_projection = ProjectionModule(self.mec, self.hpc, settings=config.mec_projection)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> TEMState:
+        """Create an initial TEM state.
+
+        Args:
+            batch_size: Batch size for all state tensors.
+            device: Optional device for the returned tensors.
+
+        Returns:
+            An initialized `TEMState`.
+        """
         lec_state = self.lec.init_state(batch_size, device)
         state_mec = self.mec.init_state(batch_size, device)
         hpc_state = self.hpc.init_state(batch_size, device)
@@ -205,22 +269,48 @@ class Model(nn.Module):
         return self.hpc.shape
 
     def forward(self, observation: Observation, locations: List[LocationLabel], a_prev: List[Optional[int]], state: TEMState) -> tuple[TEMOutput, TEMState]:
+        """Run one TEM step.
+
+        Args:
+            observation: Sensory observation tensor for the current timestep.
+            locations: Per-environment location metadata/labels.
+            a_prev: Previous actions for each environment in the batch. `None`
+                indicates an episode boundary/reset for that environment.
+            state: Previous TEM state.
+
+        Returns:
+            A tuple `(output, next_state)`.
+        """
         state = self.setup_state(state, a_prev, observation.device)
         device = observation.device  # Get device from observation tensor
         actions = utils.one_hot_with_zero(a_prev, self.n_actions, device=device)
 
         features = self.autoencoder.encode(observation)  # Encode observation to compressed format
         inference, generative, state = self.step(features, locations, actions, state)
-        output = self.compute_output(inference, generative, observation)
+        output = self.compute_output(inference, generative)
 
         # Build full output, state and return
         return output, state
 
     def setup_state(self, state: TEMState, a_prev: List[Optional[int]], device: torch.device) -> TEMState:
-        # Handle reset boundaries: where a_prev is None, reset state to priors before transition
-        # Handle reset boundaries: where a_prev is None, reset state to priors before transition
-        # TODO: This responsability to reset state should go somewhere else, e.g., in the RolloutStream class
-        # TODO: Then we do not need None actions, and use a Tensor[int] for a_prev
+        """Apply per-environment reset logic before transition.
+
+        The batch may contain environments at different episode boundaries.
+        When `a_prev[i] is None`, we treat that environment as starting a new
+        episode and reset the relevant part of state before applying the MEC
+        transition.
+
+        Currently this resets the MEC abstract location belief to its learned
+        prior (`mec.cells_init`). Other state is left unchanged.
+
+        Args:
+            state: Current TEM state.
+            a_prev: Previous action per environment. `None` indicates reset.
+            device: Device to allocate masks/tensors.
+
+        Returns:
+            Updated state with resets applied where needed.
+        """
         state_lec, state_mec, state_hpc = state.lec, state.mec, state.hpc
         reset_mask = torch.tensor([a is None for a in a_prev], dtype=torch.bool, device=device)
         if torch.any(reset_mask):
@@ -230,6 +320,26 @@ class Model(nn.Module):
         return TEMState(state_lec, state_mec, state_hpc)
 
     def step(self, features: MultiScaleCode, locations: List[LocationLabel], actions: Tensor, state: TEMState) -> tuple[TEMInference, TEMGenerative, TEMState]:
+        """Execute the TEM circuit dynamics for one timestep.
+
+        This method performs the core algorithmic step:
+            1) Infer sensory features with LEC.
+            2) Optionally recall a grounded code from sensory cue (x-cued recall).
+            3) Path integrate abstract location with MEC (generative branch).
+            4) Recall grounded code from abstract code via HPC.
+            5) Infer abstract location using memory correction.
+            6) Infer grounded location using sensory and abstract cues.
+            7) Update Hebbian memory.
+
+        Args:
+            features: Compressed observation features.
+            locations: Per-environment metadata for the current timestep.
+            actions: One-hot previous action tensor of shape `(B, n_actions)`.
+            state: Previous TEM state.
+
+        Returns:
+            A tuple `(inference, generative, next_state)`.
+        """
         # Observe / infer: LEC filtering + HPC retrieval + MEC correction
         x_inf, state.lec = self.lec.inference(features, state.lec)
         x_ = self.lec_projection(x_inf)  # Project to memory format
@@ -260,7 +370,16 @@ class Model(nn.Module):
         state.hpc = self.hpc.update(p_inf, p_gen_gi, p_xi, state.hpc)
         return inference, generative, TEMState(state.lec, state.mec, state.hpc)
 
-    def compute_output(self, inference: TEMInference, generative: TEMGenerative, observation: Observation) -> TEMOutput:
+    def compute_output(self, inference: TEMInference, generative: TEMGenerative) -> TEMOutput:
+        """Decode observation predictions from inferred/generated grounded codes.
+
+        Args:
+            inference: Inference-branch outputs.
+            generative: Generative-branch outputs.
+
+        Returns:
+            A `TEMOutput` containing reconstructions and intermediate codes.
+        """
         # Generate observation prediction from inferred grounded location
         x = self.lec_projection.inverse(inference.p_inf)
         c_p_inf = self.lec.generative(x)
@@ -286,13 +405,34 @@ class Model(nn.Module):
 
 
 class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
-    """ """
+    """Stream a `Walk` through a `Model` step-by-step.
 
-    # TODO: Add docstring
+    This iterator yields `(output, label, state)` triples for each timestep in
+    the walk. It is designed to be memory-efficient: it does not store the
+    entire rollout, and it maintains the recurrent `TEMState` internally.
+
+    Episode boundaries are represented by `None` actions. The iterator passes
+    `previous_action` to the model, and the model applies its reset logic for
+    environments where the previous action is `None`.
+
+    Attributes:
+        model: TEM model instance.
+        walk: Iterator over `(locations, observation, action)` tuples.
+    """
 
     def __init__(self, model: Model, walk: Walk, initial: Optional[TEMState] = None):
-        """ """
-        # TODO: Add docstring
+        """Create a streaming rollout over a walk.
+
+        Args:
+            model: TEM model to rollout.
+            walk: Iterable of `(locations, observation, action)` tuples.
+            initial: Optional initial state to start from. If `None`, a fresh
+                state is initialized using the first observation's batch size
+                and device.
+
+        Raises:
+            StopIteration: If `walk` is empty.
+        """
         self.model = model  # TEM model to rollout
         self.walk = iter(walk)  # Walk to rollout over
 
@@ -318,11 +458,11 @@ class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
         """Return previous actions."""
         return self._a_prev
 
-    def __next__(self) -> TEMState:
-        """Process next timestep and return state.
+    def __next__(self) -> Tuple[TEMOutput, TEMLabel, TEMState]:
+        """Process the next timestep.
 
         Returns:
-            TEMState for current timestep.
+            A tuple `(output, label, state)` for the current timestep.
 
         Raises:
             StopIteration: When all timesteps have been processed.

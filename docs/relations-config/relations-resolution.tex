@@ -1,0 +1,82 @@
+% !TeX program = latexmk
+% !TeX options = -pdf -interaction=nonstopmode
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds}
+
+\begin{document}
+
+\tikzset{
+    title/.style={font=\small\bfseries,align=left},
+    arguments/.style={rectangle, draw=blue!70, fill=blue!8, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small\bfseries, align=left},
+    setting/.style={rectangle, draw=orange!70, fill=orange!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
+    config/.style={rectangle, draw=green!70, fill=green!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small\bfseries, align=left},
+    resolved/.style={rectangle, draw=gray!65, fill=gray!10, thick, minimum width=3.6cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
+    component/.style={rectangle, draw=purple!70, fill=purple!8, thick, minimum width=3.8cm, minimum height=6mm, rounded corners=2pt, font=\small, align=left},
+    compile_edge/.style={->,>=Stealth,thick,blue!70},
+    share_edge/.style={->,>=Stealth,thick,green!70},
+    resolve_edge/.style={->,>=Stealth,thick,gray!70},
+    consume_edge/.style={->,>=Stealth,thick,purple!70},
+    call_edge/.style={->,>=Stealth,thick,black!55,dashed},
+}
+
+\begin{tikzpicture}
+
+    % Columns
+    \def\xLeaf{0}
+    \def\xRes{8.0}
+    \def\xComp{16.0}
+
+    % Rows
+    \def\yTop{0.0}
+    \def\yLeaf{-1.0}
+    \def\yRes{-4.0}
+    \def\yComp{-4.0}
+
+    % Headers
+    \node[title] at (\xLeaf,\yTop-0.0) {Leaf settings};
+    \node[title] at (\xRes,\yTop-0.0) {Resolved concepts};
+    \node[title] at (\xComp,\yTop-0.0) {Runtime consumers};
+
+    % Runtime consumers (components)
+    \node[component] (EnvFiles) at (\xComp,\yComp-0.0) {Environment JSON files};
+    \node[component] (TEMDataModule) at (\xComp,\yComp-1.0) {TEMDataModule};
+    \node[component] (TEMModel) at (\xComp,\yComp-2.0) {TEMModel};
+    \node[component] (TEMLightningModule) at (\xComp,\yComp-3.0) {TEMLightningModule};
+
+    % Resolved concepts (column 2)
+    \node[resolved] (ModelAssembly) at (\xRes,\yRes-0.0) {ModelAssembly};
+    \node[resolved] (ObservationSpace) at (\xRes,\yRes-1.0) {ObservationSpace};
+    \node[resolved] (DataPipeline) at (\xRes,\yRes-2.0) {DataPipeline};
+    \node[resolved] (ActionEncoding) at (\xRes,\yRes-3.0) {ActionEncoding};
+    \node[resolved] (EnvironmentSet) at (\xRes,\yRes-4.0) {EnvironmentSet};
+    \node[resolved] (WalkLengthRuntime) at (\xRes,\yRes-5.0) {WalkLengthRuntime};
+    \node[resolved] (RuntimeSchedules) at (\xRes,\yRes-6.0) {RuntimeSchedules};
+    \node[resolved] (TrainingLoop) at (\xRes,\yRes-7.0) {TrainingLoop};
+
+    % Leaf settings (column 1)
+    \node[setting] (LECProjectionSettings) at (\xLeaf,\yLeaf-0.0) {LECProjectionSettings};
+    \node[setting] (LECSettings) at (\xLeaf,\yLeaf-1.0) {LECSettings};
+    \node[setting] (MECProjectionSettings) at (\xLeaf,\yLeaf-2.0) {MECProjectionSettings};
+    \node[setting] (MECSettings) at (\xLeaf,\yLeaf-3.0) {MECSettings};
+    \node[setting] (HPCSettings) at (\xLeaf,\yLeaf-4.0) {HPCSettings};
+    \node[setting] (AutoencoderSettings) at (\xLeaf,\yLeaf-5.0) {AutoencoderSettings};
+    \node[setting] (SpaceContractSettings) at (\xLeaf,\yLeaf-6.0) {SpaceContractSettings};
+    \node[setting] (EnvironmentSettings) at (\xLeaf,\yLeaf-7.0) {EnvironmentSettings};
+    \node[setting] (RolloutSettings) at (\xLeaf,\yLeaf-8.0) {RolloutSettings};
+    \node[setting] (EvalSettings) at (\xLeaf,\yLeaf-9.0) {EvalSettings};
+    \node[setting] (ExplorationSettings) at (\xLeaf,\yLeaf-10.0) {ExplorationSettings};
+    \node[setting] (ShinySettings) at (\xLeaf,\yLeaf-11.0) {ShinySettings};
+    \node[setting] (WalkCurriculumSettings) at (\xLeaf,\yLeaf-12.0) {WalkCurriculumSettings};
+    \node[setting] (LossSettings) at (\xLeaf,\yLeaf-13.0) {LossSettings};
+    \node[setting] (OptimizerSettings) at (\xLeaf,\yLeaf-14.0) {OptimizerSettings};
+    \node[setting] (SchedulerSettings) at (\xLeaf,\yLeaf-15.0) {SchedulerSettings};
+
+    % Edges (relationships)
+    \draw[consume_edge] (EnvironmentSet.east) to[out=0,in=180] (EnvFiles.west);
+    \draw[resolve_edge] (SpaceContractSettings.east) to[out=0,in=180] (ModelAssembly.west);
+
+
+\end{tikzpicture}
+
+\end{document}

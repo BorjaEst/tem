@@ -31,8 +31,8 @@
 
   % --- Headers ---
   \node[title] (hdr_cfg) at (\xCfg,1.4) {Configurations};
-  \node[title] (hdr_l1) at (\xSetA,1.4) {Level-1 settings};
-  \node[title] (hdr_l2) at (\xSetB,1.4) {Level-2 settings};
+  \node[title] (hdr_l1) at (\xSetA,1.4) {Leaf settings};
+  \node[title] (hdr_l2) at (\xSetB,1.4) {Nested settings};
 
   % --- Level-2 model settings (column 2) ---
   \node[setting,font=\scriptsize] (FreqFilterSettings) at (\xSetB,\yModel-0.0) {FreqFilterSettings};
@@ -47,9 +47,15 @@
   \node[setting,font=\scriptsize] (GroundLocSettings) at (\xSetB,\yModel-7.0) {GroundLocSettings};
   \node[setting,font=\scriptsize] (HebbianUpdateSettings) at (\xSetB,\yModel-8.0) {HebbianUpdateSettings};
 
-  \node[setting] (LRSchedulerSettings) at (\xSetB,\yTrain-3.0) {LRSchedulerSettings};
-  \node[setting] (MemoryScheduleSettings) at (\xSetB,\yTrain-4.0) {MemoryScheduleSettings};
-  \node[setting] (UncertaintyScheduleSettings) at (\xSetB,\yTrain-5.0) {UncertaintyScheduleSettings};
+  \node[setting] (LRSchedulerSettings) at (\xSetB,\yTrain-0.0) {LRSchedulerSettings};
+  \node[setting] (MemoryScheduleSettings) at (\xSetB,\yTrain-1.0) {MemoryScheduleSettings};
+  \node[setting] (UncertaintyScheduleSettings) at (\xSetB,\yTrain-2.0) {UncertaintyScheduleSettings};
+
+  \node[setting] (SensoryReconstructionSettings) at (\xSetB,\yTrain-3.0) {SensoryReconstructionSettings};
+  \node[setting] (AbstractLocationSettings) at (\xSetB,\yTrain-4.0) {AbstractLocationSettings};
+  \node[setting] (GroundedLocationSettings) at (\xSetB,\yTrain-5.0) {GroundedLocationSettings};
+  \node[setting] (RegularizationSettings) at (\xSetB,\yTrain-6.0) {RegularizationSettings};
+
 
   % --- Level-1 settings (column 1; grouped by owning configuration) ---
   \node[setting] (LECProjectionSettings) at (\xSetA,\yModel-0.0) {LECProjectionSettings};
@@ -57,19 +63,17 @@
   --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (FreqFilterSettings.west);
   --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (FeatureNormSettings.west);
   --- \draw[setting_edge] (LECSettings.east) to[out=0,in=180] (ReconstructionSettings.west);
-
   \node[setting] (MECProjectionSettings) at (\xSetA,\yModel-3.0) {MECProjectionSettings};
   \node[setting] (MECSettings) at (\xSetA,\yModel-4.0) {MECSettings};
   --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (PathSettings.west);
   --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (P2GMemSettings.west);
   --- \draw[setting_edge] (MECSettings.east) to[out=0,in=180] (OVCSettings.west);
-
   \node[setting] (HPCSettings) at (\xSetA,\yModel-7.0) {HPCSettings};
   --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (AttractorSettings.west);
   --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (GroundLocSettings.west);
   --- \draw[setting_edge] (HPCSettings.east) to[out=0,in=180] (HebbianUpdateSettings.west);
-
   \node[setting] (AutoencoderSettings) at (\xSetA,\yModel-9.0) {AutoencoderSettings};
+
   \node[setting] (SpaceContractSettings) at (\xSetA,\yShareda-0.0) {SpaceContractSettings};
 
   \node[setting] (EnvironmentSettings) at (\xSetA,\yData-0.0) {EnvironmentSettings};
@@ -80,12 +84,17 @@
 
   \node[setting] (WalkCurriculumSettings) at (\xSetA,\ySharedb-0.0) {WalkCurriculumSettings};
 
-  \node[setting] (LossSettings) at (\xSetA,\yTrain-0.0) {LossSettings};
-  \node[setting] (OptimizerSettings) at (\xSetA,\yTrain-2.0) {OptimizerSettings};
-  \node[setting] (SchedulerSettings) at (\xSetA,\yTrain-4.0) {SchedulerSettings};
+  \node[setting] (SchedulerSettings) at (\xSetA,\yTrain-0.0) {SchedulerSettings};
   --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (LRSchedulerSettings.west);
   --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (MemoryScheduleSettings.west);
   --- \draw[setting_edge] (SchedulerSettings.east) to[out=0,in=180] (UncertaintyScheduleSettings.west);
+  \node[setting] (OptimizerSettings) at (\xSetA,\yTrain-2.0) {OptimizerSettings};
+  \node[setting] (LossSettings) at (\xSetA,\yTrain-4.0) {LossSettings};
+  --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (SensoryReconstructionSettings.west);
+  --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (AbstractLocationSettings.west);
+  --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (GroundedLocationSettings.west);
+  --- \draw[setting_edge] (LossSettings.east) to[out=0,in=180] (RegularizationSettings.west);
+
 
   % --- Configurations (left column) ---
   \node[configuration] (ModelConfig) at (\xCfg,\yModel-0.5) {ModelConfig};

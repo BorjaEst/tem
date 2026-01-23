@@ -108,6 +108,11 @@ class RunArguments(BaseSettings):
         frozen=True,
         description="Number of OVC neurons per frequency module. 'merged' to merge with n_grids.",
     )
+    n_hippocampal: List[int] = Field(
+        default_factory=lambda: [100, 100, 80, 60, 60],
+        frozen=True,
+        description="Number of HPC neurons per frequency module.",
+    )
     use_x_cued_recall: bool = Field(
         default=True,
         description="Whether to use inferred ground location while inferring new abstract location",
@@ -135,11 +140,6 @@ class RunArguments(BaseSettings):
     mec_projection: settings.MECProjectionSettings = Field(
         default_factory=settings.MECProjectionSettings,
         description="MEC projection module settings.",
-    )
-    n_hippocampal: List[int] = Field(
-        default_factory=lambda: [100, 100, 80, 60, 60],
-        frozen=True,
-        description="Number of HPC neurons per frequency module.",
     )
     hpc_settings: settings.HPCSettings = Field(
         default_factory=settings.HPCSettings,

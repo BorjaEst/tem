@@ -155,9 +155,8 @@ class FiguresCallback(pl.Callback):
         from torch_tem.model import RolloutStream
 
         # Create rollout and extract trace
-        rollout = RolloutStream(model, walk, initial=None)
         trace = ModelTrace.from_rollout(
-            rollout,
+            rollout=RolloutStream(model, walk, initial=None),
             max_steps=self.settings.max_rollout_steps,
             downsample_stride=self.settings.downsample_stride,
             meta={"global_step": trainer.global_step, "split": "train"},

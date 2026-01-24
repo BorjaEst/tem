@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch_tem.diagnostics.traces import ModelTrace
 from torch_tem.figures import register, sinks
 from torch_tem.figures.core import REGISTRY, FigureContext, PlotTrace
+from torch_tem.figures.core.data_trace import DataTrace
 from torch_tem.model import RolloutStream
 
 
@@ -32,7 +33,7 @@ class FigureCallbackSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description="Whether to enable figure generation callback.",
     )
     figures: List[str] = Field(
@@ -40,7 +41,7 @@ class FigureCallbackSettings(BaseModel):
         description="List of figure names to generate (from registry).",
     )
     every_n_steps: int = Field(
-        default=1000,
+        default=1,
         description="Generate figures every N training steps.",
     )
     max_rollout_steps: int = Field(
@@ -138,7 +139,7 @@ class FiguresCallback(pl.Callback):
             batch: Current batch data.
         """
         # The training dataloader yields (walk, visited). We do not use `visited` here.
-        if not isinstance(batch, tuple):
+        if type(batch) not in {tuple, list}:
             raise ValueError(f"FiguresCallback expected batch=(walk, visited); got type={type(batch).__name__}")
         if len(batch) != 2:
             raise ValueError(f"FiguresCallback expected batch of length 2; got length={len(batch)}")
@@ -155,10 +156,6 @@ class FiguresCallback(pl.Callback):
         if model is None:
             raise AttributeError("LightningModule has no attribute 'tem' (expected torch_tem.training.TrainingLoop)")
 
-        # Import here to avoid circular dependency
-        from torch_tem.diagnostics import ModelTraceExtractor, extract_rollout_trace
-        from torch_tem.model import RolloutStream
-
         # Create rollout and extract model trace
         model_trace = ModelTrace.from_rollout(
             rollout=RolloutStream(model, walk_limited, initial=None),
@@ -167,21 +164,18 @@ class FiguresCallback(pl.Callback):
             meta={"global_step": trainer.global_step, "split": "train"},
         )
 
-        # Build DataTrace for data/walk figures
         # Get datamodule and dataset from trainer
         datamodule = trainer.datamodule
         if datamodule is None or datamodule.dataset is None:
-            print("Warning: DataModule or dataset not available; skipping data figures.")
-            data_trace = None
-        else:
-            from torch_tem.figures.core.data_trace import DataTrace
+            raise ValueError("DataModule or dataset not available")
 
-            data_trace = DataTrace(
-                worlds=datamodule.dataset.environments,
-                walks=datamodule.dataset.walks,
-                visited=visited,
-                meta={"global_step": trainer.global_step, "split": "train"},
-            )
+        # Create DataTrace for data figures
+        data_trace = DataTrace(
+            worlds=datamodule.dataset.environments,
+            walks=datamodule.dataset.walks,
+            visited=visited or getattr(datamodule.dataset, "visited", None),
+            meta={"global_step": trainer.global_step, "split": "train"},
+        )
 
         # Generate and persist each figure
         context = self.figure_context(trainer, split_name="train")  # Build context once

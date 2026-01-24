@@ -26,7 +26,7 @@ Design notes:
 from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import tee
-from typing import List, Literal, Optional, Sequence, Tuple, Union
+from typing import List, Literal, Optional, Sequence, Tuple, TypeAlias, Union
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field
@@ -181,6 +181,10 @@ class TEMOutput:
     reconstruction: TEMReconstruction
 
 
+TEMAction: TypeAlias = List[Optional[int]]
+TEMStep: TypeAlias = RolloutStep[TEMAction, TEMOutput, TEMLabel, TEMState]
+
+
 class Model(nn.Module):
     """Top-level TEM model.
 
@@ -286,7 +290,7 @@ class Model(nn.Module):
         """Return the number of HPC place cells per frequency."""
         return self.hpc.shape
 
-    def forward(self, observation: Observation, locations: List[LocationLabel], a_prev: List[Optional[int]], state: TEMState) -> tuple[TEMOutput, TEMState]:
+    def forward(self, observation: Observation, locations: List[LocationLabel], a_prev: TEMAction, state: TEMState) -> tuple[TEMOutput, TEMState]:
         """Run one TEM step.
 
         Args:
@@ -310,7 +314,7 @@ class Model(nn.Module):
         # Build full output, state and return
         return output, state
 
-    def setup_state(self, state: TEMState, a_prev: List[Optional[int]], device: torch.device) -> TEMState:
+    def setup_state(self, state: TEMState, a_prev: TEMAction, device: torch.device) -> TEMState:
         """Apply per-environment reset logic before transition.
 
         The batch may contain environments at different episode boundaries.
@@ -419,9 +423,6 @@ class Model(nn.Module):
         # Return all generated observations and their corresponding logits
         reconstructions = TEMReconstruction(y_p_inf, y_gen_gi, y_gen_gg)
         return TEMOutput(inference, generative, reconstructions)
-
-
-TEMStep = RolloutStep[List[Optional[int]], TEMOutput, TEMLabel, TEMState]
 
 
 class RolloutStream(Iterator[TEMStep]):

@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor, nn
 
 from torch_tem import utils
+from torch_tem.data.rollout import RolloutStep
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.hpc import HPCModel, HPCState
 from torch_tem.modules.lec import LECModel, LECState
@@ -155,11 +156,20 @@ class TEMGenerative:
 
 
 @dataclass
+class Prediction:
+    """Predicted observations and logits."""
+
+    prediction: Observation
+    logits: Tensor
+
+
+@dataclass
 class TEMReconstruction:
     """Reconstructed observations and logits."""
 
-    o_hat: Sequence[Observation]
-    o_logits: Sequence[Tensor]
+    y_p_inf: Prediction
+    y_gen_gi: Prediction
+    y_gen_gg: Prediction
 
 
 @dataclass
@@ -392,30 +402,32 @@ class Model(nn.Module):
         x = self.lec_projection.inverse(inference.p_inf)
         c_p_inf = self.lec.generative(x)
         o_p_inf_logits = self.autoencoder.decode(c_p_inf)
-        o_p_inf = utils.softmax(o_p_inf_logits)
+        y_p_inf = Prediction(utils.softmax(o_p_inf_logits), logits=o_p_inf_logits)
 
         # Generate observation from inferred grounded location
         x = self.lec_projection.inverse(generative.p_gen_gi)
         c_p_gen_gi = self.lec.generative(x)
         o_gen_gi_logits = self.autoencoder.decode(c_p_gen_gi)
-        o_gen_gi = utils.softmax(o_gen_gi_logits)
+        y_gen_gi = Prediction(utils.softmax(o_gen_gi_logits), logits=o_gen_gi_logits)
 
         # Generate observation from generated grounded location
         x = self.lec_projection.inverse(generative.p_gen_gg)
         c_p_gen_gg = self.lec.generative(x)
         x_gen_gg_logits = self.autoencoder.decode(c_p_gen_gg)
-        o_gen_gg = utils.softmax(x_gen_gg_logits)
+        y_gen_gg = Prediction(utils.softmax(x_gen_gg_logits), logits=x_gen_gg_logits)
 
         # Return all generated observations and their corresponding logits
-        o_hat, o_logits = (o_p_inf, o_gen_gi, o_gen_gg), (o_p_inf_logits, o_gen_gi_logits, x_gen_gg_logits)
-        reconstructions = TEMReconstruction(o_hat=o_hat, o_logits=o_logits)
-        return TEMOutput(inference=inference, generative=generative, reconstruction=reconstructions)
+        reconstructions = TEMReconstruction(y_p_inf, y_gen_gi, y_gen_gg)
+        return TEMOutput(inference, generative, reconstructions)
 
 
-class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
+TEMStep = RolloutStep[List[Optional[int]], TEMOutput, TEMLabel, TEMState]
+
+
+class RolloutStream(Iterator[TEMStep]):
     """Stream a `Walk` through a `Model` step-by-step.
 
-    This iterator yields `(output, label, state)` triples for each timestep in
+    This iterator yields `RolloutStep` objects for each timestep in
     the walk. It is designed to be memory-efficient: it does not store the
     entire rollout, and it maintains the recurrent `TEMState` internally.
 
@@ -426,6 +438,12 @@ class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
     Attributes:
         model: TEM model instance.
         walk: Iterator over `(locations, observation, action)` tuples.
+
+    Note:
+        This class provides two views of the same underlying rollout:
+        - `__next__()`: Returns RolloutStep (action, output, label, state)
+        - `iter_events()`: Returns event objects with more context (for tracing)
+        Both views share the same internal stepping and do not duplicate execution.
     """
 
     def __init__(self, model: Model, walk: Walk, initial: Optional[TEMState] = None):
@@ -442,15 +460,19 @@ class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
             StopIteration: If `walk` is empty.
         """
         self.model = model  # TEM model to rollout
-        self.walk = iter(walk)  # Walk to rollout over
 
-        # Peek at first observation to get batch size and device
-        _, first_observation, _ = next(tee(self.walk)[0])  # Peek at first observation
+        # Convert walk to iterator and peek to get batch size/device
+        walk_iter = iter(walk)
+
+        # Use tee to peek without consuming
+        peek_iter, self.walk = tee(walk_iter, 2)
+        _, first_observation, _ = next(peek_iter)  # Peek at first observation
         batch_size, device = first_observation.shape[0], first_observation.device
 
         # Initialize state and previous actions
         self._state = initial or model.init_state(batch_size, device)
         self._a_prev = [None for _ in range(first_observation.shape[0])]
+        self._timestep = 0
 
     def __iter__(self) -> "RolloutStream":
         """Return self as iterator."""
@@ -466,11 +488,11 @@ class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
         """Return previous actions."""
         return self._a_prev
 
-    def __next__(self) -> Tuple[TEMOutput, TEMLabel, TEMState]:
+    def __next__(self) -> TEMStep:
         """Process the next timestep.
 
         Returns:
-            A tuple `(output, label, state)` for the current timestep.
+            A RolloutStep for the current timestep.
 
         Raises:
             StopIteration: When all timesteps have been processed.
@@ -479,4 +501,5 @@ class RolloutStream(Iterator[Tuple[TEMOutput, TEMLabel, TEMState]]):
         output, self._state = self.model(observation, locations, self.previous_action, self._state)
         labels = TEMLabel(observation, locations)
         self._a_prev = action  # Update action for next iteration
-        return output, labels, self.state
+        self._timestep += 1
+        return RolloutStep(action, output, labels, self._state)

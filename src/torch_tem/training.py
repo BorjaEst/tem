@@ -189,34 +189,6 @@ class TrainingLoop(pl.LightningModule):
 
         return accum, final_acc, state  # last_state
 
-    def init_state(self, batch: Any, memory: Optional[list[Tensor]] = None) -> TEMState:
-        """Initialize clean state for validation/test rollouts.
-
-        Creates a fresh initial state while optionally preserving Hebbian memory.
-        Used to reset recurrent state at evaluation boundaries while maintaining
-        learned associations.
-
-        Args:
-            batch: Tuple ``(chunk, visited)`` where chunk[0] provides initial
-                location and observation.
-            memory: Optional Hebbian memory matrices to preserve across episodes.
-                If None, memory is freshly initialized.
-
-        Returns:
-            Fresh :class:`~torch_tem.model.TEMState` with given memory.
-
-        Raises:
-            ValueError: If chunk is empty.
-        """
-        chunk, _visited = batch
-        if len(chunk) == 0:
-            raise ValueError("init_state requires a non-empty chunk")
-
-        locations_0, x_0, _a_0 = chunk[0]
-        batch_size = int(x_0.shape[0])
-
-        return self.tem.init_iteration(locations_0, x_0, [None for _ in range(batch_size)], memory)
-
     def model_iteration(self, output: TEMOutput, label: TEMLabel, state: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyO]:
         """Compute visit-masked loss and accuracy for a single timestep.
 
@@ -282,8 +254,8 @@ class TrainingLoop(pl.LightningModule):
         Returns:
             Total loss for logging.
         """
-        memory = self.prev_state.M if self.prev_state is not None else None
-        init_state = self.init_state(batch, memory)
+        batch_size, device = batch[0][0][1].shape[0], batch[0][0][1].device  # Chunk, step, observations
+        init_state = self.prev_state.new() if self.prev_state else self.tem.init_state(batch_size, device)
         loss_output, accuracies, _ = self(batch, init_state)
 
         self._log_step_metrics(prefix="val/", loss_output=loss_output)
@@ -302,8 +274,8 @@ class TrainingLoop(pl.LightningModule):
         Returns:
             Total loss for logging.
         """
-        memory = self.prev_state.M if self.prev_state is not None else None
-        init_state = self.init_state(batch, memory)
+        batch_size, device = batch[0][0][1].shape[0], batch[0][0][1].device  # Chunk, step, observations
+        init_state = self.prev_state.new() if self.prev_state else self.tem.init_state(batch_size, device)
         loss_output, accuracies, _ = self(batch, init_state)
 
         self._log_step_metrics(prefix="test/", loss_output=loss_output)

@@ -1,6 +1,6 @@
 """PyTorch Lightning DataModule for TEM training data generation.
 
-This module provides DataPipeline and TEMDataset for streaming on-the-fly
+This module provides DataModule and TEMDataset for streaming on-the-fly
 batch generation during TEM training.
 
 Architecture Note
@@ -29,13 +29,13 @@ class DataConfig(BaseModel):
     """Composite configuration for TEM data generation (Lightning datamodule + dataset).
 
     This Config class composes low-level '*Settings' from settings.py to provide
-    complete configuration for DataPipeline and TEMDataset. It aggregates settings
+    complete configuration for DataModule and TEMDataset. It aggregates settings
     for environment generation, rollout chunking, evaluation protocols, exploration
     behavior, shiny environment sampling, and walk length curriculum.
 
     Architecture:
         - Composes settings.EnvironmentSettings, settings.RolloutSettings, etc.
-        - Used by DataPipeline and TEMDataset
+        - Used by DataModule and TEMDataset
         - Instantiated from RunArguments in run.py (prevents parameter duplication)
 
     Note:
@@ -69,7 +69,7 @@ class DataConfig(BaseModel):
     )
 
 
-class DataPipeline(pl.LightningDataModule):
+class DataModule(pl.LightningDataModule):
     """Lightning DataModule for TEM training."""
 
     def __init__(self, data_settings: DataConfig):
@@ -134,11 +134,7 @@ class DataPipeline(pl.LightningDataModule):
             self.setup("fit")
 
         # Return DataLoader with batch_size=None (dataset yields pre-batched data)
-        return DataLoader(
-            self.dataset,
-            batch_size=None,  # Dataset already batches internally
-            num_workers=0,  # Keep in main process (env objects not picklable)
-        )
+        return DataLoader(self.dataset, batch_size=None, num_workers=0)
 
     def val_dataloader(self):
         """Return validation dataloader (finite, deterministic).
@@ -148,11 +144,7 @@ class DataPipeline(pl.LightningDataModule):
         if not self.data_settings.iterator.eval.enable_validation:
             return []
 
-        return DataLoader(
-            self.val_dataset,
-            batch_size=None,
-            num_workers=0,
-        )
+        return DataLoader(self.val_dataset, batch_size=None, num_workers=0)
 
     def test_dataloader(self):
         """Return test dataloader (finite, deterministic).
@@ -162,11 +154,7 @@ class DataPipeline(pl.LightningDataModule):
         if not self.data_settings.iterator.eval.enable_test:
             return []
 
-        return DataLoader(
-            self.test_dataset,
-            batch_size=None,
-            num_workers=0,
-        )
+        return DataLoader(self.test_dataset, batch_size=None, num_workers=0)
 
     def set_walk_length_center(self, value: float):
         """Control surface: set walk length center (called by trainer during training)."""

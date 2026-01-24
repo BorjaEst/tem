@@ -99,11 +99,11 @@ class EvalSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enable_validation: bool = Field(
-        default=False,
+        default=True,
         description="Enable validation loop during training.",
     )
     enable_test: bool = Field(
-        default=False,
+        default=True,
         description="Enable test loop after training.",
     )
     val_batches: int = Field(

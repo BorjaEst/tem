@@ -39,7 +39,7 @@ from torch_tem.modules.lec import LECModel, LECState
 from torch_tem.modules.mec import MECModel, MECState
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import AutoencoderSettings, HPCSettings, LECProjectionSettings, LECSettings, MECProjectionSettings, MECSettings, SpaceContractSettings
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MultiScaleCode, Observation, Walk
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MemoryState, MultiScaleCode, Observation, Walk
 
 
 class TEMConfig(BaseModel):
@@ -127,6 +127,14 @@ class TEMState:
         states = [x.detach() for x in (self.lec, self.mec, self.hpc)]
         return TEMState(*states)
 
+    def new(self, lec: LECState = None, mec: MECState = None, hpc: HPCState = None) -> "TEMState":
+        """Return a new TEMState with updated fields."""
+        return TEMState(
+            lec=lec if lec is not None else self.lec.new(),  # Clear filtered features
+            mec=mec if mec is not None else self.mec.new(),  # Clear abstract location
+            hpc=hpc if hpc is not None else self.hpc.new(),  # Clear grounded location, transfers memory
+        )
+
 
 @dataclass
 class TEMInference:
@@ -207,7 +215,7 @@ class Model(nn.Module):
         self.lec_projection = ProjectionModule(self.lec, self.hpc, settings=config.lec_projection)
         self.mec_projection = ProjectionModule(self.mec, self.hpc, settings=config.mec_projection)
 
-    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> TEMState:
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None, memory: Optional[MemoryState] = None) -> TEMState:
         """Create an initial TEM state.
 
         Args:
@@ -219,7 +227,7 @@ class Model(nn.Module):
         """
         lec_state = self.lec.init_state(batch_size, device)
         state_mec = self.mec.init_state(batch_size, device)
-        hpc_state = self.hpc.init_state(batch_size, device)
+        hpc_state = self.hpc.init_state(batch_size, device, memory=memory)
         return TEMState(lec_state, state_mec, hpc_state)
 
     def set_runtime(self, eta: float, hebbian_decay: float, p2g_uncertainty_offset: float) -> None:

@@ -250,7 +250,7 @@ class RunArguments(BaseSettings):
     def data(self) -> DataConfig:
         """Compose DataConfig from leaf settings.
 
-        Creates the aggregate data configuration consumed by DataPipeline.
+        Creates the aggregate data configuration consumed by DataModule.
         The walk settings are shared with trainer to maintain single source of truth.
         """
         return DataConfig(
@@ -338,7 +338,7 @@ if __name__ == "__main__":
         # Lightning module: training step, optimizer, schedule computation
         training.TrainingLoop(tem_model, args.trainer),
         # Data module: generates environment walks and batches
-        datamodule=data.DataPipeline(args.data),
+        datamodule=data.DataModule(args.data),
         # Optional: resume from checkpoint
         ckpt_path=str(args.ckpt_path) if args.ckpt_path else None,
     )

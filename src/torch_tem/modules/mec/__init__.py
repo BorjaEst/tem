@@ -43,7 +43,7 @@ class MECState:
     location: LocationBelief  # State and uncertainty over abstract locations
     _n_ovc_modules: Optional[int] = None  # Cached number of OVC modules
 
-    def new(self, cells: AbstractLocation, uncertainty: MultiScaleCode) -> "MECState":
+    def new(self, cells: Optional[AbstractLocation] = None, uncertainty: Optional[MultiScaleCode] = None) -> "MECState":
         """Return a new state with an updated transition.
 
         Args:
@@ -59,8 +59,13 @@ class MECState:
             `detach()` when you need to cache state across iterations without
             keeping autograd history.
         """
-        copy = self.__dict__.copy()
-        copy.update({"location": LocationBelief(mean=cells, uncertainty=uncertainty)})
+        batch_size, device = self.cells[0].shape[0], self.cells[0].device
+        copy, shape = self.__dict__.copy(), [v.shape[1] for v in self.cells]
+        location = LocationBelief(
+            mean=cells or [torch.zeros((batch_size, n), device=device) for n in shape],
+            uncertainty=uncertainty,
+        )
+        copy.update(location=location)  # n_ovc_modules is preserved
         return MECState(**copy)
 
     def detach(self) -> "MECState":

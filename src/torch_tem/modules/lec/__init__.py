@@ -22,6 +22,7 @@ from torch_tem.modules.lec.filter import FrequencyFilter
 from torch_tem.modules.lec.norm import FeatureNorm
 from torch_tem.modules.lec.reconstruction import Reconstruction
 from torch_tem.settings import LECSettings
+from torch_tem.types import MultiScaleCode
 
 __all__ = ["LECModel", "LECState"]
 
@@ -35,14 +36,16 @@ class LECState:
         filtered: Per-frequency unweighted filtered features.
     """
 
-    cells: List[Tensor]  # LEC cell activations per frequency
-    filtered: List[Tensor]  # Unweighted filtered features
+    cells: MultiScaleCode  # LEC cell activations per frequency
+    filtered: MultiScaleCode  # Unweighted filtered features
 
-    def new(self, **kwargs) -> "LECState":
+    def new(self, cells: Optional[MultiScaleCode] = None, filtered: Optional[MultiScaleCode] = None) -> "LECState":
         """Return a new state with updated fields.
+        If a field is not provided, the value is reset to the initial value (zeros).
 
         Args:
-            **kwargs: Field overrides for the new state.
+            cells: Optional new LEC cell activations.
+            filtered: Optional new filtered features.
 
         Returns:
             A new `LECState` instance.
@@ -52,8 +55,11 @@ class LECState:
             `detach()` when you need to carry state across iterations without
             keeping autograd history.
         """
-        copy = self.__dict__.copy()
-        copy.update(kwargs)
+        batch_size, device = self.cells[0].shape[0], self.cells[0].device
+        copy, shape = self.__dict__.copy(), [v.shape[1] for v in self.cells]
+        cells = cells or [torch.zeros((batch_size, n), device=device) for n in shape]
+        filtered = filtered or [torch.zeros((batch_size, n), device=device) for n in shape]
+        copy.update(cells=cells, filtered=filtered)
         return LECState(**copy)
 
     def detach(self) -> "LECState":

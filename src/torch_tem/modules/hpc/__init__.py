@@ -37,7 +37,7 @@ from torch_tem.modules.hpc.attractor import AttractorNetwork
 from torch_tem.modules.hpc.location import GroundLocation
 from torch_tem.modules.hpc.memory import HebbianUpdate
 from torch_tem.settings import HPCSettings
-from torch_tem.types import GroundedLocation, LocationBelief, Matrix, MultiScaleCode
+from torch_tem.types import GroundedLocation, LocationBelief, Matrix, MemoryState, MultiScaleCode
 
 __all__ = ["HPCModel", "HPCState"]
 
@@ -62,9 +62,9 @@ class HPCState:
     """
 
     location: LocationBelief  # State and uncertainty over grounded locations
-    memory: List[Matrix]  # Memory matrices
+    _memory: List[Matrix]  # Memory matrices
 
-    def new(self, cells: GroundedLocation, uncertainty: MultiScaleCode) -> "HPCState":
+    def new(self, cells: Optional[GroundedLocation] = None, uncertainty: Optional[MultiScaleCode] = None) -> "HPCState":
         """Return a new state with an updated transition.
 
         This is a convenience helper used throughout TEM to keep state updates
@@ -83,8 +83,13 @@ class HPCState:
             `detach()` when you need to carry state across iterations without
             keeping autograd history.
         """
-        copy = self.__dict__.copy()
-        copy.update({"location": LocationBelief(mean=cells, uncertainty=uncertainty)})
+        batch_size, device = self.cells[0].shape[0], self.cells[0].device
+        copy, shape = self.__dict__.copy(), [v.shape[1] for v in self.cells]
+        location = LocationBelief(
+            mean=cells or [torch.zeros((batch_size, n), device=device) for n in shape],
+            uncertainty=uncertainty,
+        )
+        copy.update(location=location)  # Memory is preserved
         return HPCState(**copy)
 
     def detach(self) -> "HPCState":
@@ -111,6 +116,11 @@ class HPCState:
     def uncertainty(self) -> Optional[List[Tensor]]:
         """Return grounded location uncertainty."""
         return self.location.uncertainty
+
+    @property
+    def memory(self) -> Optional[List[Matrix]]:
+        """Return Hebbian memory matrices."""
+        return self._memory
 
 
 class HPCModel(nn.Module):
@@ -160,7 +170,7 @@ class HPCModel(nn.Module):
         self.location = GroundLocation(shape, settings.location)
         self.memory_system = HebbianUpdate(settings.memory)
 
-    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> HPCState:
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None, memory: Optional[MemoryState] = None) -> HPCState:
         """Create an initial `HPCState`.
 
         Args:
@@ -176,7 +186,8 @@ class HPCModel(nn.Module):
         """
         p_init = [torch.zeros((batch_size, n), device=device) for n in self.shape]
         transition = LocationBelief(mean=p_init, uncertainty=None)
-        return HPCState(transition, memory=self.init_memory(batch_size=batch_size, device=device))
+        memory = memory or self.init_memory(batch_size=batch_size, device=device)
+        return HPCState(transition, memory)
 
     def init_memory(self, *, batch_size: int, device: torch.device) -> List[Tensor]:
         """Initialize Hebbian memory matrices.
@@ -312,4 +323,4 @@ class HPCModel(nn.Module):
         m_hier, m_full = state.memory
         m_hier = self.memory_system(m_hier, p_inf, p_gen_gi, mask=self.update_mask)
         m_full = self.memory_system(m_full, p_inf, p_xi) if not self.settings.common_memory and p_xi else m_hier
-        return HPCState(state.location, memory=[m_hier, m_full])
+        return HPCState(state.location, _memory=[m_hier, m_full])

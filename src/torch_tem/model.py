@@ -40,7 +40,7 @@ from torch_tem.modules.lec import LECModel, LECState
 from torch_tem.modules.mec import MECModel, MECState
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import AutoencoderSettings, HPCSettings, LECProjectionSettings, LECSettings, MECProjectionSettings, MECSettings, SpaceContractSettings
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MemoryState, MultiScaleCode, Observation, Walk
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MemoryState, MultiScaleCode, Observation, Prediction, Walk
 
 
 class TEMConfig(BaseModel):
@@ -153,14 +153,6 @@ class TEMGenerative:
     g_gen: AbstractLocation
     p_gen_gg: GroundedLocation
     p_gen_gi: GroundedLocation
-
-
-@dataclass
-class Prediction:
-    """Predicted observations and logits."""
-
-    prediction: Observation
-    logits: Tensor
 
 
 @dataclass

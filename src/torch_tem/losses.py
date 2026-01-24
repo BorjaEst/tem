@@ -54,7 +54,7 @@ from torch_tem.settings import GroundedLocationSettings  # fmt: skip
 from torch_tem.settings import LossSettings  # fmt: skip
 from torch_tem.settings import RegularizationSettings  # fmt: skip
 from torch_tem.settings import SensoryReconstructionSettings  # fmt: skip
-from torch_tem.types import AbstractLocation, GroundedLocation, Reduction, Scalar
+from torch_tem.types import AbstractLocation, GroundedLocation, Prediction, Reduction, Scalar
 
 
 @dataclass
@@ -156,12 +156,13 @@ class SensoryReconstructionLoss(nn.Module):
         """Return weight multiplier applied to all $L_x$ components."""
         return self.settings.weight
 
-    def forward(self, o_logits: list[Tensor], o_labels: Tensor) -> LossX:
+    def forward(self, y_p_inf: Prediction, y_gen_gi: Prediction, y_gen_gg: Prediction, o_labels: Tensor) -> LossX:
         """Compute `LossX` from logits and ground-truth observations.
 
         Args:
-            o_logits: Three logit tensors `[infer, retrieved, ancestral]`, each
-                shaped `(B, n_classes)`.
+            y_p_inf: Prediction from inference pathway.
+            y_gen_gi: Prediction from retrieved pathway.
+            y_gen_gg: Prediction from ancestral pathway.
             o_labels: Ground-truth observation, one-hot encoded `(B, n_classes)`.
 
         Returns:
@@ -174,9 +175,9 @@ class SensoryReconstructionLoss(nn.Module):
         labels = torch.argmax(o_labels, dim=1)
 
         # Pathway order is fixed to match the legacy implementation.
-        loss_infer = F.cross_entropy(o_logits[0], labels, reduction=self.reduction)
-        loss_retrieved = F.cross_entropy(o_logits[1], labels, reduction=self.reduction)
-        loss_ancestral = F.cross_entropy(o_logits[2], labels, reduction=self.reduction)
+        loss_infer = F.cross_entropy(y_p_inf.logits, labels, reduction=self.reduction)
+        loss_retrieved = F.cross_entropy(y_gen_gi.logits, labels, reduction=self.reduction)
+        loss_ancestral = F.cross_entropy(y_gen_gg.logits, labels, reduction=self.reduction)
 
         return LossX(infer=loss_infer, retrieved=loss_retrieved, ancestral=loss_ancestral) * self.weight
 
@@ -716,11 +717,13 @@ class TEMLoss(nn.Module):
         Returns:
             LossOutput where each component is already multiplied by settings weights.
         """
+        reconstruction, observation = output.reconstruction, label.observation
+        y_p_inf, y_gen_gi, y_gen_gg = reconstruction.y_p_inf, reconstruction.y_gen_gi, reconstruction.y_gen_gg
         g_inf, g_gen = output.inference.g_inf, output.generative.g_gen
         p_inf, p_gen_gi, p_xi = output.inference.p_inf, output.generative.p_gen_gi, output.inference.p_xi
 
         # Raw (possibly per-env) losses
-        lx: LossX = self.loss_x_fn(output.reconstruction.o_logits, label.observation)
+        lx: LossX = self.loss_x_fn(y_p_inf, y_gen_gi, y_gen_gg, observation)
         lg: LossG = self.loss_g_fn(g_inf, g_gen, state.mec.uncertainty)
         lp: LossP = self.loss_p_fn(p_inf, p_gen_gi, p_xi)
         lreg: LossReg = self.loss_reg_fn(g_inf, p_inf)

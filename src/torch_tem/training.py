@@ -49,7 +49,7 @@ from torch.optim.lr_scheduler import ExponentialLR
 from torch_tem import losses, metrics, settings
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.metrics import AccuracyO
-from torch_tem.model import Model, RolloutStream, TEMLabel, TEMOutput, TEMState
+from torch_tem.model import Model, RolloutStream, TEMLabel, TEMOutput, TEMState, TEMStep
 
 
 class TrainerConfig(BaseModel):
@@ -145,7 +145,7 @@ class TrainingLoop(pl.LightningModule):
         self.loss_fn = losses.TEMLoss(training.loss)
         self.acc_o_fn = metrics.SensoryAccuracy(reduction="none")
 
-    def forward(self, batch: Any, prev_state: Optional[TEMState] = None) -> tuple[LossOutput, AccuracyO, TEMState]:
+    def forward(self, batch: Any, prev_state: Optional[TEMState] = None) -> tuple[LossOutput, AccuracyO, TEMStep]:
         """Execute streaming rollout with visit-masked loss accumulation.
 
         Iterates through environment steps, computing and accumulating losses only
@@ -177,8 +177,8 @@ class TrainingLoop(pl.LightningModule):
         accum = AccumLoss.zero(device=self.device)
         acc_counts = AccuracyO.zero(device=self.device)
 
-        for output, labels, state in RolloutStream(self.tem, walk, prev_state):
-            step_contrib, acc_increments = self.model_iteration(output, labels, state, visited)
+        for step in RolloutStream(self.tem, walk, prev_state):
+            step_contrib, acc_increments = self.model_iteration(step, visited)
 
             # Accumulate loss and accuracies
             if step_contrib is not None:
@@ -187,9 +187,9 @@ class TrainingLoop(pl.LightningModule):
 
         final_acc = acc_counts
 
-        return accum, final_acc, state  # last_state
+        return accum, final_acc, step
 
-    def model_iteration(self, output: TEMOutput, label: TEMLabel, state: TEMState, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyO]:
+    def model_iteration(self, step: TEMStep, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyO]:
         """Compute visit-masked loss and accuracy for a single timestep.
 
         Implements the revisit gating policy: losses and accuracies are only
@@ -209,8 +209,9 @@ class TrainingLoop(pl.LightningModule):
                     all environments are on first visits.
                 accuracy_counts: :class:`AccuracyO` with weighted accuracies.
         """
+        output, label, state = step.output, step.label, step.state
         step_losses = self.loss_fn(output, label, state)
-        step_acc = self.acc_o_fn(output.reconstruction.o_logits, label.observation)
+        step_acc = self.acc_o_fn(output, label)
 
         losses_per_env: list[StepLoss] = []
         acc_total = AccuracyO.zero(device=self.device)
@@ -235,8 +236,8 @@ class TrainingLoop(pl.LightningModule):
         Returns:
             Total loss for optimization.
         """
-        loss_output, accuracies, state = self(batch, self.prev_state)
-        self.prev_state = state.detach()
+        loss_output, accuracies, step = self(batch, self.prev_state)
+        self.prev_state = step.state.detach()
 
         self._log_step_metrics(prefix="", loss_output=loss_output)
         self._log_accuracy_metrics(prefix="", accuracies=accuracies)
@@ -366,9 +367,9 @@ class TrainingLoop(pl.LightningModule):
             prefix: Metric namespace prefix (e.g., "val/", "test/", "").
             accuracies: Accuracy metrics for the three prediction pathways.
         """
-        self.log(f"{prefix}Accuracies/o_p_inf", accuracies.o_p_inf)
-        self.log(f"{prefix}Accuracies/o_gen_gi", accuracies.o_gen_gi)
-        self.log(f"{prefix}Accuracies/o_gen_gg", accuracies.o_gen_gg)
+        self.log(f"{prefix}Accuracies/o_p_inf", accuracies.acc_p_inf)
+        self.log(f"{prefix}Accuracies/o_gen_gi", accuracies.acc_gen_gi)
+        self.log(f"{prefix}Accuracies/o_gen_gg", accuracies.acc_gen_gg)
 
     def configure_optimizers(self):
         """Configure optimizer and LR scheduler for training."""
@@ -483,11 +484,11 @@ def env_acc_increments(step_acc: AccuracyO, env_i: int) -> AccuracyO:
     Returns:
         :class:`AccuracyO` with per-pathway correctness and internal weight of 1.
     """
-    o_p_inf = select_env(step_acc.o_p_inf, env_i)
-    o_gen_gi = select_env(step_acc.o_gen_gi, env_i)
-    o_gen_gg = select_env(step_acc.o_gen_gg, env_i)
-    _total = torch.ones((), device=o_p_inf.device, dtype=o_p_inf.dtype)
-    return AccuracyO(o_p_inf=o_p_inf, o_gen_gi=o_gen_gi, o_gen_gg=o_gen_gg, _total=_total)
+    acc_p_inf = select_env(step_acc.acc_p_inf, env_i)
+    acc_gen_gi = select_env(step_acc.acc_gen_gi, env_i)
+    acc_gen_gg = select_env(step_acc.acc_gen_gg, env_i)
+    _total = torch.ones((), device=acc_p_inf.device, dtype=acc_p_inf.dtype)
+    return AccuracyO(acc_p_inf, acc_gen_gi, acc_gen_gg, _total=_total)
 
 
 def mean_step_losses(losses_per_env: list[StepLoss]) -> Optional[StepLoss]:

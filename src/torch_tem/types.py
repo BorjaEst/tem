@@ -328,3 +328,11 @@ Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)
 # ....
 Reduction: TypeAlias = Literal["none", "sum", "mean"]
 Scalar: TypeAlias = int | float | Tensor
+
+
+@dataclass
+class Prediction:
+    """Predicted observations and logits."""
+
+    prediction: Observation
+    logits: Tensor

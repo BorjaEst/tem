@@ -15,8 +15,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from torch_tem import analyse, data, figures
+from torch_tem import data, figures
 from torch_tem.model import Model, RolloutStream
+
+from . import analyse
 
 # Set random seeds for reproducibility
 np.random.seed(0)

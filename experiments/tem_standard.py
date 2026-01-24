@@ -230,21 +230,7 @@ class RunArguments(BaseSettings):
 
         Creates the aggregate model configuration consumed by Model.
         """
-        return TEMConfig(
-            space_contract=self.space,  # Shared reference
-            autoencoder=self.autoencoder,
-            lec_settings=self.lec_settings,
-            mec_settings=self.mec_settings,
-            hpc_settings=self.hpc_settings,
-            lec_projection=self.lec_projection,
-            mec_projection=self.mec_projection,
-            n_features=self.n_features,
-            n_grids=self.n_grids,
-            n_ovc=self.n_ovc,
-            n_hippocampal=self.n_hippocampal,
-            f_initial=self.f_initial,
-            use_x_cued_recall=self.use_x_cued_recall,
-        )
+        return TEMConfig.model_validate(self, from_attributes=True)
 
     @property
     def data(self) -> DataConfig:
@@ -253,13 +239,7 @@ class RunArguments(BaseSettings):
         Creates the aggregate data configuration consumed by DataModule.
         The walk settings are shared with trainer to maintain single source of truth.
         """
-        return DataConfig(
-            space=self.space,  # Shared reference
-            env=self.env,
-            iterator=self.iterator,
-            policy=self.policy,
-            walk=self.walk,  # Shared reference
-        )
+        return DataConfig.model_validate(self, from_attributes=True)
 
     @property
     def trainer(self) -> TrainerConfig:
@@ -268,15 +248,7 @@ class RunArguments(BaseSettings):
         Creates the aggregate training configuration consumed by TrainingLoop.
         The walk settings are shared with data to maintain single source of truth.
         """
-        return TrainerConfig(
-            max_steps=self.max_steps,
-            log_every_n_steps=self.log_every_n_steps,
-            enable_progress_bar=self.enable_progress_bar,
-            loss=self.loss,
-            optimizer=self.optimizer,
-            scheduler=self.scheduler,
-            walk=self.walk,  # Shared reference
-        )
+        return TrainerConfig.model_validate(self, from_attributes=True)
 
 
 # ============================================================================

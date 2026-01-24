@@ -35,46 +35,19 @@ class ExampleArguments(BaseSettings):
     model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="data_generation")
 
     # General settings
-    drop_last: bool = Field(
-        default=False,
-        description="Drop last incomplete batch",
-    )
+    drop_last: bool = Field(default=False, description="Drop last incomplete batch")
 
     # Data configuration (leaves)
-    space: SpaceContractSettings = Field(
-        default_factory=SpaceContractSettings,
-        description="Space contract: observation and action space dimensions.",
-    )
-    env: EnvironmentSettings = Field(
-        default_factory=EnvironmentSettings,
-        description="Environment generation settings.",
-    )
-    iterator: RolloutStreamSettings = Field(
-        default_factory=RolloutStreamSettings,
-        description="Iterator protocol settings (rollout chunking + eval protocol).",
-    )
-    policy: EnvSamplingSettings = Field(
-        default_factory=EnvSamplingSettings,
-        description="Data generation policies (exploration + shiny).",
-    )
-    walk: CurriculumSettings = Field(
-        default_factory=CurriculumSettings,
-        description="Walk length curriculum settings.",
-    )
+    space: SpaceContractSettings = Field(default_factory=SpaceContractSettings, description="Space contract: observation and action space dimensions.")
+    env: EnvironmentSettings = Field(default_factory=EnvironmentSettings, description="Environment generation settings.")
+    iterator: RolloutStreamSettings = Field(default_factory=RolloutStreamSettings, description="Iterator protocol settings (rollout chunking + eval protocol).")
+    policy: EnvSamplingSettings = Field(default_factory=EnvSamplingSettings, description="Data generation policies (exploration + shiny).")
+    walk: CurriculumSettings = Field(default_factory=CurriculumSettings, description="Walk length curriculum settings.")
 
     # Output
-    output_dir: Path = Field(
-        default=Path("outputs/data_generation"),
-        description="Directory for saving plots",
-    )
-    show_plots: bool = Field(
-        default=True,
-        description="Display plots interactively",
-    )
-    save_plots: bool = Field(
-        default=True,
-        description="Save plots to output directory",
-    )
+    output_dir: Path = Field(default=Path("outputs/data_generation"), description="Directory for saving plots")
+    show_plots: bool = Field(default=True, description="Display plots interactively")
+    save_plots: bool = Field(default=True, description="Save plots to output directory")
 
     @field_validator("output_dir")
     @classmethod
@@ -90,13 +63,7 @@ class ExampleArguments(BaseSettings):
         Creates the aggregate data configuration consumed by DataModule.
         The walk settings are shared with trainer to maintain single source of truth.
         """
-        return DataConfig(
-            space=self.space,
-            env=self.env,
-            iterator=self.iterator,
-            policy=self.policy,
-            walk=self.walk,
-        )
+        return DataConfig.model_validate(self, from_attributes=True)
 
 
 # ==============================================================================
@@ -138,11 +105,19 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Step 3: Additonal visualizations (environment, policies, walks, batch)
     # ------------------------------------------------------------------
+    from torch_tem.figures.core import FigureContext, collect_data_trace
+
+    # Collect DataTrace from validation split
+    trace = collect_data_trace(datamodule, "validate")
+
+    # Create figure context
+    ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
+
     figs: list[tuple[str, plt.Figure]] = []
-    figs.append(("01_environment_layout.png", figures.environment.layout.plot(...)))  # TODO: complete inputs
-    figs.append(("02_walk_trajectories.png", figures.walk.trajectories.plot(...)))  # TODO: complete inputs
-    figs.append(("03_walk_statistics.png", figures.walk.statistics.plot(...)))  # TODO: complete inputs
-    figs.append(("04_split_statistics.png", figures.split.statistics.plot(...)))  # TODO: complete inputs
+    figs.append(("01_environment_layout.png", figures.environment.layout.plot(trace, ctx)))
+    figs.append(("02_walk_trajectories.png", figures.walk.trajectories.plot(trace, ctx)))
+    figs.append(("03_walk_statistics.png", figures.walk.statistics.plot(trace, ctx)))
+    figs.append(("04_split_statistics.png", figures.split.statistics.plot(trace, ctx)))
 
     print("Step 3 → Generated visualizations.")
     # TODO: Add more detailed figure summaries

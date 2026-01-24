@@ -1,15 +1,6 @@
 """Core tracing and registry infrastructure for the figures subsystem."""
 
-from torch_tem.figures.core.collect import collect_trace
 from torch_tem.figures.core.registry import REGISTRY, FigureContext, FigureRegistry, FigureSpec
-from torch_tem.figures.core.types import PlotTrace, TraceExtractor
+from torch_tem.figures.core.types import PlotTrace
 
-__all__ = [
-    "PlotTrace",
-    "TraceExtractor",
-    "collect_trace",
-    "FigureSpec",
-    "FigureContext",
-    "FigureRegistry",
-    "REGISTRY",
-]
+__all__ = ["PlotTrace", "FigureSpec", "FigureContext", "FigureRegistry", "REGISTRY"]

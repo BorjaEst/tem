@@ -62,34 +62,3 @@ class PlotTrace(Protocol):
 
 EventT = TypeVar("EventT")
 TraceT = TypeVar("TraceT", bound=PlotTrace)
-
-
-class TraceExtractor(Protocol[EventT, TraceT]):
-    """Protocol for extracting plot-ready traces from event streams.
-
-    A trace extractor is a stateful builder that observes events one-by-one
-    and produces a complete trace when finalized.
-
-    Type Parameters:
-        EventT: Type of events to observe (e.g., RolloutEvent).
-        TraceT: Type of trace to produce (must implement PlotTrace).
-    """
-
-    def observe(self, event: EventT) -> None:
-        """Process one event and accumulate state.
-
-        Args:
-            event: Event to observe and incorporate into the trace.
-        """
-        ...
-
-    def finalize(self) -> TraceT:
-        """Finalize extraction and return the complete trace.
-
-        Returns:
-            Complete trace object ready for plotting.
-
-        Raises:
-            ValueError: If no events were observed (unless extractor supports empty traces).
-        """
-        ...

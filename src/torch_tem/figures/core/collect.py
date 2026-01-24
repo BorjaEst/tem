@@ -6,12 +6,9 @@ and a TraceExtractor to produce plot-ready traces.
 
 from __future__ import annotations
 
-from typing import Iterator, Optional, TypeVar
+from typing import Iterator, Optional
 
-from torch_tem.figures.core.types import PlotTrace, TraceExtractor
-
-EventT = TypeVar("EventT")
-TraceT = TypeVar("TraceT", bound=PlotTrace)
+from torch_tem.figures.core.types import EventT, TraceExtractor, TraceT
 
 
 def collect_trace(

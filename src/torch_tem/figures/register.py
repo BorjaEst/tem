@@ -5,8 +5,8 @@ import issues by separating registration from core infrastructure.
 """
 
 from torch_tem.diagnostics.traces import ModelTrace
-from torch_tem.figures import tem_overview
 from torch_tem.figures.core.registry import REGISTRY, FigureSpec
+from torch_tem.figures.modules import overview
 
 
 def register_builtin_figures() -> None:
@@ -19,7 +19,7 @@ def register_builtin_figures() -> None:
         FigureSpec(
             name="tem.overview",
             description="Multi-panel TEM model overview (g_inf, g_gen, actions)",
-            plot=tem_overview.plot,
+            plot=overview.plot,
             accepts=ModelTrace,
             tags={"model", "rollout", "overview"},
         )

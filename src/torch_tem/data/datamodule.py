@@ -161,6 +161,23 @@ class DataModule(pl.LightningDataModule):
         if self.dataset is not None:
             self.dataset.walk_length_center = value
 
+    def sample_batch(self, split: str):
+        """Utility to sample a single batch from the specified split.
+
+        Args:
+            split: One of "train", "validate", or "test".
+
+        Returns:
+            A single batch from the specified split.
+        """
+        if split == "train":
+            return next(iter(self.dataset))
+        elif split == "validate":
+            return next(iter(self.val_dataset))
+        elif split == "test":
+            return next(iter(self.test_dataset))
+        raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
+
 
 class TEMDataset(IterableDataset):
     """Iterable dataset that generates TEM batches on-the-fly.

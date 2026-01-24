@@ -170,14 +170,14 @@ class TrainingLoop(pl.LightningModule):
         Raises:
             ValueError: If chunk is empty or rollout produces no states.
         """
-        chunk, visited = batch
-        if len(chunk) == 0:
-            raise ValueError("forward requires a non-empty chunk")
+        walk, visited = batch
+        if len(walk) == 0:
+            raise ValueError("forward requires a non-empty chunk (walk)")
 
         accum = AccumLoss.zero(device=self.device)
         acc_counts = AccuracyO.zero(device=self.device)
 
-        for output, labels, state in RolloutStream(self.tem, chunk, prev_state):
+        for output, labels, state in RolloutStream(self.tem, walk, prev_state):
             step_contrib, acc_increments = self.model_iteration(output, labels, state, visited)
 
             # Accumulate loss and accuracies

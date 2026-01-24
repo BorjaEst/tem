@@ -138,18 +138,11 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Step 3: Additonal visualizations (environment, policies, walks, batch)
     # ------------------------------------------------------------------
-
-    # Note: we intentionally do NOT plot policy comparisons here.
-    # The purpose of this example is to demonstrate how the configured policy
-    train_dataset = datamodule.train_dataloader().dataset
-    val_dataset = datamodule.val_dataloader().dataset
-    test_dataset = datamodule.test_dataloader().dataset
-
     figs: list[tuple[str, plt.Figure]] = []
-    figs.append(("01_environment_layout.png", figures.environment.plot_layout()))
-    figs.append(("02_walk_trajectories.png", figures.walk.plot_trajectories()))
-    figs.append(("03_walk_statistics.png", figures.walk.plot_statistics()))
-    figs.append(("04_split_statistics.png", figures.split.plot_statistics()))
+    figs.append(("01_environment_layout.png", figures.environment.layout.plot(...)))  # TODO: complete inputs
+    figs.append(("02_walk_trajectories.png", figures.walk.trajectories.plot(...)))  # TODO: complete inputs
+    figs.append(("03_walk_statistics.png", figures.walk.statistics.plot(...)))  # TODO: complete inputs
+    figs.append(("04_split_statistics.png", figures.split.statistics.plot(...)))  # TODO: complete inputs
 
     print("Step 3 → Generated visualizations.")
     # TODO: Add more detailed figure summaries

@@ -16,7 +16,7 @@ New code should use:
 from dataclasses import dataclass, field
 from typing import Generic, Iterable, Optional, TypeVar
 
-from torch_tem.model import Prediction, TEMAction, TEMGenerative, TEMInference, TEMLabel, TEMOutput, TEMReconstruction, TEMState
+from torch_tem.model import Prediction, TEMAction, TEMGenerative, TEMInference, TEMLabel, TEMOutput, TEMReconstruction, TEMState, TEMStep
 from torch_tem.modules.hpc import HPCState
 from torch_tem.modules.lec import LECState
 from torch_tem.modules.mec import MECState
@@ -48,23 +48,6 @@ class _TraceBase(Generic[TStep]):
 
     def append(self, step: TStep) -> None:  # pragma: no cover
         raise NotImplementedError
-
-
-@dataclass
-class ActionTrace(_TraceBase[TEMAction]):
-    """action trace.
-
-    Stores per-step TEM actions.
-    """
-
-    actions: list[TEMAction] = field(default_factory=list)
-
-    @classmethod
-    def from_rollout(cls, rollout: Iterable[TEMAction]) -> "ActionTrace":
-        return cls(rollout)
-
-    def append(self, step: TEMAction) -> None:
-        self.actions.append(step)
 
 
 @dataclass
@@ -249,3 +232,32 @@ class TEMStateTrace(_TraceBase[TEMState]):
         self.lec.append(step.lec)
         self.mec.append(step.mec)
         self.hpc.append(step.hpc)
+
+
+@dataclass
+class ModelTrace(_TraceBase[TEMStep]):
+    """full model trace.
+
+    Stores all per-step outputs and states from a TEM rollout.
+
+    Attributes:
+        actions: List of TEM actions taken at each step.
+        labels: TEMLabelTrace storing observations and locations.
+        output: TEMOutputTrace storing model outputs.
+        state: TEMStateTrace storing model states.
+    """
+
+    actions: list[TEMAction] = field(default_factory=list)
+    labels: TEMLabelTrace = field(default_factory=TEMLabelTrace)
+    output: TEMOutputTrace = field(default_factory=TEMOutputTrace)
+    state: TEMStateTrace = field(default_factory=TEMStateTrace)
+
+    @classmethod
+    def from_rollout(cls, rollout: Iterable[TEMStep]) -> "ModelTrace":
+        return cls(rollout)
+
+    def append(self, step: TEMStep) -> None:
+        self.actions.append(step.action)
+        self.labels.append(step.label)
+        self.output.append(step.output)
+        self.state.append(step.state)

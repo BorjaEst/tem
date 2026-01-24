@@ -16,6 +16,7 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
+from torch_tem.diagnostics.traces import ModelTrace
 from torch_tem.figures import register, sinks
 from torch_tem.figures.core import REGISTRY, FigureContext, PlotTrace
 from torch_tem.model import RolloutStream
@@ -155,7 +156,7 @@ class FiguresCallback(pl.Callback):
 
         # Create rollout and extract trace
         rollout = RolloutStream(model, walk, initial=None)
-        trace = extract_rollout_trace(
+        trace = ModelTrace.from_rollout(
             rollout,
             max_steps=self.settings.max_rollout_steps,
             downsample_stride=self.settings.downsample_stride,

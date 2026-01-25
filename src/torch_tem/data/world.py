@@ -7,12 +7,29 @@ Created on Tue Feb 11 14:33:06 2020
 """
 import copy
 import json
+from dataclasses import dataclass
+from typing import List
 
 import numpy as np
 import torch
 from scipy.sparse.csgraph import shortest_path
 
+from torch_tem.types import Action, LocationLabel, Observation
+
 # Functions for generating data that TEM trains on: sequences of [state,observation,action] tuples
+
+
+@dataclass
+class WorldStep:
+    """Container for a single time step of agent data (batched).
+
+    Notes:
+        Locations and actions are stored per environment in the batch.
+    """
+
+    locations: List[LocationLabel]  # (B, )
+    observation: Observation  # (B, n_o)
+    action: List[Action]  # (B, )
 
 
 class World:

@@ -33,7 +33,7 @@ def plot(trace: DataTrace, ctx: FigureContext, *, deterministic: bool = True, se
     """
     # Select single environment if batch trace
     env = trace.environments[ctx.env_idx]
-    walk = trace.agent_info
+    walk = trace.world_step
     n_locs = env.n_locations
 
     # Extract location IDs for the selected environment

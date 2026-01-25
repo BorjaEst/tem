@@ -36,7 +36,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     axes = axes.flatten()
 
     # Panel 1: Walk length distribution (per environment in batch)
-    walk_lengths = [len(trace.agent_info)] * trace.batch_size
+    walk_lengths = [len(trace.world_step)] * trace.batch_size
     axes[0].hist(walk_lengths, bins=20, edgecolor="black", alpha=0.7)
     axes[0].set_title("Walk Length Distribution")
     axes[0].set_xlabel("Walk Length (steps)")
@@ -44,7 +44,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     axes[0].grid(alpha=0.3)
 
     # Panel 2: Action frequency (flattened across all steps and environments)
-    all_actions = _flatten_actions(trace.agent_info)
+    all_actions = _flatten_actions(trace.world_step)
 
     action_counts = Counter(all_actions)
     n_actions = _infer_action_count(trace.environments, action_counts)
@@ -109,7 +109,7 @@ def _infer_action_count(environments: list[Any], action_counts: Counter) -> int:
 
 def _collect_shiny_hits(trace: DataTrace) -> list[int]:
     """Count shiny hits per environment over the trace duration."""
-    if not trace.environments or not trace.agent_info:
+    if not trace.environments or not trace.world_step:
         return []
 
     shiny_hits: list[int] = []
@@ -117,7 +117,7 @@ def _collect_shiny_hits(trace: DataTrace) -> list[int]:
         if env.shiny is None:
             continue
         hits = 0
-        for step in trace.agent_info:
+        for step in trace.world_step:
             locations = step.locations
             if env_idx >= len(locations):
                 continue

@@ -31,7 +31,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics.traces import DataTrace
+from torch_tem.diagnostics.traces import WorldTrace
 from torch_tem.figures.registry import FigureContext
 from torch_tem.settings import CurriculumSettings, EnvironmentSettings, EnvSamplingSettings, RolloutStreamSettings, SpaceContractSettings
 
@@ -169,7 +169,7 @@ def main() -> None:
     # Step 3: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
     environments = datamodule.dataset.environments
-    trace = DataTrace.from_batch(environments, batch, meta={"split": "validate"})
+    trace = WorldTrace.from_batch(batch, environments, meta={"split": "validate"})
     ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
 
     figs: list[tuple[str, plt.Figure]] = [

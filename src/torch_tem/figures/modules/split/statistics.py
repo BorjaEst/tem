@@ -41,7 +41,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     axes[0].grid(alpha=0.3)
 
     # Panel 2: Walk length distribution
-    walk_lengths = [len(trace.agent_info)] * trace.batch_size
+    walk_lengths = [len(trace.world_step)] * trace.batch_size
     axes[1].hist(walk_lengths, bins=20, edgecolor="black", alpha=0.7, color="coral")
     axes[1].set_title("Walk Length Distribution")
     axes[1].set_xlabel("Walk Length (steps)")

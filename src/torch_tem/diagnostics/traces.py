@@ -8,17 +8,17 @@ from typing import Any, Generic, Iterable, List, Optional, Tuple, TypeVar
 
 from torch import Tensor
 
-from torch_tem.data.datamodule import AgentStep, DataStep
-from torch_tem.data.rollout import RolloutStep, SimulationStep
+from torch_tem.data.datamodule import WorldStep
 from torch_tem.data.world import World
-from torch_tem.model import Prediction, TEMGenerative, TEMInference, TEMLabel, TEMOutput, TEMReconstruction, TEMState, TEMStep
+from torch_tem.model import Model, Prediction, RolloutStep, RolloutStream, TEMGenerative, TEMInference, TEMOutput, TEMReconstruction, TEMState
 from torch_tem.modules.hpc import HPCState
 from torch_tem.modules.lec import LECState
 from torch_tem.modules.mec import MECState
-from torch_tem.types import AbstractLocation, Action, GroundedLocation, LocationBelief, LocationLabel, MemoryState, MultiScaleCode, Observation, WalkBatch
+from torch_tem.types import *
 
 TStep = TypeVar("TStep")
 TraceT = TypeVar("TraceT", bound="TraceBase")
+Batch = Tuple[WalkBatch, list[list[bool]]]
 
 
 @dataclass
@@ -67,23 +67,6 @@ class TraceBase(Sequence[TStep], Generic[TStep], ABC):
     def from_iter(cls, iterable: Iterable[TStep], *, stop: int | None = None, meta: dict[str, Any] | None = None) -> TraceT:
         trace = cls(meta=(meta or {}))
         return trace.attach(islice(iterable, stop))
-
-
-@dataclass
-class TEMLabelTrace(TraceBase[TEMLabel]):
-    observation: List[Observation] = field(default_factory=list)
-    locations: Optional[List[LocationLabel]] = None
-
-    @property
-    def batch_size(self) -> int:
-        return int(self.observation[0].shape[0]) if self.observation else 0
-
-    def get_item(self, idx: int) -> TEMLabel:
-        return TEMLabel(self.observation[idx], self.locations[idx])
-
-    def _append(self, step: TEMLabel) -> None:
-        self.observation.append(step.observation)
-        self.locations = step.locations
 
 
 @dataclass
@@ -254,122 +237,71 @@ class TEMStateTrace(TraceBase[TEMState]):
 
 
 @dataclass
-class TEMTrace(TraceBase[TEMStep]):
-    actions: List[Action] = field(default_factory=list)
-    labels: TEMLabelTrace = field(default_factory=TEMLabelTrace)
-    output: TEMOutputTrace = field(default_factory=TEMOutputTrace)
-    state: TEMStateTrace = field(default_factory=TEMStateTrace)
+class WorldTrace(TraceBase[WorldStep]):
+    environments: List[World] = field(default_factory=list)  # (B, )
+    visited: Optional[List[List[bool]]] = None  # (B, )
+
+    locations: List[List[LocationLabel]] = field(default_factory=list)  # (T, B)
+    observations: List[Observation] = field(default_factory=list)  # (T, B)
+    actions: List[List[Action]] = field(default_factory=list)  # (T, B)
 
     @property
     def batch_size(self) -> int:
-        return self.state.batch_size
+        return int(self.observations[0].shape[0]) if self.observations else 0
 
-    def get_item(self, idx: int) -> TStep:
-        return RolloutStep(self.actions[idx], self.output[idx], self.labels[idx], self.state[idx])
+    def get_item(self, idx: int) -> WorldStep:
+        return WorldStep(self.locations[idx], self.observations[idx], self.actions[idx])
 
-    def _append(self, step: TEMStep) -> None:
-        self.actions.append(step.actions)
-        self.labels.append(step.label)
+    def _append(self, step: WorldStep) -> None:
+        self.locations.append(step.locations)
+        self.observations.append(step.observation)
+        self.actions.append(step.action)
+
+    @property
+    def location_ids(self) -> list[list[int]]:
+        ids_t = [[int(loc["id"]) for loc in locs_t] for locs_t in self.locations]  # (T, B)
+        return [list(env_series) for env_series in zip(*ids_t)] if ids_t else []
+
+    @classmethod
+    def from_batch(cls, batch: Batch, environments: list[World], **kwargs) -> WorldTrace:
+        iterable = (WorldStep(locations=step[0], observation=step[1], action=step[2]) for step in batch[0])
+        trace: WorldTrace = cls.from_iter(iterable, **kwargs)
+        trace.environments, trace.visited = environments, batch[1]
+        return trace
+
+
+@dataclass
+class RolloutTrace(TraceBase[RolloutStep]):
+    world_step: WorldTrace = field(default_factory=WorldTrace)  # (T, B)
+    output: TEMOutputTrace = field(default_factory=TEMOutputTrace)  # (T, B)
+    state: TEMStateTrace = field(default_factory=TEMStateTrace)  # (T, B)
+
+    @property
+    def batch_size(self) -> int:
+        return self.world_step.batch_size
+
+    def get_item(self, idx: int) -> RolloutStep:
+        return RolloutStep(self.world_step[idx], self.output[idx], self.state[idx])
+
+    def _append(self, step: RolloutStep) -> None:
+        self.world_step.append(step.world_step)
         self.output.append(step.output)
         self.state.append(step.state)
 
-
-@dataclass
-class AgentTrace(TraceBase[AgentStep]):
-    locations: List[LocationLabel] | None = field(default=None)  # (B, )
-    observation: List[Observation] = field(default_factory=list)  # (T, B)
-    action: List[List[Action]] = field(default_factory=list)  # (T, B)
-
-    @property
-    def batch_size(self) -> int:
-        return int(self.observation[0].shape[0]) if self.observation else 0
-
-    def get_item(self, idx: int) -> AgentStep:
-        return AgentStep(self.locations, self.observation[idx], self.action[idx])
-
-    def _append(self, step: AgentStep) -> None:
-        self.locations = step.locations
-        self.observation.append(step.observation)
-        self.action.append(step.action)
-
     @classmethod
-    def from_walk(cls, walk: WalkBatch, **kwargs) -> AgentTrace:
-        iterable = (AgentStep(locations=step[0], observation=step[1], action=step[2]) for step in walk)
-        return cls.from_iter(iterable, **kwargs)
-
-
-@dataclass
-class DataTrace(TraceBase[DataStep]):
-    environments: List[World] = field(default_factory=list)  # Batch of environments
-    agent_info: AgentTrace = field(default_factory=AgentTrace)
-    visited: List[List[bool]] | None = None
-
-    @property
-    def batch_size(self) -> int:
-        return self.agent_info.batch_size
-
-    def get_item(self, idx: int) -> TStep:
-        return DataStep(self.environments, self.agent_info[idx], self.visited[idx])
-
-    def _append(self, step: DataStep) -> None:
-        self.environments = step.environments
-        self.agent_info.append(step.agent_info)
-        self.visited = step.visited
-
-    @classmethod
-    def from_batch(cls, environments: List[World], batch: Tuple[WalkBatch, Tensor], **kwargs) -> DataTrace:
-        walk, visited = batch
-        agent_iter = (AgentStep(locations=step[0], observation=step[1], action=step[2]) for step in walk)
-        iterable = (DataStep(environments, a, visited) for a in agent_iter)
-        return cls.from_iter(iterable, **kwargs)
-
-
-@dataclass
-class SimulationTrace(TraceBase[SimulationStep]):
-    """Plot-ready combined trace for model+position figures.
-
-    Container-style trace combining walk data with model outputs.
-    Does not support incremental construction via append().
-    """
-
-    location_ids: List[List[int]] = field(default_factory=list)
-    data: DataTrace = field(default_factory=DataTrace)
-    model: TEMTrace = field(default_factory=TEMTrace)
-
-    @property
-    def batch_size(self) -> int:
-        return self.data.batch_size
-
-    def get_item(self, idx: int) -> SimulationStep:
-        return SimulationStep(self.location_ids, self.data[idx], self.model[idx])
-
-    def _append(self, step: SimulationStep) -> None:
-        self.location_ids = step.location_ids
-        self.data.append(step.data)
-        self.model.append(step.model)
+    def from_batch(cls, batch: Batch, environments: list[World], model: Model, *, initial: TEMState | None = None, **kwargs) -> "RolloutTrace":
+        trace: RolloutTrace = cls.from_iter(RolloutStream(model, batch[0], initial), **kwargs)
+        trace.world_step.environments, trace.world_step.visited = environments, batch[1]
+        return trace
 
 
 def _batch_size_from_multiscale(code: MultiScaleCode | None) -> int:
-    """Infer batch size from a multi-scale code.
-
-    A multi-scale code is a list of tensors, one per frequency module, each of
-    shape `(B, n_cells_f)`.
-
-    Args:
-        code: Multi-scale code or `None`.
-
-    Returns:
-        The inferred batch size `B`, or 0 if the code is missing/empty.
-    """
-
     if not code:
         return 0
     return int(code[0].shape[0]) if len(code) > 0 else 0
 
 
 def _batch_size_from_multiscale_trace(trace: Sequence[MultiScaleCode]) -> int:
-    """Infer batch size from a trace of multi-scale codes."""
-
     if not trace:
         return 0
     return _batch_size_from_multiscale(trace[0])

@@ -26,7 +26,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics.traces import SimulationTrace
+from torch_tem.diagnostics.traces import RolloutTrace
 from torch_tem.figures.registry import FigureContext
 from torch_tem.model import Model as TEMModel
 from torch_tem.model import TEMConfig
@@ -229,14 +229,16 @@ def main() -> None:
     # Step 3: Collect rollout trace with spatial alignment.
     # ------------------------------------------------------------------
     print("Step 3: Collecting rollout trace...")
-    trace = SimulationTrace.from_iter(
-        locations_ids=
+    trace = RolloutTrace.from_batch(
+        batch=datamodule.sample_batch(split="test"),
+        environments=datamodule.dataset.environments,
         model=model,
         stop=args.max_rollout_steps,
+        meta={"split": "test"},
     ).downsample_time(args.downsample_stride)
     print(f" - Batch size: {trace.batch_size}")
-    print(f" - Time steps: {trace.n_steps}")
-    print(f" - Environments: {len(trace.worlds)}")
+    print(f" - Time steps: {len(trace)}")
+    print(f" - Environments: {len(trace.world_step.environments)}")
     print()
 
     # ------------------------------------------------------------------
@@ -245,7 +247,7 @@ def main() -> None:
     ctx = FigureContext(env_idx=args.env_idx, freq_idx=args.freq_idx, figsize=(14, 10), split_name="validate")
     figs: list[tuple[str, plt.Figure]] = [
         ("01_overview_rate_maps.png", figures.overview.rate_maps.plot(trace, ctx)),
-        ("02_model_overview.png", figures.overview.observations.plot(trace.model, ctx)),
+        ("02_model_overview.png", figures.overview.observations.plot(trace, ctx)),
     ]
 
     print(f"Step 4: Generated {len(figs)} figure(s).")

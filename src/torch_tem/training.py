@@ -49,7 +49,7 @@ from torch.optim.lr_scheduler import ExponentialLR
 from torch_tem import losses, metrics, settings
 from torch_tem.losses import AccumLoss, LossG, LossOutput, LossP, LossReg, LossX, StepLoss
 from torch_tem.metrics import AccuracyO
-from torch_tem.model import Model, RolloutStream, TEMLabel, TEMOutput, TEMState, TEMStep
+from torch_tem.model import Model, RolloutStep, RolloutStream, TEMState
 
 
 class TrainerConfig(BaseModel):
@@ -145,7 +145,7 @@ class TrainingLoop(pl.LightningModule):
         self.loss_fn = losses.TEMLoss(training.loss)
         self.acc_o_fn = metrics.SensoryAccuracy(reduction="none")
 
-    def forward(self, batch: Any, prev_state: Optional[TEMState] = None) -> tuple[LossOutput, AccuracyO, TEMStep]:
+    def forward(self, batch: Any, prev_state: Optional[TEMState] = None) -> tuple[LossOutput, AccuracyO, RolloutStep]:
         """Execute streaming rollout with visit-masked loss accumulation.
 
         Iterates through environment steps, computing and accumulating losses only
@@ -189,7 +189,7 @@ class TrainingLoop(pl.LightningModule):
 
         return accum, final_acc, step
 
-    def model_iteration(self, step: TEMStep, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyO]:
+    def model_iteration(self, step: RolloutStep, visited: list[list[bool]]) -> tuple[Optional[StepLoss], AccuracyO]:
         """Compute visit-masked loss and accuracy for a single timestep.
 
         Implements the revisit gating policy: losses and accuracies are only
@@ -199,7 +199,7 @@ class TrainingLoop(pl.LightningModule):
         Args:
             output: TEM predictions for the current timestep.
             label: Ground truth observations for the current timestep.
-            state: Current TEM state containing predictions and ground truth.
+            state:
             visited: Per-environment visited masks ``visited[env_i][loc_id]``.
                 Updated in-place when environments visit new locations.
 
@@ -208,16 +208,17 @@ class TrainingLoop(pl.LightningModule):
                 step_loss: Mean loss over contributing environments, or None if
                     all environments are on first visits.
                 accuracy_counts: :class:`AccuracyO` with weighted accuracies.
+                rollout_step: The current rollout step.
         """
-        output, label, state = step.output, step.label, step.state
-        step_losses = self.loss_fn(output, label, state)
-        step_acc = self.acc_o_fn(output, label)
+        output, labels, state = step.output, step.world_step, step.state
+        step_losses = self.loss_fn(output, labels, state)
+        step_acc = self.acc_o_fn(output, labels)
 
         losses_per_env: list[StepLoss] = []
         acc_total = AccuracyO.zero(device=self.device)
 
         for env_i, env_visited in enumerate(visited):
-            loc_id = label.locations[env_i]["id"]
+            loc_id = labels.locations[env_i]["id"]
             if not env_contributes_and_update(env_visited, loc_id):
                 continue
 

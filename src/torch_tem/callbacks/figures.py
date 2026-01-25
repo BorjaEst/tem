@@ -17,7 +17,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
 from torch_tem.data import rollout
-from torch_tem.diagnostics.traces import DataTrace, SimulationTrace
+from torch_tem.diagnostics.traces import DataTrace, RolloutTrace
 from torch_tem.figures import register, sinks
 from torch_tem.figures.registry import REGISTRY, FigureContext
 
@@ -130,7 +130,7 @@ class FiguresCallback(pl.Callback):
         """Generate and persist all configured figures.
 
         Builds TEMTrace (for model diagnostics), DataTrace (for data/walk figures),
-        and SimulationTrace (for combined spatial figures), then dispatches each requested
+        and RolloutTrace (for combined spatial figures), then dispatches each requested
         figure to the appropriate trace using isinstance-based type matching.
 
         Args:
@@ -144,10 +144,6 @@ class FiguresCallback(pl.Callback):
         if len(batch) != 2:
             raise ValueError(f"FiguresCallback expected batch of length 2; got length={len(batch)}")
 
-        chunk, visited = batch
-        if not isinstance(chunk, list) or len(chunk) == 0:
-            raise ValueError("FiguresCallback requires a non-empty walk chunk")
-
         # Extract model and validate
         if not (model := getattr(pl_module, "tem", None)):
             raise AttributeError("LightningModule missing 'tem' attribute")
@@ -156,10 +152,11 @@ class FiguresCallback(pl.Callback):
         if not (datamodule := trainer.datamodule) or not datamodule.dataset:
             raise ValueError("DataModule or dataset not available")
 
-        # Create SimulationTrace via canonical constructor
-        locations_ids = utils_walks.time_major_location_ids(chunk, key="id")
-        rollout_trace: SimulationTrace = SimulationTrace.from_iter(
-            iterable=(rollout.SimulationStep(locations_ids, data, model) for data in chunk),
+        # Create RolloutTrace via canonical constructor
+        rollout_trace = RolloutTrace.from_batch(
+            batch=batch,
+            environments=datamodule.dataset.environments,
+            model=model,
             stop=self.settings.max_rollout_steps,
             meta={"global_step": trainer.global_step, "split": "train"},
         ).downsample_time(self.settings.downsample_stride)

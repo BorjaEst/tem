@@ -26,21 +26,21 @@ Design notes:
 from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import tee
-from typing import List, Literal, Optional, Sequence, Tuple, TypeAlias, Union
+from typing import List, Literal, Optional, Sequence, Tuple, Union
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor, nn
 
 from torch_tem import utils
-from torch_tem.data.rollout import RolloutStep
+from torch_tem.data.world import World, WorldStep
 from torch_tem.modules.autoencoder import AutoencoderModule
 from torch_tem.modules.hpc import HPCModel, HPCState
 from torch_tem.modules.lec import LECModel, LECState
 from torch_tem.modules.mec import MECModel, MECState
 from torch_tem.modules.projection import ProjectionModule
-from torch_tem.settings import AutoencoderSettings, HPCSettings, LECProjectionSettings, LECSettings, MECProjectionSettings, MECSettings, SpaceContractSettings
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MemoryState, MultiScaleCode, Observation, Prediction, WalkBatch
+from torch_tem.settings import *
+from torch_tem.types import *
 
 
 class TEMConfig(BaseModel):
@@ -108,14 +108,6 @@ class TEMConfig(BaseModel):
 
 
 @dataclass
-class TEMLabel:
-    """Ground-truth labels for a TEM step."""
-
-    observation: Observation  # True sensory observation (for loss computation)
-    locations: List[LocationLabel]  # True locations (for loss computation)
-
-
-@dataclass
 class TEMState:
     """Container for the full recurrent TEM state."""
 
@@ -171,10 +163,6 @@ class TEMOutput:
     inference: TEMInference
     generative: TEMGenerative
     reconstruction: TEMReconstruction
-
-
-TEMAction: TypeAlias = List[Optional[int]]
-TEMStep: TypeAlias = RolloutStep[TEMAction, TEMOutput, TEMLabel, TEMState]
 
 
 class Model(nn.Module):
@@ -282,7 +270,7 @@ class Model(nn.Module):
         """Return the number of HPC place cells per frequency."""
         return self.hpc.shape
 
-    def forward(self, observation: Observation, locations: List[LocationLabel], a_prev: TEMAction, state: TEMState) -> tuple[TEMOutput, TEMState]:
+    def forward(self, observation: Observation, locations: List[LocationLabel], a_prev: Action, state: TEMState) -> tuple[TEMOutput, TEMState]:
         """Run one TEM step.
 
         Args:
@@ -306,7 +294,7 @@ class Model(nn.Module):
         # Build full output, state and return
         return output, state
 
-    def setup_state(self, state: TEMState, a_prev: TEMAction, device: torch.device) -> TEMState:
+    def setup_state(self, state: TEMState, a_prev: Action, device: torch.device) -> TEMState:
         """Apply per-environment reset logic before transition.
 
         The batch may contain environments at different episode boundaries.
@@ -417,45 +405,17 @@ class Model(nn.Module):
         return TEMOutput(inference, generative, reconstructions)
 
 
-class RolloutStream(Iterator[TEMStep]):
-    """Stream a `Walk` through a `Model` step-by-step.
+@dataclass
+class RolloutStep:
+    world_step: WorldStep
+    output: TEMOutput
+    state: TEMState
 
-    This iterator yields `RolloutStep` objects for each timestep in
-    the walk. It is designed to be memory-efficient: it does not store the
-    entire rollout, and it maintains the recurrent `TEMState` internally.
 
-    Episode boundaries are represented by `None` actions. The iterator passes
-    `previous_action` to the model, and the model applies its reset logic for
-    environments where the previous action is `None`.
-
-    Attributes:
-        model: TEM model instance.
-        walk: Iterator over `(locations, observation, action)` tuples.
-
-    Note:
-        This class provides two views of the same underlying rollout:
-        - `__next__()`: Returns RolloutStep (action, output, label, state)
-        - `iter_events()`: Returns event objects with more context (for tracing)
-        Both views share the same internal stepping and do not duplicate execution.
-    """
-
+class RolloutStream(Iterator[RolloutStep]):
     def __init__(self, model: Model, walk: WalkBatch, initial: Optional[TEMState] = None):
-        """Create a streaming rollout over a walk.
-
-        Args:
-            model: TEM model to rollout.
-            walk: Iterable of `(locations, observation, action)` tuples.
-            initial: Optional initial state to start from. If `None`, a fresh
-                state is initialized using the first observation's batch size
-                and device.
-
-        Raises:
-            StopIteration: If `walk` is empty.
-        """
         self.model = model  # TEM model to rollout
-
-        # Convert walk to iterator and peek to get batch size/device
-        walk_iter = iter(walk)
+        walk_iter = iter(walk)  # Walk to iterator and peek to get batch size/device
 
         # Use tee to peek without consuming
         peek_iter, self.walk = tee(walk_iter, 2)
@@ -465,34 +425,21 @@ class RolloutStream(Iterator[TEMStep]):
         # Initialize state and previous actions
         self._state = initial or model.init_state(batch_size, device)
         self._a_prev = [None for _ in range(first_observation.shape[0])]
-        self._timestep = 0
 
     def __iter__(self) -> "RolloutStream":
-        """Return self as iterator."""
         return self
 
     @property
     def state(self) -> TEMState:
-        """Return current TEM state."""
         return self._state
 
     @property
     def previous_action(self) -> List[Optional[int]]:
-        """Return previous actions."""
         return self._a_prev
 
-    def __next__(self) -> TEMStep:
-        """Process the next timestep.
-
-        Returns:
-            A RolloutStep for the current timestep.
-
-        Raises:
-            StopIteration: When all timesteps have been processed.
-        """
+    def __next__(self) -> RolloutStep:
         locations, observation, action = next(self.walk)
         output, self._state = self.model(observation, locations, self.previous_action, self._state)
-        labels = TEMLabel(observation, locations)
         self._a_prev = action  # Update action for next iteration
-        self._timestep += 1
-        return RolloutStep(action, output, labels, self._state)
+        world_step = WorldStep(locations=locations, observation=observation, action=action)
+        return RolloutStep(world_step, output, self._state)

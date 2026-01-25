@@ -11,12 +11,12 @@ import numpy as np
 import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import SimulationTrace
+from torch_tem.diagnostics.traces import RolloutTrace
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
 
 
-def plot(trace: SimulationTrace, ctx: FigureContext) -> Figure:
+def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     """Generate TEM overview rate-maps figure from a combined rollout trace.
 
     Creates a 2x2 layout:
@@ -26,7 +26,7 @@ def plot(trace: SimulationTrace, ctx: FigureContext) -> Figure:
     - Bottom-right: Spatial rate map for a single g_gen feature
 
     Args:
-        trace: SimulationTrace with model outputs + world geometry + location IDs.
+        trace: RolloutTrace with model outputs + world geometry + location IDs.
         ctx: Figure context (env_idx, freq_idx, figsize, style, etc.).
 
     Returns:

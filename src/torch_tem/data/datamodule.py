@@ -24,8 +24,7 @@ from torch.utils.data import DataLoader, IterableDataset
 
 from torch_tem import settings
 from torch_tem.data.env_validation import validate_envs_against_contract
-from torch_tem.data.world import World
-from torch_tem.types import Action, LocationLabel, Observation
+from torch_tem.data.world import World, WorldStep
 
 
 class DataConfig(BaseModel):
@@ -183,22 +182,9 @@ class DataModule(pl.LightningDataModule):
 
 
 @dataclass
-class AgentStep:
-    """Container for a single time step of agent data (batched).
-
-    Notes:
-        Locations and actions are stored per environment in the batch.
-    """
-
-    locations: List[LocationLabel]  # (B, )
-    observation: Observation  # (B, n_o)
-    action: List[Action]  # (B, )
-
-
-@dataclass
 class DataStep:
     environments: List[World]
-    agent_info: AgentStep
+    world_step: WorldStep
     visited: Optional[List[List[bool]]]
 
 

@@ -18,7 +18,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torch_tem.model import TEMLabel, TEMOutput
+from torch_tem.data.world import WorldStep
+from torch_tem.model import TEMOutput
 from torch_tem.types import Prediction
 
 
@@ -114,7 +115,7 @@ class SensoryAccuracy(nn.Module):
         super().__init__()
         self.reduction = reduction
 
-    def forward(self, output: TEMOutput, label: TEMLabel) -> AccuracyO:
+    def forward(self, output: TEMOutput, label: WorldStep) -> AccuracyO:
         """Compute `AccuracyO` from logits and ground-truth observations.
 
         Args:

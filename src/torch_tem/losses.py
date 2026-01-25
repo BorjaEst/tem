@@ -48,7 +48,8 @@ from torch import Tensor
 from torch.distributions import Normal
 
 from torch_tem import utils
-from torch_tem.model import TEMLabel, TEMOutput, TEMState
+from torch_tem.data.world import WorldStep
+from torch_tem.model import TEMOutput, TEMState
 from torch_tem.settings import AbstractLocationSettings  # fmt: skip
 from torch_tem.settings import GroundedLocationSettings  # fmt: skip
 from torch_tem.settings import LossSettings  # fmt: skip
@@ -705,14 +706,14 @@ class TEMLoss(nn.Module):
         self.loss_g_fn = AbstractLocationLoss(config.g)
         self.loss_reg_fn = RegularizationLoss(config.reg)
 
-    def forward(self, output: TEMOutput, label: TEMLabel, state: TEMState) -> LossOutput:
+    def forward(self, output: TEMOutput, label: WorldStep, state: TEMState) -> LossOutput:
         # Move use_x_cued_recall to GroundedLocationConfig
         """Compute weighted loss components for one timestep.
 
         Args:
             output: TEMOutput at current timestep.
             state: TEMState at current timestep.
-            label: TEMLabel with ground-truth data for current timestep.
+            label: WorldStep with ground-truth data for current timestep.
 
         Returns:
             LossOutput where each component is already multiplied by settings weights.

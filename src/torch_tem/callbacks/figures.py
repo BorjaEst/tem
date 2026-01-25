@@ -16,10 +16,9 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
-from torch_tem.diagnostics.traces import ModelTrace
+from torch_tem.diagnostics import DataTrace, RolloutTrace
 from torch_tem.figures import register, sinks
-from torch_tem.figures.core import REGISTRY, FigureContext, PlotTrace
-from torch_tem.figures.core.data_trace import DataTrace
+from torch_tem.figures.registry import REGISTRY, FigureContext
 from torch_tem.model import RolloutStream
 
 
@@ -130,70 +129,72 @@ class FiguresCallback(pl.Callback):
     def _generate_figures(self, trainer: Trainer, pl_module: LightningModule, batch: Any) -> None:
         """Generate and persist all configured figures.
 
-        Builds both ModelTrace (for model diagnostics) and DataTrace (for data/walk
-        figures), then dispatches each requested figure to the appropriate trace.
+        Builds ModelTrace (for model diagnostics), DataTrace (for data/walk figures),
+        and RolloutTrace (for combined spatial figures), then dispatches each requested
+        figure to the appropriate trace using isinstance-based type matching.
 
         Args:
             trainer: PyTorch Lightning trainer.
             pl_module: Training module.
             batch: Current batch data.
         """
-        # The training dataloader yields (walk, visited). We do not use `visited` here.
+        # The training dataloader yields (walk, visited).
         if type(batch) not in {tuple, list}:
             raise ValueError(f"FiguresCallback expected batch=(walk, visited); got type={type(batch).__name__}")
         if len(batch) != 2:
             raise ValueError(f"FiguresCallback expected batch of length 2; got length={len(batch)}")
 
-        walk, visited = batch
-        if not isinstance(walk, list) or len(walk) == 0:
-            raise ValueError("FiguresCallback requires a non-empty walk list")
+        chunk, visited = batch
+        if not isinstance(chunk, list) or len(chunk) == 0:
+            raise ValueError("FiguresCallback requires a non-empty walk chunk")
 
-        # Limit walk length for efficiency
-        walk_limited = walk[: self.settings.max_rollout_steps]
+        # Extract model and validate
+        if not (model := getattr(pl_module, "tem", None)):
+            raise AttributeError("LightningModule missing 'tem' attribute")
 
-        # Build ModelTrace for model figures
-        model = getattr(pl_module, "tem", None)
-        if model is None:
-            raise AttributeError("LightningModule has no attribute 'tem' (expected torch_tem.training.TrainingLoop)")
-
-        # Create rollout and extract model trace
-        model_trace = ModelTrace.from_rollout(
-            rollout=RolloutStream(model, walk_limited, initial=None),
-            max_steps=self.settings.max_rollout_steps,
-            downsample_stride=self.settings.downsample_stride,
-            meta={"global_step": trainer.global_step, "split": "train"},
-        )
-
-        # Get datamodule and dataset from trainer
-        datamodule = trainer.datamodule
-        if datamodule is None or datamodule.dataset is None:
+        # Validate datamodule
+        if not (datamodule := trainer.datamodule) or not datamodule.dataset:
             raise ValueError("DataModule or dataset not available")
 
-        # Create DataTrace for data figures
-        data_trace = DataTrace(
+        # Limit chunk to max_rollout_steps and metadata
+        chunk_limied = chunk[: self.settings.max_rollout_steps]
+        meta = {"global_step": trainer.global_step, "split": "train"}
+
+        # Create RolloutTrace via canonical constructor (single source of truth
+        # for max-steps + downsampling across walk/location/model components)
+        rollout_trace = RolloutTrace.from_rollout(
             worlds=datamodule.dataset.environments,
-            walks=datamodule.dataset.walks,
-            visited=visited or getattr(datamodule.dataset, "visited", None),
-            meta={"global_step": trainer.global_step, "split": "train"},
+            rollout=RolloutStream(model, chunk_limied, initial=None),
+            chunk=chunk_limied,
+            max_steps=self.settings.max_rollout_steps,
+            downsample_stride=self.settings.downsample_stride,
+            meta=meta,
         )
 
+        # Derive ModelTrace and DataTrace from the same aligned rollout
+        model_trace = rollout_trace.model
+        data_trace = DataTrace(
+            worlds=rollout_trace.worlds,
+            walks=rollout_trace.walks,
+            visited=visited if visited is not None else getattr(datamodule.dataset, "visited", None),
+            meta=meta,
+        )
+        data_trace.validate()
+
         # Generate and persist each figure
-        context = self.figure_context(trainer, split_name="train")  # Build context once
+        context = self.figure_context(trainer, split_name="train")
+        traces = [rollout_trace, model_trace, data_trace]
+
         for figure_name in self.settings.figures:
             spec = REGISTRY.get(figure_name)
 
-            # Dispatch based on trace type
-            if spec.accepts == ModelTrace and model_trace is not None:
-                self.generate_figure(trainer, model_trace, context, spec)
-            elif spec.accepts.__name__ == "DataTrace" and data_trace is not None:
-                # Use __name__ comparison to avoid circular import issues
-                self.generate_figure(trainer, data_trace, context, spec)
+            # Find first compatible trace
+            if trace := next((t for t in traces if isinstance(t, spec.accepts)), None):
+                self.generate_figure(trainer, trace, context, spec)
             else:
-                # Either trace not available or type mismatch
-                trace_type_name = type(model_trace).__name__ if model_trace else "None"
-                print(f"Warning: Skipping figure {figure_name} (requires {spec.accepts}, have {trace_type_name})")
+                print(f"Warning: Skipping {figure_name} (no compatible trace for {spec.accepts.__name__})")
 
-    def figure_context(self, trainer: Trainer, split_name: Optional["str"]) -> FigureContext:
+    def figure_context(self, trainer: Trainer, split_name: Optional[str]) -> FigureContext:
         """Build FigureContext from settings and trainer state."""
         return FigureContext(
             env_idx=self.settings.env_idx,
@@ -202,7 +203,7 @@ class FiguresCallback(pl.Callback):
             split_name=split_name,
         )
 
-    def generate_figure(self, trainer: Trainer, trace: PlotTrace, ctx: FigureContext, spec: Any) -> None:
+    def generate_figure(self, trainer: Trainer, trace: Any, ctx: FigureContext, spec: Any) -> None:
         fig = spec.plot(trace, ctx)  # Generate figure
 
         # Save PDF if requested

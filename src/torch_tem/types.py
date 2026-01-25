@@ -116,7 +116,7 @@ Notes:
     Observations are typically one-hot or encoded features.
 """
 
-Action = Tensor
+Action = Optional[int]
 """Ground-truth action signal (a) associated with a timestep.
 
 The action represents the agent's motor command (or discrete action index)
@@ -124,20 +124,14 @@ that drives state transitions in the environment and therefore informs TEM's
 transition/path-integration dynamics.
 
 Shape:
-    - Time-major batched (common in DataModule): (T, B)
-    - Batched per-step: (batch_size,)
-    - Unbatched per-step: () or (1,)
-
-Recommended dtype:
-    - Discrete actions: integer type (e.g., torch.long)
-    - Continuous actions (if used): float type (e.g., torch.float32)
+    - 
 
 Notes:
     Actions drive the transition/path-integration dynamics.
 """
 
 LocationLabel = Tensor
-"""Ground-truth environment location label (ℓ) for supervision and evaluation.
+"""Ground-truth environment location label for supervision and evaluation.
 
 This represents the environment-provided notion of "true" location (e.g., a
 grid cell index in a discrete maze). It is primarily used for auxiliary
@@ -322,10 +316,6 @@ per-sample, so this represents the global memory state.
 
 Reduction: TypeAlias = Literal["none", "sum", "mean"]
 Scalar: TypeAlias = int | float | Tensor
-Action: TypeAlias = Optional[int]
-
-# TODO: Walk as Itrerable with correct types
-Walk = Iterable[Tuple[LocationLabel, Tensor, Action]]  # (locations, o, a)
 
 
 @dataclass

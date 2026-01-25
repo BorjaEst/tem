@@ -106,7 +106,7 @@ class TEMInferenceTrace(TraceBase[TEMInference]):
 
 
 @dataclass
-class TEMGenerativeTrace(_TraceBase[TEMGenerative]):
+class TEMGenerativeTrace(TraceBase[TEMGenerative]):
     """generative trace."""
 
     g_gen: list[AbstractLocation] = field(default_factory=list)
@@ -120,7 +120,7 @@ class TEMGenerativeTrace(_TraceBase[TEMGenerative]):
 
 
 @dataclass
-class PredictionTrace(_TraceBase[Prediction]):
+class PredictionTrace(TraceBase[Prediction]):
     """prediction trace."""
 
     prediction: list[Observation] = field(default_factory=list)
@@ -132,7 +132,7 @@ class PredictionTrace(_TraceBase[Prediction]):
 
 
 @dataclass
-class TEMReconstructionTrace(_TraceBase[TEMReconstruction]):
+class TEMReconstructionTrace(TraceBase[TEMReconstruction]):
     """reconstruction trace.
 
     Each reconstruction output is a `Prediction` (prediction + logits), so we
@@ -150,7 +150,7 @@ class TEMReconstructionTrace(_TraceBase[TEMReconstruction]):
 
 
 @dataclass
-class TEMOutputTrace(_TraceBase[TEMOutput]):
+class TEMOutputTrace(TraceBase[TEMOutput]):
     """top-level output trace."""
 
     inference: TEMInferenceTrace = field(default_factory=TEMInferenceTrace)
@@ -164,7 +164,7 @@ class TEMOutputTrace(_TraceBase[TEMOutput]):
 
 
 @dataclass
-class LECStateTrace(_TraceBase[LECState]):
+class LECStateTrace(TraceBase[LECState]):
     """LEC state trace."""
 
     cells: list[MultiScaleCode] = field(default_factory=list)
@@ -176,7 +176,7 @@ class LECStateTrace(_TraceBase[LECState]):
 
 
 @dataclass
-class MECStateTrace(_TraceBase[MECState]):
+class MECStateTrace(TraceBase[MECState]):
     """MEC state trace."""
 
     cells: list[AbstractLocation] = field(default_factory=list)
@@ -188,7 +188,7 @@ class MECStateTrace(_TraceBase[MECState]):
 
 
 @dataclass
-class HPCStateTrace(_TraceBase[HPCState]):
+class HPCStateTrace(TraceBase[HPCState]):
     """HPC state trace."""
 
     cells: list[GroundedLocation] = field(default_factory=list)
@@ -202,7 +202,7 @@ class HPCStateTrace(_TraceBase[HPCState]):
 
 
 @dataclass
-class TEMStateTrace(_TraceBase[TEMState]):
+class TEMStateTrace(TraceBase[TEMState]):
     """full state trace.
 
     Stores the full `TEMState` objects, and also provides per-module sub-traces
@@ -220,7 +220,7 @@ class TEMStateTrace(_TraceBase[TEMState]):
 
 
 @dataclass
-class ModelTrace(_TraceBase[TEMStep]):
+class ModelTrace(TraceBase[TEMStep]):
     """full model trace.
 
     Stores all per-step outputs and states from a TEM rollout.

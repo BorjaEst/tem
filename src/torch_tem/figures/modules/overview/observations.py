@@ -11,11 +11,11 @@ import numpy as np
 import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import TEMStateTrace
+from torch_tem.diagnostics.traces import RolloutTrace
 from torch_tem.figures.registry import FigureContext
 
 
-def plot(trace: TEMStateTrace, ctx: FigureContext) -> Figure:
+def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     """Generate TEM overview figure from a model rollout trace.
 
     Creates a multi-panel figure showing:
@@ -24,7 +24,7 @@ def plot(trace: TEMStateTrace, ctx: FigureContext) -> Figure:
     - Actions taken over time
 
     Args:
-        trace: TEMStateTrace with model outputs (CPU/NumPy).
+        trace: RolloutTrace with model outputs and world steps.
         ctx: Figure context (env_idx, freq_idx, figsize, style, etc.).
 
     Returns:
@@ -32,22 +32,20 @@ def plot(trace: TEMStateTrace, ctx: FigureContext) -> Figure:
     """
     fig, axes = plt.subplots(3, 1, figsize=ctx.figsize)
 
-    if len(trace.actions) == 0:
+    if len(trace) == 0 or not trace.world_step.actions:
         axes[0].set_title("No trace data (empty rollout)")
         return fig
 
-    # Infer batch size from the first action list
-    batch_size = len(trace.actions[0])
     env_idx = int(ctx.env_idx)
-    if not (0 <= env_idx < batch_size):
-        raise IndexError(f"env_idx {env_idx} out of range [0, {batch_size})")
+    if not (0 <= env_idx < trace.batch_size):
+        raise IndexError(f"env_idx {env_idx} out of range [0, {trace.batch_size})")
 
     freq_idx = int(ctx.freq_idx)
 
     # Panel 1: g_inf over time (selected frequency scale, all features)
     g_inf_steps = trace.output.inference.g_inf  # list[T] of MultiScaleCode
     if len(g_inf_steps) == 0:
-        raise ValueError("TEMStateTrace has no inference steps")
+        raise ValueError("RolloutTrace has no inference steps")
     if not (0 <= freq_idx < len(g_inf_steps[0])):
         raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(g_inf_steps[0])})")
 
@@ -61,7 +59,7 @@ def plot(trace: TEMStateTrace, ctx: FigureContext) -> Figure:
     # Panel 2: g_gen over time (selected frequency scale, all features)
     g_gen_steps = trace.output.generative.g_gen
     if len(g_gen_steps) == 0:
-        raise ValueError("TEMStateTrace has no generative steps")
+        raise ValueError("RolloutTrace has no generative steps")
     if not (0 <= freq_idx < len(g_gen_steps[0])):
         raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(g_gen_steps[0])})")
 
@@ -73,7 +71,10 @@ def plot(trace: TEMStateTrace, ctx: FigureContext) -> Figure:
     axes[1].set_xlabel("Time Step")
 
     # Panel 3: Actions over time (NumPy array with -1 sentinel)
-    actions_time = np.array([[(-1 if a is None else int(a)) for a in step_actions] for step_actions in trace.actions], dtype=int)  # (T, B)
+    actions_time = np.array(
+        [[(-1 if a is None else int(a)) for a in step_actions] for step_actions in trace.world_step.actions],
+        dtype=int,
+    )  # (T, B)
     actions_env = actions_time[:, env_idx]
     axes[2].plot(actions_env, marker="o", linestyle="-", markersize=4)
     axes[2].set_title("Actions Over Time")

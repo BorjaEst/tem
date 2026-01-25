@@ -35,7 +35,7 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     fig, axes = plt.subplots(2, 2, figsize=ctx.figsize)
 
     # Validate trace
-    if trace.batch_size == 0 or trace.n_steps == 0:
+    if trace.batch_size == 0 or len(trace) == 0:
         axes[0, 0].set_title("No trace data (empty rollout)")
         return fig
 
@@ -46,17 +46,16 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     freq_idx = int(ctx.freq_idx)
 
     # Get selected environment's world and location IDs
-    world = trace.worlds[env_idx]
-    location_ids = trace.location_ids[env_idx]
+    if not trace.world_step.environments:
+        raise ValueError("RolloutTrace has no environments")
+    world = trace.world_step.environments[env_idx]
+    location_ids = trace.world_step.location_ids[env_idx]
     n_locations = len(world.locations)
 
-    # Extract model traces
-    model_trace = trace.model
-
     # Panel 1 (top-left): g_inf time heatmap
-    g_inf_steps = model_trace.output.inference.g_inf
+    g_inf_steps = trace.output.inference.g_inf
     if len(g_inf_steps) == 0:
-        raise ValueError("TEMStateTrace has no inference steps")
+        raise ValueError("RolloutTrace has no inference steps")
     if not (0 <= freq_idx < len(g_inf_steps[0])):
         raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(g_inf_steps[0])})")
 
@@ -68,9 +67,9 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     axes[0, 0].set_xlabel("Time")
 
     # Panel 2 (top-right): g_gen time heatmap
-    g_gen_steps = model_trace.output.generative.g_gen
+    g_gen_steps = trace.output.generative.g_gen
     if len(g_gen_steps) == 0:
-        raise ValueError("TEMStateTrace has no generative steps")
+        raise ValueError("RolloutTrace has no generative steps")
     if not (0 <= freq_idx < len(g_gen_steps[0])):
         raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(g_gen_steps[0])})")
 

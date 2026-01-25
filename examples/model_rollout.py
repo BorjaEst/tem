@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Generate TEM model rollout figures with spatial rate maps.
+
+This script demonstrates the complete figure generation pipeline for TEM
+model rollouts, including spatial rate maps that combine model activity
+with position information.
+
+Examples:
+    # Default settings (interactive plots).
+    python examples/model_rollout_figures.py
+
+    # Run headless (do not show or save figures).
+    python examples/model_rollout_figures.py --show_plots false --save_plots false
+
+    # Use a trained checkpoint
+    python examples/model_rollout_figures.py --checkpoint models/nice_model.1
+"""
+
+import logging
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import torch
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from torch_tem import data, figures
+from torch_tem.data.datamodule import DataConfig
+from torch_tem.figures import register
+from torch_tem.figures.core import FigureContext, collect_rollout_trace
+from torch_tem.model import Model as TEMModel
+from torch_tem.model import TEMConfig
+from torch_tem.settings import (
+    AutoencoderSettings,
+    CurriculumSettings,
+    EnvironmentSettings,
+    EnvSamplingSettings,
+    HPCSettings,
+    LECProjectionSettings,
+    LECSettings,
+    MECProjectionSettings,
+    MECSettings,
+    RolloutStreamSettings,
+    SpaceContractSettings,
+)
+
+NAME = __file__.split("/")[-1].replace(".py", "")
+logger = logging.getLogger(NAME)
+
+
+# ==============================================================================
+# Configuration
+# ==============================================================================
+class ExampleArguments(BaseSettings):
+    """CLI configuration for model rollout figure generation."""
+
+    model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name=NAME)
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
+    )
+
+    # Data configuration (leaves)
+    space: SpaceContractSettings = Field(
+        default_factory=SpaceContractSettings,
+        description="Space contract: observation and action space dimensions.",
+    )
+    env: EnvironmentSettings = Field(
+        default_factory=EnvironmentSettings,
+        description="Environment generation settings.",
+    )
+    iterator: RolloutStreamSettings = Field(
+        default_factory=RolloutStreamSettings,
+        description="Iterator protocol settings (rollout chunking + eval protocol).",
+    )
+    policy: EnvSamplingSettings = Field(
+        default_factory=EnvSamplingSettings,
+        description="Data generation policies (exploration + shiny).",
+    )
+    walk: CurriculumSettings = Field(
+        default_factory=CurriculumSettings,
+        description="Walk length curriculum settings.",
+    )
+
+    # Model configuration
+    autoencoder: AutoencoderSettings = Field(
+        default_factory=AutoencoderSettings,
+        description="Autoencoder (observation embedding) settings.",
+    )
+    lec: LECSettings = Field(
+        default_factory=LECSettings,
+        description="LEC (sensory features) settings.",
+    )
+    lec_proj: LECProjectionSettings = Field(
+        default_factory=LECProjectionSettings,
+        description="LEC projection settings.",
+    )
+    mec: MECSettings = Field(
+        default_factory=MECSettings,
+        description="MEC (abstract location) settings.",
+    )
+    mec_proj: MECProjectionSettings = Field(
+        default_factory=MECProjectionSettings,
+        description="MEC projection settings.",
+    )
+    hpc: HPCSettings = Field(
+        default_factory=HPCSettings,
+        description="HPC (grounded location memory) settings.",
+    )
+
+    # Checkpoint
+    checkpoint: Path | None = Field(
+        default=None,
+        description="Path to model checkpoint (optional). If None, uses random init.",
+    )
+
+    # Rollout settings
+    max_rollout_steps: int = Field(
+        default=100,
+        ge=10,
+        description="Maximum rollout steps to collect.",
+    )
+    downsample_stride: int = Field(
+        default=1,
+        ge=1,
+        description="Downsampling stride for trace (1 = keep all steps).",
+    )
+
+    # Figure selection
+    env_idx: int = Field(
+        default=0,
+        ge=0,
+        description="Environment index to visualize.",
+    )
+    freq_idx: int = Field(
+        default=0,
+        ge=0,
+        description="Frequency module index to visualize.",
+    )
+
+    # Output
+    output_dir: Path = Field(
+        default=Path("outputs/model_rollout"),
+        description="Directory for saving plots",
+    )
+    show_plots: bool = Field(
+        default=True,
+        description="Display plots interactively",
+    )
+    save_plots: bool = Field(
+        default=True,
+        description="Save plots to output directory",
+    )
+
+    @field_validator("output_dir")
+    @classmethod
+    def create_output_dir(cls, v: Path) -> Path:
+        """Create output_dir if it does not exist."""
+        v.mkdir(parents=True, exist_ok=True)
+        return v
+
+    @property
+    def data(self) -> DataConfig:
+        """Create the aggregate DataConfig consumed by the DataModule."""
+        return DataConfig.model_validate(self, from_attributes=True)
+
+    @property
+    def model(self) -> TEMConfig:
+        """Create the aggregate TEMConfig for model construction."""
+        return TEMConfig.model_validate(self, from_attributes=True)
+
+
+# ==============================================================================
+# Main Experiment
+# ==============================================================================
+def main() -> None:
+    """Run the model rollout figure generation example.
+
+    The flow is:
+    1) Parse configuration from CLI.
+    2) Build a DataModule and TEM model.
+    3) Load checkpoint if provided, otherwise use random init.
+    4) Collect a rollout trace combining model outputs and spatial info.
+    5) Generate figures including spatial rate maps.
+    6) Optionally save/show the figures.
+    """
+
+    # Parse all settings from CLI and environment.
+    args = ExampleArguments()
+    logging.basicConfig(format="%(levelname)s:%(message)s", level=args.log_level.upper())
+
+    print("=" * 80)
+    print("TEM Model Rollout Figure Generation")
+    print("=" * 80)
+    print(f" - Log level: {args.log_level.upper()}")
+    print(f" - Checkpoint: {args.checkpoint or 'None (random init)'}")
+    print(f" - Output directory: {args.output_dir}")
+    print(f" - Save plots: {args.save_plots}")
+    print(f" - Show plots: {args.show_plots}")
+    print()
+
+    # ------------------------------------------------------------------
+    # Step 1: Instantiate DataModule and build runtime objects.
+    # ------------------------------------------------------------------
+    datamodule = data.DataModule(args.data)
+    datamodule.setup(None)  # Enable all configured splits.
+
+    print("Step 1: DataModule setup complete.")
+    print()
+
+    # ------------------------------------------------------------------
+    # Step 2: Initialize TEM model.
+    # ------------------------------------------------------------------
+    model = TEMModel(args.model)
+
+    # Load checkpoint if provided
+    if args.checkpoint:
+        print(f"Loading checkpoint: {args.checkpoint}")
+        state_dict = torch.load(args.checkpoint, map_location="cpu")
+        model.load_state_dict(state_dict)
+        print("Checkpoint loaded.")
+    else:
+        print("Using random initialization (no checkpoint provided).")
+
+    model.eval()  # Set to evaluation mode
+    print()
+
+    # ------------------------------------------------------------------
+    # Step 3: Collect rollout trace with spatial alignment.
+    # ------------------------------------------------------------------
+    print("Step 3: Collecting rollout trace...")
+    trace = collect_rollout_trace(
+        model=model,
+        datamodule=datamodule,
+        split="validate",
+        max_steps=args.max_rollout_steps,
+        downsample_stride=args.downsample_stride,
+    )
+    print(f" - Batch size: {trace.batch_size}")
+    print(f" - Time steps: {trace.n_steps}")
+    print(f" - Environments: {len(trace.worlds)}")
+    print()
+
+    # ------------------------------------------------------------------
+    # Step 4: Generate diagnostic visualizations.
+    # ------------------------------------------------------------------
+    ctx = FigureContext(env_idx=args.env_idx, freq_idx=args.freq_idx, figsize=(14, 10), split_name="validate")
+    figs: list[tuple[str, plt.Figure]] = [
+        ("01_overview_rate_maps.png", figures.overview.rate_maps.plot(trace, ctx)),
+        ("02_model_overview.png", figures.overview.observations.plot(trace.model, ctx)),
+    ]
+
+    print(f"Step 4: Generated {len(figs)} figure(s).")
+    print()
+
+    # ------------------------------------------------------------------
+    # Step 5: Save and/or show plots.
+    # ------------------------------------------------------------------
+    if args.save_plots:
+        for filename, fig in figs:
+            fig.savefig(args.output_dir / filename, dpi=150, bbox_inches="tight")
+        print(f"Saved {len(figs)} figure(s) to: {args.output_dir}")
+    plt.show() if args.show_plots else plt.close("all")
+
+    print("Example completed.")
+    print("=" * 80)
+
+
+# ==============================================================================
+# Main Entry Point
+# ==============================================================================
+if __name__ == "__main__":
+    main()

@@ -44,7 +44,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
 
     # Panel 2: Action frequency (flattened across all walks)
     all_actions = []
-    for walk in trace.walks:
+    for walk in trace.agent_info:
         all_actions.extend([step[2] for step in walk[:-1]])  # Exclude terminal step
 
     action_counts = Counter(all_actions)

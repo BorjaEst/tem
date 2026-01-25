@@ -155,7 +155,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step 2: Fetch a single batch and print key tensor shapes.
     # ------------------------------------------------------------------
-    walk, visited = datamodule.sample_batch("validate")
+    batch = walk, visited = datamodule.sample_batch("validate")
     locations, observation_0, action_0 = walk[0]
 
     print("Step 2: Sampled one validation batch (time-major).")
@@ -168,7 +168,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step 3: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
-    trace = DataTrace.from_iter(
+    environments = datamodule.dataset.environments
+    trace = DataTrace.from_batch(environments, batch, meta={"split": "validate"})
     ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
 
     figs: list[tuple[str, plt.Figure]] = [

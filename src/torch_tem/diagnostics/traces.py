@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from itertools import islice
-from typing import Any, Generic, Iterable, List, Optional, TypeVar
+from typing import Any, Generic, Iterable, List, Optional, Tuple, TypeVar
 
 from torch import Tensor
 
@@ -15,7 +15,7 @@ from torch_tem.model import Prediction, TEMGenerative, TEMInference, TEMLabel, T
 from torch_tem.modules.hpc import HPCState
 from torch_tem.modules.lec import LECState
 from torch_tem.modules.mec import MECState
-from torch_tem.types import AbstractLocation, Action, GroundedLocation, LocationBelief, LocationLabel, MemoryState, MultiScaleCode, Observation
+from torch_tem.types import AbstractLocation, Action, GroundedLocation, LocationBelief, LocationLabel, MemoryState, MultiScaleCode, Observation, WalkBatch
 
 TStep = TypeVar("TStep")
 TraceT = TypeVar("TraceT", bound="TraceBase")
@@ -274,8 +274,9 @@ class TEMTrace(TraceBase[TEMStep]):
         self.state.append(step.state)
 
 
+@dataclass
 class AgentTrace(TraceBase[AgentStep]):
-    locations: List[LocationLabel] = field(default_factory=list)
+    locations: List[LocationLabel] | None = field(default=None)
     observation: List[Observation] = field(default_factory=list)
     action: List[Action] = field(default_factory=list)
 
@@ -284,27 +285,43 @@ class AgentTrace(TraceBase[AgentStep]):
         return int(self.observation[0].shape[0]) if self.observation else 0
 
     def get_item(self, idx: int) -> AgentStep:
-        return AgentStep(self.locations[idx], self.observation[idx], self.action[idx])
+        return AgentStep(self.locations, self.observation[idx], self.action[idx])
 
     def _append(self, step: AgentStep) -> None:
-        self.locations.append(step.locations)
+        self.locations = step.locations
         self.observation.append(step.observation)
         self.action.append(step.action)
+
+    @classmethod
+    def from_walk(cls, walk: WalkBatch, **kwargs) -> AgentTrace:
+        iterable = (AgentStep(locations=step[0], observation=step[1], action=step[2]) for step in walk)
+        return cls.from_iter(iterable, **kwargs)
 
 
 @dataclass
 class DataTrace(TraceBase[DataStep]):
     environments: List[World] = field(default_factory=list)  # Batch of environments
-    walks: AgentTrace = field(default_factory=AgentTrace)
-    visited: List[Optional[List[List[bool]]]] = field(default_factory=list)
+    agent_info: AgentTrace = field(default_factory=AgentTrace)
+    visited: List[List[bool]] | None = None
+
+    @property
+    def batch_size(self) -> int:
+        return self.agent_info.batch_size
 
     def get_item(self, idx: int) -> TStep:
-        return DataStep(self.environments, self.walks[idx], self.visited[idx])
+        return DataStep(self.environments, self.agent_info[idx], self.visited[idx])
 
     def _append(self, step: DataStep) -> None:
         self.environments = step.environments
-        self.walks.append(step.agent_info)
-        self.visited.append(step.visited)
+        self.agent_info.append(step.agent_info)
+        self.visited = step.visited
+
+    @classmethod
+    def from_batch(cls, environments: List[World], batch: Tuple[WalkBatch, Tensor], **kwargs) -> DataTrace:
+        walk, visited = batch
+        agent_iter = (AgentStep(locations=step[0], observation=step[1], action=step[2]) for step in walk)
+        iterable = (DataStep(environments, a, visited) for a in agent_iter)
+        return cls.from_iter(iterable, **kwargs)
 
 
 @dataclass
@@ -318,6 +335,18 @@ class SimulationTrace(TraceBase[SimulationStep]):
     location_ids: List[List[int]] = field(default_factory=list)
     data: DataTrace = field(default_factory=DataTrace)
     model: TEMTrace = field(default_factory=TEMTrace)
+
+    @property
+    def batch_size(self) -> int:
+        return self.data.batch_size
+
+    def get_item(self, idx: int) -> SimulationStep:
+        return SimulationStep(self.location_ids, self.data[idx], self.model[idx])
+
+    def _append(self, step: SimulationStep) -> None:
+        self.location_ids = step.location_ids
+        self.data.append(step.data)
+        self.model.append(step.model)
 
 
 def _batch_size_from_multiscale(code: MultiScaleCode | None) -> int:

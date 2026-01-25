@@ -20,7 +20,6 @@ from torch_tem.data import rollout
 from torch_tem.diagnostics.traces import DataTrace, SimulationTrace
 from torch_tem.figures import register, sinks
 from torch_tem.figures.registry import REGISTRY, FigureContext
-from torch_tem.utils import walks as utils_walks
 
 
 class FigureCallbackSettings(BaseModel):

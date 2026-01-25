@@ -35,10 +35,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
 
     with style_ctx:
         # Select single environment if batch trace
-        if trace.batch_size > 1:
-            trace = trace.select_env(ctx.env_idx)
-
-        env = trace.worlds[0]
+        env = trace.environments[ctx.env_idx]
         n_locs = env.n_locations
 
         # Create figure
@@ -46,13 +43,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
 
         # Render environment with uniform values (just show layout)
         values = np.ones(n_locs)  # Uniform coloring
-        plot_map(
-            env,
-            values,
-            ax=ax,
-            do_plot_actions=False,  # Don't clutter with action arrows by default
-            shape="circle",
-        )
+        plot_map(env, values, ax=ax, do_plot_actions=False, shape="circle")
 
         # Add title with environment metadata
         title = f"Environment Layout (n_locations={n_locs})"

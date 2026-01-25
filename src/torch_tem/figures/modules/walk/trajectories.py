@@ -18,6 +18,7 @@ from torch_tem.figures.registry import FigureContext
 def plot(
     trace: DataTrace,
     ctx: FigureContext,
+    *,
     deterministic: bool = True,
     seed: int = 42,
     max_steps: int | None = None,
@@ -38,11 +39,8 @@ def plot(
         matplotlib Figure showing walk trajectories.
     """
     # Select single environment if batch trace
-    if trace.batch_size > 1:
-        trace = trace.select_env(ctx.env_idx)
-
-    env = trace.worlds[0]
-    walk = trace.walks[0]
+    env = trace.environments[ctx.env_idx]
+    walk = trace.agent_info
     n_locs = env.n_locations
 
     # Set max_steps
@@ -68,13 +66,7 @@ def plot(
     return fig
 
 
-def _plot_walk_deterministic(
-    environment,
-    walk: list,
-    ax: plt.Axes,
-    max_steps: int,
-    seed: int | None = None,
-) -> None:
+def _plot_walk_deterministic(environment, walk: list, ax: plt.Axes, max_steps: int, seed: int | None = None) -> None:
     """Plot walk trajectory with optional deterministic jitter.
 
     Args:
@@ -121,12 +113,6 @@ def _plot_walk_deterministic(
 
         # Color gradient: darker at start, lighter at end
         color_intensity = step_i / max_steps
-        ax.plot(
-            [prev_loc[0], new_loc[0]],
-            [prev_loc[1], new_loc[1]],
-            color=[color_intensity] * 3,
-            linewidth=1.5,
-            alpha=0.7,
-        )
+        ax.plot([prev_loc[0], new_loc[0]], [prev_loc[1], new_loc[1]], color=[color_intensity] * 3, linewidth=1.5, alpha=0.7)
 
         prev_loc = new_loc

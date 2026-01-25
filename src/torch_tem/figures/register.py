@@ -5,8 +5,8 @@ import issues by separating registration from core infrastructure.
 """
 
 from torch_tem.diagnostics import traces
-from torch_tem.figures.core.registry import REGISTRY, FigureSpec
 from torch_tem.figures.modules import environment, overview, split, walk
+from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 
 def register_builtin_figures() -> None:

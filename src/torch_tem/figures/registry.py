@@ -11,8 +11,6 @@ from typing import Any, Callable, Optional
 
 from matplotlib.figure import Figure
 
-from torch_tem.figures.core.types import PlotTrace
-
 
 @dataclass
 class FigureContext:
@@ -52,7 +50,7 @@ class FigureSpec:
 
     name: str
     description: str
-    plot: Callable[[PlotTrace, FigureContext], Figure]
+    plot: Callable[[Any, FigureContext], Figure]
     accepts: type[Any]
     default_filename: Optional[str] = None
     tags: frozenset[str] = frozenset()

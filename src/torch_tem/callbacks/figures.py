@@ -16,10 +16,11 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
+from torch_tem.data import rollout
 from torch_tem.diagnostics.traces import DataTrace, SimulationTrace
 from torch_tem.figures import register, sinks
 from torch_tem.figures.registry import REGISTRY, FigureContext
-from torch_tem.model import RolloutStream
+from torch_tem.utils import walks as utils_walks
 
 
 class FigureCallbackSettings(BaseModel):
@@ -156,34 +157,17 @@ class FiguresCallback(pl.Callback):
         if not (datamodule := trainer.datamodule) or not datamodule.dataset:
             raise ValueError("DataModule or dataset not available")
 
-        # Limit chunk to max_rollout_steps and metadata
-        chunk_limied = chunk[: self.settings.max_rollout_steps]
-        meta = {"global_step": trainer.global_step, "split": "train"}
-
-        # Create SimulationTrace via canonical constructor (single source of truth
-        # for max-steps + downsampling across walk/location/model components)
-        rollout_trace = SimulationTrace.from_iter(
-            worlds=datamodule.dataset.environments,
-            rollout=RolloutStream(model, chunk_limied, initial=None),
-            chunk=chunk_limied,
-            max_steps=self.settings.max_rollout_steps,
-            downsample_stride=self.settings.downsample_stride,
-            meta=meta,
-        )
-
-        # Derive TEMTrace and DataTrace from the same aligned rollout
-        model_trace = rollout_trace.model
-        data_trace = DataTrace(
-            worlds=rollout_trace.worlds,
-            walks=rollout_trace.walks,
-            visited=visited if visited is not None else getattr(datamodule.dataset, "visited", None),
-            meta=meta,
-        )
-        data_trace.validate()
+        # Create SimulationTrace via canonical constructor
+        locations_ids = utils_walks.time_major_location_ids(chunk, key="id")
+        rollout_trace: SimulationTrace = SimulationTrace.from_iter(
+            iterable=(rollout.SimulationStep(locations_ids, data, model) for data in chunk),
+            stop=self.settings.max_rollout_steps,
+            meta={"global_step": trainer.global_step, "split": "train"},
+        ).downsample_time(self.settings.downsample_stride)
 
         # Generate and persist each figure
         context = self.figure_context(trainer, split_name="train")
-        traces = [rollout_trace, model_trace, data_trace]
+        traces = [rollout_trace, rollout_trace.model, rollout_trace.data]
 
         for figure_name in self.settings.figures:
             spec = REGISTRY.get(figure_name)

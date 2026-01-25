@@ -58,6 +58,8 @@ class TraceBase(Sequence[TStep], Generic[TStep], ABC):
         raise NotImplementedError
 
     def downsample_time(self, stride: int) -> TraceBase[TStep]:
+        if stride <= 1:
+            return self
         iterable = (x for i, x in enumerate(self) if i % stride == 0)
         return type(self).from_iter(iterable, stop=None, meta=self.meta.copy())
 

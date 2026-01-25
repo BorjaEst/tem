@@ -168,7 +168,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step 3: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
-    trace = DataTrace.from_datamodule(datamodule, "validate")
+    trace = DataTrace.from_iter(
     ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
 
     figs: list[tuple[str, plt.Figure]] = [

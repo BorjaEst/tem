@@ -27,7 +27,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
 from torch_tem.diagnostics.traces import SimulationTrace
-from torch_tem.figures import register
 from torch_tem.figures.registry import FigureContext
 from torch_tem.model import Model as TEMModel
 from torch_tem.model import TEMConfig
@@ -230,13 +229,11 @@ def main() -> None:
     # Step 3: Collect rollout trace with spatial alignment.
     # ------------------------------------------------------------------
     print("Step 3: Collecting rollout trace...")
-    trace = SimulationTrace.from_datamodule(
+    trace = SimulationTrace.from_iter(
+        locations_ids=
         model=model,
-        datamodule=datamodule,
-        split="validate",
-        max_steps=args.max_rollout_steps,
-        downsample_stride=args.downsample_stride,
-    )
+        stop=args.max_rollout_steps,
+    ).downsample_time(args.downsample_stride)
     print(f" - Batch size: {trace.batch_size}")
     print(f" - Time steps: {trace.n_steps}")
     print(f" - Environments: {len(trace.worlds)}")

@@ -113,7 +113,7 @@ class TEMGenerativeTrace(_TraceBase[TEMGenerative]):
     p_gen_gg: list[GroundedLocation] = field(default_factory=list)
     p_gen_gi: list[GroundedLocation] = field(default_factory=list)
 
-    def append(self, step: TEMGenerative) -> None:
+    def _append(self, step: TEMGenerative) -> None:
         self.g_gen.append(step.g_gen)
         self.p_gen_gg.append(step.p_gen_gg)
         self.p_gen_gi.append(step.p_gen_gi)
@@ -126,7 +126,7 @@ class PredictionTrace(_TraceBase[Prediction]):
     prediction: list[Observation] = field(default_factory=list)
     logits: list[Tensor] = field(default_factory=list)
 
-    def append(self, step: Prediction) -> None:
+    def _append(self, step: Prediction) -> None:
         self.prediction.append(step.prediction)
         self.logits.append(step.logits)
 
@@ -143,7 +143,7 @@ class TEMReconstructionTrace(_TraceBase[TEMReconstruction]):
     y_gen_gi: PredictionTrace = field(default_factory=PredictionTrace)
     y_gen_gg: PredictionTrace = field(default_factory=PredictionTrace)
 
-    def append(self, step: TEMReconstruction) -> None:
+    def _append(self, step: TEMReconstruction) -> None:
         self.y_p_inf.append(step.y_p_inf)
         self.y_gen_gi.append(step.y_gen_gi)
         self.y_gen_gg.append(step.y_gen_gg)
@@ -157,7 +157,7 @@ class TEMOutputTrace(_TraceBase[TEMOutput]):
     generative: TEMGenerativeTrace = field(default_factory=TEMGenerativeTrace)
     reconstruction: TEMReconstructionTrace = field(default_factory=TEMReconstructionTrace)
 
-    def append(self, step: TEMOutput) -> None:
+    def _append(self, step: TEMOutput) -> None:
         self.inference.append(step.inference)
         self.generative.append(step.generative)
         self.reconstruction.append(step.reconstruction)
@@ -170,7 +170,7 @@ class LECStateTrace(_TraceBase[LECState]):
     cells: list[MultiScaleCode] = field(default_factory=list)
     filtered: list[MultiScaleCode] = field(default_factory=list)
 
-    def append(self, step: LECState) -> None:
+    def _append(self, step: LECState) -> None:
         self.cells.append(step.cells)
         self.filtered.append(step.filtered)
 
@@ -182,7 +182,7 @@ class MECStateTrace(_TraceBase[MECState]):
     cells: list[AbstractLocation] = field(default_factory=list)
     uncertainty: list[Optional[MultiScaleCode]] = field(default_factory=list)
 
-    def append(self, step: MECState) -> None:
+    def _append(self, step: MECState) -> None:
         self.cells.append(step.cells)
         self.uncertainty.append(step.uncertainty)
 
@@ -195,7 +195,7 @@ class HPCStateTrace(_TraceBase[HPCState]):
     uncertainty: list[Optional[MultiScaleCode]] = field(default_factory=list)
     memory: list[Optional[list[Matrix]]] = field(default_factory=list)
 
-    def append(self, step: HPCState) -> None:
+    def _append(self, step: HPCState) -> None:
         self.cells.append(step.cells)
         self.uncertainty.append(step.uncertainty)
         self.memory.append(step.memory)
@@ -213,7 +213,7 @@ class TEMStateTrace(_TraceBase[TEMState]):
     mec: MECStateTrace = field(default_factory=MECStateTrace)
     hpc: HPCStateTrace = field(default_factory=HPCStateTrace)
 
-    def append(self, step: TEMState) -> None:
+    def _append(self, step: TEMState) -> None:
         self.lec.append(step.lec)
         self.mec.append(step.mec)
         self.hpc.append(step.hpc)
@@ -237,7 +237,7 @@ class ModelTrace(_TraceBase[TEMStep]):
     output: TEMOutputTrace = field(default_factory=TEMOutputTrace)
     state: TEMStateTrace = field(default_factory=TEMStateTrace)
 
-    def append(self, step: TEMStep) -> None:
+    def _append(self, step: TEMStep) -> None:
         self.actions.append(step.action)
         self.labels.append(step.label)
         self.output.append(step.output)

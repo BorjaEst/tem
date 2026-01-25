@@ -31,6 +31,7 @@ from typing import Generic, TypeVar
 
 from torch import nn
 
+from torch_tem.data.datamodule import DataStep
 from torch_tem.data.world import World
 from torch_tem.types import Walk
 
@@ -62,9 +63,8 @@ class SimulationStep:
     Uses specific types for TEM models.
     """
 
-    wolrds: list[World]
-    walks: Walk
     location_ids: list[int]
+    data: DataStep
     model: nn.Module
 
 

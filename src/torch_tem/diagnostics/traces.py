@@ -316,9 +316,8 @@ class SimulationTrace(TraceBase[SimulationStep]):
     Does not support incremental construction via append().
     """
 
-    worlds: List[World] = field(default_factory=list)
     location_ids: List[List[int]] = field(default_factory=list)
-    walks: List[Walk] = field(default_factory=list)
+    data: DataTrace = field(default_factory=DataTrace)
     model: TEMTrace = field(default_factory=TEMTrace)
 
 

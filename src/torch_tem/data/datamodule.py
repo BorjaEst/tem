@@ -14,7 +14,7 @@ Settings composition:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional, TypeAlias
+from typing import Any, List, Optional
 
 import lightning.pytorch as pl
 import numpy as np
@@ -22,10 +22,10 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field
 from torch.utils.data import DataLoader, IterableDataset
 
-from torch_tem import data, settings
+from torch_tem import settings
 from torch_tem.data.env_validation import validate_envs_against_contract
 from torch_tem.data.world import World
-from torch_tem.types import Action, LocationLabel, Observation, Walk
+from torch_tem.types import Action, LocationLabel, Observation
 
 
 class DataConfig(BaseModel):

@@ -2,23 +2,20 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from itertools import islice
 from typing import Any, Generic, Iterable, List, Optional, TypeVar
 
-import numpy as np
 from torch import Tensor
 
-from torch_tem.data.datamodule import AgentStep, DataModule, DataStep
+from torch_tem.data.datamodule import AgentStep, DataStep
 from torch_tem.data.rollout import RolloutStep, SimulationStep
 from torch_tem.data.world import World
-from torch_tem.model import Model as TEMModel
-from torch_tem.model import Prediction, RolloutStream, TEMGenerative, TEMInference, TEMLabel, TEMOutput, TEMReconstruction, TEMState, TEMStep
+from torch_tem.model import Prediction, TEMGenerative, TEMInference, TEMLabel, TEMOutput, TEMReconstruction, TEMState, TEMStep
 from torch_tem.modules.hpc import HPCState
 from torch_tem.modules.lec import LECState
 from torch_tem.modules.mec import MECState
-from torch_tem.types import AbstractLocation, Action, GroundedLocation, LocationBelief, LocationLabel, MemoryState, MultiScaleCode, Observation, Walk
-from torch_tem.utils.walks import downsample_env_major, time_major_location_ids, time_major_to_env_major_walks
+from torch_tem.types import AbstractLocation, Action, GroundedLocation, LocationBelief, LocationLabel, MemoryState, MultiScaleCode, Observation
 
 TStep = TypeVar("TStep")
 TraceT = TypeVar("TraceT", bound="TraceBase")

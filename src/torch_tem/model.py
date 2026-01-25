@@ -40,7 +40,7 @@ from torch_tem.modules.lec import LECModel, LECState
 from torch_tem.modules.mec import MECModel, MECState
 from torch_tem.modules.projection import ProjectionModule
 from torch_tem.settings import AutoencoderSettings, HPCSettings, LECProjectionSettings, LECSettings, MECProjectionSettings, MECSettings, SpaceContractSettings
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MemoryState, MultiScaleCode, Observation, Prediction, Walk
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, MemoryState, MultiScaleCode, Observation, Prediction, WalkBatch
 
 
 class TEMConfig(BaseModel):
@@ -439,7 +439,7 @@ class RolloutStream(Iterator[TEMStep]):
         Both views share the same internal stepping and do not duplicate execution.
     """
 
-    def __init__(self, model: Model, walk: Walk, initial: Optional[TEMState] = None):
+    def __init__(self, model: Model, walk: WalkBatch, initial: Optional[TEMState] = None):
         """Create a streaming rollout over a walk.
 
         Args:

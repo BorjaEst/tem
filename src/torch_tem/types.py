@@ -271,7 +271,7 @@ class Trajectory:
 # Batch Processing
 # =============================================================================
 
-WalkSample: TypeAlias = Tuple[Vector, Vector, Vector]
+WalkSample: TypeAlias = Tuple[Observation, Action, Location]
 """Single unbatched walk sample.
 
 This is the item-level return type used by the map-style walk dataset.

@@ -26,7 +26,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics import SimulationTrace
+from torch_tem.diagnostics.traces import SimulationTrace
 from torch_tem.figures import register
 from torch_tem.figures.registry import FigureContext
 from torch_tem.model import Model as TEMModel

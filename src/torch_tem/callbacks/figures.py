@@ -16,7 +16,7 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
-from torch_tem.diagnostics import DataTrace, SimulationTrace
+from torch_tem.diagnostics.traces import DataTrace, SimulationTrace
 from torch_tem.figures import register, sinks
 from torch_tem.figures.registry import REGISTRY, FigureContext
 from torch_tem.model import RolloutStream

@@ -4,7 +4,7 @@ Import this module to register all built-in figures. This avoids circular
 import issues by separating registration from core infrastructure.
 """
 
-from torch_tem.diagnostics import DataTrace, SimulationTrace, TEMTrace
+from torch_tem.diagnostics.traces import DataTrace, SimulationTrace, TEMTrace
 from torch_tem.figures.modules import environment, overview, split, walk
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 

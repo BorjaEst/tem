@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics import SimulationTrace
+from torch_tem.diagnostics.traces import SimulationTrace
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
 

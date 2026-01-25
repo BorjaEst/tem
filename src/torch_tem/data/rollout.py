@@ -32,8 +32,6 @@ from typing import Generic, TypeVar
 from torch import nn
 
 from torch_tem.data.datamodule import DataStep
-from torch_tem.data.world import World
-from torch_tem.types import Walk
 
 # Type parameters for generic RolloutStep
 ActionT = TypeVar("ActionT")

@@ -1,167 +1,263 @@
-# TEM Figures Submodule — Design
+## TEM Figures Submodule — Design
 
 ## Summary
 
-This design extends the existing `torch_tem.figures` infrastructure to support:
+This design preserves the existing registry-driven figure system while enabling
+paper-style, square-grid spatial rate maps (e.g., “grid cell” style maps) in the
+overview figure.
 
-- domain-namespaced figure modules (e.g., `figures.environment.layout.plot(...)`)
-- registry-driven figure generation for both model traces and data/environment traces
-- deterministic walk trajectory plotting by default
+Key properties:
 
-The design is intentionally minimal: it keeps the existing `FigureSpec` and `REGISTRY` APIs and extends the callback to build the right trace objects.
+- Figures remain registry-driven via `FigureSpec` and executed as
+  `spec.plot(trace, ctx)`.
+- Figure modules remain stateless (pure `plot(trace, ctx)`).
+- A new combined trace type, `RolloutTrace` (Option C), provides the minimal
+  bundle needed for spatial rate maps: world geometry + per-step position IDs +
+  model rollout outputs aligned in time.
+
+## Goals and Non-goals
+
+Goals:
+
+- Support both training-time (Lightning callback) and offline scripts using the
+  same registry and figure modules.
+- Enable spatial 2D rate maps on square-grid environments using existing map
+  primitives.
+- Keep trace contracts explicit and testable (capability-based `PlotTrace`).
+- Keep walk trajectory plotting deterministic by default.
+
+Non-goals:
+
+- Interactive dashboards.
+- Replacing matplotlib sinks/style system.
+- Adding heavy plotting dependencies beyond matplotlib.
 
 ## Existing Components (baseline)
 
-- Registry types: [src/torch_tem/figures/core/registry.py](src/torch_tem/figures/core/registry.py)
+- Registry + context: [src/torch_tem/figures/core/registry.py](src/torch_tem/figures/core/registry.py)
 - Trace protocol: [src/torch_tem/figures/core/types.py](src/torch_tem/figures/core/types.py)
-- Style: [src/torch_tem/figures/style.py](src/torch_tem/figures/style.py)
-- Sinks: [src/torch_tem/figures/sinks.py](src/torch_tem/figures/sinks.py)
-- Environment drawing primitives: [src/torch_tem/figures/primitives.py](src/torch_tem/figures/primitives.py)
-- Training callback: [src/torch_tem/callbacks/figures.py](src/torch_tem/callbacks/figures.py)
-- Example model figure: [src/torch_tem/figures/modules/overview.py](src/torch_tem/figures/modules/overview.py)
+- Data trace: [src/torch_tem/figures/core/data_trace.py](src/torch_tem/figures/core/data_trace.py)
+- Built-in registration: [src/torch_tem/figures/register.py](src/torch_tem/figures/register.py)
+- Training callback entrypoint: [src/torch_tem/callbacks/figures.py](src/torch_tem/callbacks/figures.py)
+- Model trace source: [src/torch_tem/diagnostics/traces.py](src/torch_tem/diagnostics/traces.py)
+- Environment primitives (maps/walk overlays): [src/torch_tem/figures/primitives.py](src/torch_tem/figures/primitives.py)
+- Overview figure (current): [src/torch_tem/figures/modules/overview.py](src/torch_tem/figures/modules/overview.py)
 
-## Package Layout
+## Definitions
 
-Add domain subpackages under `torch_tem.figures`:
+- **FigureSpec**: Registry entry describing a figure (name, plot callable,
+  accepted trace type, etc.).
+- **FigureContext**: Runtime selection and styling (env index, frequency index,
+  step/split metadata).
+- **PlotTrace**: Protocol providing `batch_size`, `n_steps`, `meta`,
+  `select_env(...)`, `downsample_time(...)`.
+- **World geometry**: `World.locations[*]` with at least `o` (x) and `y` (y)
+  coordinates (normalized to `[0, 1]`), plus connectivity and optional `shiny`.
+- **Walk step**: The data pipeline uses the step structure documented in
+  `DataTrace`: `[location_dict, observation_tensor, action_int]` where
+  `location_dict["id"]` is the visited location ID.
 
-- `torch_tem/figures/__init__.py`
-  - re-export domains: `environment`, `walk`, `split`, `overview`
-  - re-export `style`, `sinks` (optional)
+## Architecture
 
-- `torch_tem/figures/modules/environment/`
-  - `layout.py` → `plot(trace: DataTrace, ctx: FigureContext) -> Figure`
+### Registry Execution Model
 
-- `torch_tem/figures/modules/walk/`
-  - `trajectories.py` → `plot(trace: DataTrace, ctx: FigureContext) -> Figure`
-  - `statistics.py` → `plot(trace: DataTrace, ctx: FigureContext) -> Figure`
+- The registry remains the single source of truth for discoverable figure names.
+- A figure module is a stateless function:
+  - `plot(trace: PlotTrace, ctx: FigureContext) -> matplotlib.figure.Figure`
+- Trace construction and selection occurs outside figure modules
+  (callback/offline collectors).
 
-- `torch_tem/figures/modules/split/`
-  - `statistics.py` → `plot(trace: DataTrace, ctx: FigureContext) -> Figure`
+### Runtime Context
 
-Model figures remain where they are (`torch_tem/figures/modules/*`) in v1.
+`FigureContext` supplies:
 
-## Core Design: Two Trace Families
+- `env_idx`: selects a single environment from a batch trace.
+- `freq_idx`: selects a scale/module from multiscale codes.
+- `figsize`, `style`, and optional metadata: `global_step`, `split_name`.
 
-### 1) ModelTrace
+## Trace Types and Contracts
 
-Used by existing training diagnostics. Produced in the callback via `ModelTrace.from_rollout(...)`.
+All trace inputs to figure modules must implement the `PlotTrace` protocol
+(from [src/torch_tem/figures/core/types.py](src/torch_tem/figures/core/types.py)).
 
-### 2) DataTrace (new)
+### ModelTrace
 
-Used for environment/walk/split figures.
+Source: [src/torch_tem/diagnostics/traces.py](src/torch_tem/diagnostics/traces.py)
 
-#### Data model
+- Stores per-step model outputs/states from a rollout.
+- Not sufficient (by design) for spatial maps because it does not guarantee a
+  plot-friendly per-step location ID sequence aligned with the plotted tensors.
 
-`DataTrace` is a lightweight, plot-oriented wrapper around a batch of environments and walks.
+### DataTrace
 
-Proposed fields:
+Source: [src/torch_tem/figures/core/data_trace.py](src/torch_tem/figures/core/data_trace.py)
 
-- `worlds: list[torch_tem.data.world.World]`
-- `walks: list[list[list[Any]]]` (current walk step shape: `[location_dict, observation_tensor, action_int]`)
-- `visited: list[list[bool]] | None`
+- Intended for environment/walk/split figures that do not require model outputs.
+- Contains:
+  - `worlds: list[World]` (batch of environments)
+  - `walks: list[list[step]]` (batch of walks)
+  - `visited: list[list[bool]] | None`
+  - `meta: dict[str, Any]`
+
+Contract notes:
+
+- `n_steps` is derived from `walks[0]` in the current implementation and assumes
+  consistent step counts across environments in the trace.
+
+### RolloutTrace (Option C)
+
+Purpose:
+
+- Enables figures that require both model outputs and position alignment:
+  spatial rate maps, joint diagnostic panels, etc.
+
+Normative (required) fields:
+
+- `worlds: list[World]`
+- `walks: list[list[step]]`
+- `location_ids: list[list[int]]`
+  - Derived from `walks[env][t][0]["id"]`
+- `model: ModelTrace`
 - `meta: dict[str, Any]`
 
-#### Protocol compliance
+Normative invariants:
 
-`DataTrace` SHALL implement the `PlotTrace` protocol:
+- `batch_size == len(worlds) == len(walks) == len(location_ids)`
+- For each environment `e`:
+  - `len(location_ids[e]) == len(walks[e]) == n_steps`
+- Time alignment:
+  - For each plotted model sequence `a_t` used in a figure,
+    the time dimension MUST align with the `location_ids` time dimension after
+    applying the same downsampling and max-step truncation rules.
 
-- `batch_size: int` → number of environments
-- `n_steps: int` → number of timesteps in the selected walk
-- `select_env(env_idx)` → returns a single-env `DataTrace`
-- `downsample_time(stride)` → downsample walk steps deterministically
+Downsampling semantics (normative):
 
-This enables:
+- `RolloutTrace.downsample_time(stride)` MUST keep indices
+  `0, stride, 2*stride, ...` consistently across:
+  - `walks`
+  - `location_ids`
+  - all per-step series inside `model` that are used for plotting
 
-- uniform registry execution (`spec.plot(trace, ctx)`)
-- type-based dispatch in the callback (`isinstance(trace, spec.accepts)`)
+## Rate Map Computation
 
-## Determinism Strategy
+This section defines the computation that overview-style rate maps use.
 
-Current primitives (notably walk plotting) introduce randomness via jitter.
+Inputs:
 
-Design requirement: deterministic by default.
+- A per-step activity tensor for one scale, one env:
+  - Example: `a[t, c]` for a chosen `freq_idx`
+- Per-step visited locations:
+  - `loc[t] = location_ids[t]` where `loc[t] in [0, n_locations)`
 
-Approach:
+Output:
 
-- Add a deterministic RNG parameterization to the trajectory plotting path.
-- Prefer injecting a local RNG (NumPy `Generator`) into the plotting function rather than using global `np.random`.
-- Provide an explicit config flag (e.g., `deterministic: bool = True`) and optional `seed`.
+- A per-location scalar vector `m[loc_id]` (length `n_locations`) where:
+  - `m[ℓ] = mean({ a[t, c] | loc[t] == ℓ })`
 
-Implementation detail:
+Edge cases (normative):
 
-- Either update [src/torch_tem/figures/primitives.py](src/torch_tem/figures/primitives.py) to accept `rng`/`seed`, or keep primitives unchanged and implement deterministic jitter in the higher-level `walk.trajectories` figure.
+- If a location `ℓ` is never visited, `m[ℓ]` MUST be represented as missing
+  (e.g., `NaN`) so rendering can show it as blank/unfilled.
+- If a location is visited once, the mean is that single sample.
+- If an activity value is `NaN` at some timestep, it SHOULD be excluded from
+  the mean for that location (or documented if a different policy is used).
 
-## Styling Strategy
+## Rate Map Rendering
 
-Use the existing `StyleConfig.apply_context()` from [src/torch_tem/figures/style.py](src/torch_tem/figures/style.py).
+Rendering uses existing map primitives:
 
-Rule:
+- Use `plot_map(environment, values, shape="square")` from
+  [src/torch_tem/figures/primitives.py](src/torch_tem/figures/primitives.py)
+  to draw square-tile maps.
+- The “square” shape is a visual convention; coordinates still come from
+  `World.locations[*]["o"]` and `["y"]`.
 
-- Figure modules should wrap plotting in a context manager:
-  - `with (ctx.style or DEFAULT_STYLE).apply_context(): ...`
+## Callback Integration (Online)
 
-This prevents global matplotlib state leakage.
+The Lightning callback is responsible for building traces from the training
+batch and dispatching to registry specs.
 
-## Registry Naming and Tags
+Normative steps:
 
-Stable registry names mirror domain paths:
+1. Obtain `walk` (and optionally `visited`) from the current batch.
+2. Run a rollout (bounded by `max_rollout_steps`) to produce `ModelTrace`.
+3. Build `DataTrace` for figures that accept it.
+4. Build `RolloutTrace` for figures that accept it.
+5. Dispatch figures by trace compatibility.
 
-- `overview` (existing)
-- `environment.layout`
-- `walk.trajectories`
-- `walk.statistics`
-- `split.statistics`
+Dispatch rule (normative):
 
-Tags:
+- The callback SHOULD use `isinstance(trace, spec.accepts)` to decide which
+  trace to pass to a figure.
 
-- Model figures: `{"model", "rollout"}`
-- Data figures: `{"data", "debug"}`
+Implementation gap (current code):
 
-## Callback Integration
-
-The existing callback currently builds only `ModelTrace`.
-
-To support data figures in v1 without changing `FigureSpec`:
-
-1. build `ModelTrace` as today
-2. build `DataTrace` from the training batch and datamodule environments
-3. for each requested figure name:
-   - if `spec.accepts` matches `ModelTrace`, pass `ModelTrace`
-   - if it matches `DataTrace`, pass `DataTrace`
-   - otherwise skip with a warning
-
-This keeps `FigureSpec` stable and avoids introducing a second registry.
+- The current callback uses `spec.accepts == ModelTrace` and a `__name__`
+  comparison for `DataTrace`. This should be replaced by `isinstance` to match
+  this design and to support `RolloutTrace` cleanly.
 
 ## Offline Integration
 
-Offline scripts should not access internal dataset state directly.
+Offline scripts should not depend on internal dataset fields beyond what the
+collector APIs promise.
 
-Provide a “collector” utility:
+Existing collector:
 
-- `collect_data_trace(datamodule, split) -> DataTrace`
-  which:
-- samples a batch using `sample_batch(split)`
-- retrieves the corresponding `World` objects for that split
-- assembles a `DataTrace`
+- `collect_data_trace(datamodule, split) -> DataTrace` in
+  [src/torch_tem/figures/core/data_trace.py](src/torch_tem/figures/core/data_trace.py)
 
-This standardizes access patterns and makes it easier to test.
+Implementation gap (current code):
+
+- The current `collect_data_trace` samples a batch but returns `dataset.walks`
+  rather than the sampled `walk`. The collector should be clarified/fixed to
+  either:
+  - return the sampled batch trace, or
+  - be renamed/documented as “dataset snapshot trace”.
+
+Planned collector:
+
+- `collect_rollout_trace(model, datamodule, split, *, max_steps, downsample_stride)
+-> RolloutTrace`
+  - samples a batch via `datamodule.sample_batch(split)`
+  - runs `RolloutStream(model, walk, initial=None)`
+  - builds `ModelTrace` using the same truncation/downsampling rules
+  - derives aligned `location_ids`
+
+## Determinism Strategy
+
+- Walk trajectory visuals must be deterministic by default.
+- Prefer local RNG injection (`numpy.random.Generator`) instead of using global
+  `np.random`.
+
+Note:
+
+- `walk.trajectories` currently implements deterministic jitter internally; keep
+  that behavior and do not regress it to global RNG usage.
 
 ## Error Handling Matrix
 
-- Unknown figure name: `REGISTRY.validate(...)` raises `ValueError` with available names.
+- Unknown figure name: `REGISTRY.validate(...)` raises `ValueError` listing
+  available names.
 - Incompatible trace type:
   - training callback: warn and skip
-  - offline direct usage: raise `TypeError` with expected type
+  - offline direct usage: raise `TypeError`
 - Invalid `env_idx`: raise `IndexError` with valid range.
-- Missing optional deps for sinks (e.g., PIL): raise `ImportError` with install hint.
+- Alignment failures (time length mismatch between model series and location IDs):
+  raise `ValueError` describing expected and actual lengths.
 
 ## Testing Plan
 
 - Unit tests for `DataTrace` protocol behavior (`select_env`, `downsample_time`).
-- Unit tests that each new figure module returns a `matplotlib.figure.Figure`.
-- Determinism test: generate `walk.trajectories` twice with same seed/config and compare rendered pixel arrays (PNG buffer) or compare plotted coordinates.
-- Smoke test: run the offline example path to generate figures to disk.
+- Unit tests for `RolloutTrace` protocol behavior and invariants.
+- Unit tests for rate map aggregation (known walk + known activations yields
+  known per-location means).
+- Smoke test:
+  - training callback generates `overview` plus at least one data figure from the
+    same registry.
 
 ## Decision Record (compressed)
 
-Decision: Use a `DataTrace` implementing `PlotTrace` | Rationale: enables registry + callback parity for data figures | Impact: adds a small new trace type and collector utility | Review: revisit if data pipeline batch contract is refactored.
+Decision: Add `RolloutTrace` to combine model + environment data |
+Rationale: enables spatial rate maps without stateful figures or metadata hacks |
+Impact: introduces a third trace type + collector/constructor path |
+Review: revisit if rollout/batch contracts change.

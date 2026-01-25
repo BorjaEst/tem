@@ -130,7 +130,7 @@ class FiguresCallback(pl.Callback):
 
         Builds TEMStateTrace (for model diagnostics), WorldTrace (for data/walk figures),
         and RolloutTrace (for combined spatial figures), then dispatches each requested
-        figure to the appropriate trace using isinstance-based type matching.
+            figure to the appropriate trace using isinstance-based type matching.
 
         Args:
             trainer: PyTorch Lightning trainer.

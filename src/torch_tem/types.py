@@ -320,14 +320,12 @@ Note: In practice, memory is typically shared across a batch rather than
 per-sample, so this represents the global memory state.
 """
 
-
-# TODO: Walk as Itrerable with correct types
-Walk = Iterable[Tuple[Any, Tensor, Any]]  # (locations, o, a)
-
-
-# ....
 Reduction: TypeAlias = Literal["none", "sum", "mean"]
 Scalar: TypeAlias = int | float | Tensor
+Action: TypeAlias = Optional[int]
+
+# TODO: Walk as Itrerable with correct types
+Walk = Iterable[Tuple[LocationLabel, Tensor, Action]]  # (locations, o, a)
 
 
 @dataclass

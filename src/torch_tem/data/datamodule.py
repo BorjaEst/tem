@@ -13,7 +13,8 @@ Settings composition:
 
 from __future__ import annotations
 
-from typing import Any, Optional, TypeAlias
+from dataclasses import dataclass
+from typing import Any, List, Optional, TypeAlias
 
 import lightning.pytorch as pl
 import numpy as np
@@ -23,8 +24,8 @@ from torch.utils.data import DataLoader, IterableDataset
 
 from torch_tem import data, settings
 from torch_tem.data.env_validation import validate_envs_against_contract
-
-DataStep: TypeAlias = None  # TODO: replace with actual DataStep
+from torch_tem.data.world import World
+from torch_tem.types import Action, LocationLabel, Observation, Walk
 
 
 class DataConfig(BaseModel):
@@ -235,23 +236,11 @@ class TEMDataset(IterableDataset):
         rng = self.np_rng
 
         environments = [
-            data.World(
-                graph,
-                randomise_observations=self.data_settings.env.randomise_observations,
-                shiny=self._maybe_build_shiny_config(rng),
-            )
+            World(graph, randomise_observations=self.data_settings.env.randomise_observations, shiny=self._maybe_build_shiny_config(rng))
             for graph in rng.choice(self.env_paths, self.data_settings.iterator.rollout.batch_size)
         ]
-
+        walks = [env.generate_walks(self.data_settings.iterator.rollout.n_rollout * rng.integers(self.walk_it_min, self.walk_it_max), 1)[0] for env in environments]
         visited = [[False for _ in range(env.n_locations)] for env in environments]
-
-        walks = [
-            env.generate_walks(
-                self.data_settings.iterator.rollout.n_rollout * rng.integers(self.walk_it_min, self.walk_it_max),
-                1,
-            )[0]
-            for env in environments
-        ]
 
         return environments, walks, visited
 
@@ -290,7 +279,7 @@ class TEMDataset(IterableDataset):
         for env_i, walk in enumerate(self.walks):
             if len(walk) < self.data_settings.iterator.rollout.n_rollout:
                 # Generate new environment and walk
-                self.environments[env_i] = data.World(
+                self.environments[env_i] = World(
                     self.env_paths[rng.integers(len(self.env_paths))],
                     randomise_observations=self.data_settings.env.randomise_observations,
                     shiny=self._maybe_build_shiny_config(rng),
@@ -316,13 +305,13 @@ class TEMDataset(IterableDataset):
         return chunk, self.visited
 
     def _maybe_build_shiny_config(self, rng: np.random.Generator) -> Optional[dict[str, Any]]:
-        """Build the shiny config dict consumed by `data.World`.
+        """Build the shiny config dict consumed by `World`.
 
         Parameters:
             rng: Local RNG (seeded for val/test, unseeded for training).
 
         Returns:
-            Dict with keys expected by `data.World(shiny=...)`, or None if shiny
+            Dict with keys expected by `World(shiny=...)`, or None if shiny
             sampling does not trigger for this batch/environment.
         """
         shiny_settings = self.data_settings.policy.shiny
@@ -335,3 +324,17 @@ class TEMDataset(IterableDataset):
             "n": shiny_settings.shiny_n,
             "returns": shiny_settings.shiny_returns,
         }
+
+
+@dataclass
+class AgentStep:
+    locations: List[LocationLabel]
+    observation: Observation
+    action: Action
+
+
+@dataclass
+class DataStep:
+    environments: List[World]
+    agent_info: AgentStep
+    visited: Optional[List[List[bool]]]

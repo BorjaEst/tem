@@ -9,15 +9,15 @@ from typing import Any, Generic, Iterable, List, Optional, TypeVar
 import numpy as np
 from torch import Tensor
 
-from torch_tem.data.datamodule import DataModule, DataStep
+from torch_tem.data.datamodule import AgentStep, DataModule, DataStep
 from torch_tem.data.rollout import RolloutStep, SimulationStep
 from torch_tem.data.world import World
 from torch_tem.model import Model as TEMModel
-from torch_tem.model import Prediction, RolloutStream, TEMAction, TEMGenerative, TEMInference, TEMLabel, TEMOutput, TEMReconstruction, TEMState, TEMStep
+from torch_tem.model import Prediction, RolloutStream, TEMGenerative, TEMInference, TEMLabel, TEMOutput, TEMReconstruction, TEMState, TEMStep
 from torch_tem.modules.hpc import HPCState
 from torch_tem.modules.lec import LECState
 from torch_tem.modules.mec import MECState
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Matrix, MultiScaleCode, Observation, Walk
+from torch_tem.types import AbstractLocation, Action, GroundedLocation, LocationBelief, LocationLabel, MemoryState, MultiScaleCode, Observation, Walk
 from torch_tem.utils.walks import downsample_env_major, time_major_location_ids, time_major_to_env_major_walks
 
 TStep = TypeVar("TStep")
@@ -55,14 +55,14 @@ class TraceBase(Sequence[TStep], Generic[TStep], ABC):
     def __len__(self) -> int:
         return self._n_steps
 
-    @abstractmethod
     @property
+    @abstractmethod
     def batch_size(self) -> int:
         raise NotImplementedError
 
-    def downsample_time(self, stride: int) -> "TraceBase":
+    def downsample_time(self, stride: int) -> TraceBase[TStep]:
         iterable = (x for i, x in enumerate(self) if i % stride == 0)
-        return self.__class__.from_iter(iterable, stop=None, meta=self.meta.copy())
+        return type(self).from_iter(iterable, stop=None, meta=self.meta.copy())
 
     @classmethod
     def from_iter(cls, iterable: Iterable[TStep], *, stop: int | None = None, meta: dict[str, Any] | None = None) -> TraceT:
@@ -72,15 +72,15 @@ class TraceBase(Sequence[TStep], Generic[TStep], ABC):
 
 @dataclass
 class TEMLabelTrace(TraceBase[TEMLabel]):
-    observation: list[Observation] = field(default_factory=list)
-    locations: list[LocationLabel] = field(default_factory=list)
+    observation: List[Observation] = field(default_factory=list)
+    locations: Optional[List[LocationLabel]] = None
 
     @property
     def batch_size(self) -> int:
         return int(self.observation[0].shape[0]) if self.observation else 0
 
-    def get_item(self, idx: int) -> TStep:
-        return TEMLabel(self.observation[idx], self.locations)
+    def get_item(self, idx: int) -> TEMLabel:
+        return TEMLabel(self.observation[idx], self.locations[idx])
 
     def _append(self, step: TEMLabel) -> None:
         self.observation.append(step.observation)
@@ -89,15 +89,15 @@ class TEMLabelTrace(TraceBase[TEMLabel]):
 
 @dataclass
 class TEMInferenceTrace(TraceBase[TEMInference]):
-    g_inf: list[AbstractLocation] = field(default_factory=list)
-    p_inf: list[GroundedLocation] = field(default_factory=list)
-    p_xi: list[GroundedLocation] = field(default_factory=list)
+    g_inf: List[AbstractLocation] = field(default_factory=list)
+    p_inf: List[GroundedLocation] = field(default_factory=list)
+    p_xi: List[GroundedLocation] = field(default_factory=list)
 
     @property
     def batch_size(self) -> int:
-        return int(self.g_inf[0].shape[0]) if self.g_inf else 0
+        return _batch_size_from_multiscale_trace(self.g_inf)
 
-    def get_item(self, idx: int) -> TStep:
+    def get_item(self, idx: int) -> TEMInference:
         return TEMInference(self.g_inf[idx], self.p_inf[idx], self.p_xi[idx])
 
     def _append(self, step: TEMInference) -> None:
@@ -108,11 +108,16 @@ class TEMInferenceTrace(TraceBase[TEMInference]):
 
 @dataclass
 class TEMGenerativeTrace(TraceBase[TEMGenerative]):
-    """generative trace."""
+    g_gen: List[AbstractLocation] = field(default_factory=list)
+    p_gen_gg: List[GroundedLocation] = field(default_factory=list)
+    p_gen_gi: List[GroundedLocation] = field(default_factory=list)
 
-    g_gen: list[AbstractLocation] = field(default_factory=list)
-    p_gen_gg: list[GroundedLocation] = field(default_factory=list)
-    p_gen_gi: list[GroundedLocation] = field(default_factory=list)
+    @property
+    def batch_size(self) -> int:
+        return _batch_size_from_multiscale_trace(self.g_gen)
+
+    def get_item(self, idx: int) -> TEMGenerative:
+        return TEMGenerative(self.g_gen[idx], self.p_gen_gg[idx], self.p_gen_gi[idx])
 
     def _append(self, step: TEMGenerative) -> None:
         self.g_gen.append(step.g_gen)
@@ -122,10 +127,15 @@ class TEMGenerativeTrace(TraceBase[TEMGenerative]):
 
 @dataclass
 class PredictionTrace(TraceBase[Prediction]):
-    """prediction trace."""
+    prediction: List[Observation] = field(default_factory=list)
+    logits: List[Tensor] = field(default_factory=list)
 
-    prediction: list[Observation] = field(default_factory=list)
-    logits: list[Tensor] = field(default_factory=list)
+    @property
+    def batch_size(self) -> int:
+        return int(self.logits[0].shape[0]) if self.logits else 0
+
+    def get_item(self, idx: int) -> Prediction:
+        return Prediction(self.prediction[idx], self.logits[idx])
 
     def _append(self, step: Prediction) -> None:
         self.prediction.append(step.prediction)
@@ -134,15 +144,16 @@ class PredictionTrace(TraceBase[Prediction]):
 
 @dataclass
 class TEMReconstructionTrace(TraceBase[TEMReconstruction]):
-    """reconstruction trace.
-
-    Each reconstruction output is a `Prediction` (prediction + logits), so we
-    store three `PredictionTrace` sub-traces.
-    """
-
     y_p_inf: PredictionTrace = field(default_factory=PredictionTrace)
     y_gen_gi: PredictionTrace = field(default_factory=PredictionTrace)
     y_gen_gg: PredictionTrace = field(default_factory=PredictionTrace)
+
+    @property
+    def batch_size(self) -> int:
+        return self.y_p_inf.batch_size
+
+    def get_item(self, idx: int) -> TEMReconstruction:
+        return TEMReconstruction(self.y_p_inf[idx], self.y_gen_gi[idx], self.y_gen_gg[idx])
 
     def _append(self, step: TEMReconstruction) -> None:
         self.y_p_inf.append(step.y_p_inf)
@@ -152,11 +163,16 @@ class TEMReconstructionTrace(TraceBase[TEMReconstruction]):
 
 @dataclass
 class TEMOutputTrace(TraceBase[TEMOutput]):
-    """top-level output trace."""
-
     inference: TEMInferenceTrace = field(default_factory=TEMInferenceTrace)
     generative: TEMGenerativeTrace = field(default_factory=TEMGenerativeTrace)
     reconstruction: TEMReconstructionTrace = field(default_factory=TEMReconstructionTrace)
+
+    @property
+    def batch_size(self) -> int:
+        return self.inference.batch_size
+
+    def get_item(self, idx: int) -> TEMOutput:
+        return TEMOutput(self.inference[idx], self.generative[idx], self.reconstruction[idx])
 
     def _append(self, step: TEMOutput) -> None:
         self.inference.append(step.inference)
@@ -166,10 +182,15 @@ class TEMOutputTrace(TraceBase[TEMOutput]):
 
 @dataclass
 class LECStateTrace(TraceBase[LECState]):
-    """LEC state trace."""
+    cells: List[MultiScaleCode] = field(default_factory=list)
+    filtered: List[MultiScaleCode] = field(default_factory=list)
 
-    cells: list[MultiScaleCode] = field(default_factory=list)
-    filtered: list[MultiScaleCode] = field(default_factory=list)
+    @property
+    def batch_size(self) -> int:
+        return _batch_size_from_multiscale_trace(self.cells)
+
+    def get_item(self, idx: int) -> LECState:
+        return LECState(self.cells[idx], self.filtered[idx])
 
     def _append(self, step: LECState) -> None:
         self.cells.append(step.cells)
@@ -178,10 +199,16 @@ class LECStateTrace(TraceBase[LECState]):
 
 @dataclass
 class MECStateTrace(TraceBase[MECState]):
-    """MEC state trace."""
+    cells: List[AbstractLocation] = field(default_factory=list)
+    uncertainty: List[Optional[MultiScaleCode]] = field(default_factory=list)
 
-    cells: list[AbstractLocation] = field(default_factory=list)
-    uncertainty: list[Optional[MultiScaleCode]] = field(default_factory=list)
+    @property
+    def batch_size(self) -> int:
+        return _batch_size_from_multiscale_trace(self.cells)
+
+    def get_item(self, idx: int) -> MECState:
+        location = LocationBelief(mean=self.cells[idx], uncertainty=self.uncertainty[idx])
+        return MECState(location)
 
     def _append(self, step: MECState) -> None:
         self.cells.append(step.cells)
@@ -190,11 +217,17 @@ class MECStateTrace(TraceBase[MECState]):
 
 @dataclass
 class HPCStateTrace(TraceBase[HPCState]):
-    """HPC state trace."""
+    cells: List[GroundedLocation] = field(default_factory=list)
+    uncertainty: List[Optional[MultiScaleCode]] = field(default_factory=list)
+    memory: List[MemoryState] = field(default_factory=list)
 
-    cells: list[GroundedLocation] = field(default_factory=list)
-    uncertainty: list[Optional[MultiScaleCode]] = field(default_factory=list)
-    memory: list[Optional[list[Matrix]]] = field(default_factory=list)
+    @property
+    def batch_size(self) -> int:
+        return _batch_size_from_multiscale_trace(self.cells)
+
+    def get_item(self, idx: int) -> HPCState:
+        location = LocationBelief(mean=self.cells[idx], uncertainty=self.uncertainty[idx])
+        return HPCState(location, self.memory[idx])
 
     def _append(self, step: HPCState) -> None:
         self.cells.append(step.cells)
@@ -204,15 +237,16 @@ class HPCStateTrace(TraceBase[HPCState]):
 
 @dataclass
 class TEMStateTrace(TraceBase[TEMState]):
-    """full state trace.
-
-    Stores the full `TEMState` objects, and also provides per-module sub-traces
-    for convenience.
-    """
-
     lec: LECStateTrace = field(default_factory=LECStateTrace)
     mec: MECStateTrace = field(default_factory=MECStateTrace)
     hpc: HPCStateTrace = field(default_factory=HPCStateTrace)
+
+    @property
+    def batch_size(self) -> int:
+        return self.lec.batch_size
+
+    def get_item(self, idx: int) -> TEMState:
+        return TEMState(self.lec[idx], self.mec[idx], self.hpc[idx])
 
     def _append(self, step: TEMState) -> None:
         self.lec.append(step.lec)
@@ -222,37 +256,56 @@ class TEMStateTrace(TraceBase[TEMState]):
 
 @dataclass
 class TEMTrace(TraceBase[TEMStep]):
-    """full model trace.
-
-    Stores all per-step outputs and states from a TEM rollout.
-
-    Attributes:
-        actions: List of TEM actions taken at each step.
-        labels: TEMLabelTrace storing observations and locations.
-        output: TEMOutputTrace storing model outputs.
-        state: TEMStateTrace storing model states.
-    """
-
-    actions: list[TEMAction] = field(default_factory=list)
+    actions: List[Action] = field(default_factory=list)
     labels: TEMLabelTrace = field(default_factory=TEMLabelTrace)
     output: TEMOutputTrace = field(default_factory=TEMOutputTrace)
     state: TEMStateTrace = field(default_factory=TEMStateTrace)
 
+    @property
+    def batch_size(self) -> int:
+        return self.state.batch_size
+
+    def get_item(self, idx: int) -> TStep:
+        return RolloutStep(self.actions[idx], self.output[idx], self.labels[idx], self.state[idx])
+
+    def _append(self, step: TEMStep) -> None:
+        self.actions.append(step.actions)
+        self.labels.append(step.label)
+        self.output.append(step.output)
+        self.state.append(step.state)
+
+
+class AgentTrace(TraceBase[AgentStep]):
+    locations: List[LocationLabel] = field(default_factory=list)
+    observation: List[Observation] = field(default_factory=list)
+    action: List[Action] = field(default_factory=list)
+
+    @property
+    def batch_size(self) -> int:
+        return int(self.observation[0].shape[0]) if self.observation else 0
+
+    def get_item(self, idx: int) -> AgentStep:
+        return AgentStep(self.locations[idx], self.observation[idx], self.action[idx])
+
+    def _append(self, step: AgentStep) -> None:
+        self.locations.append(step.locations)
+        self.observation.append(step.observation)
+        self.action.append(step.action)
+
 
 @dataclass
 class DataTrace(TraceBase[DataStep]):
-    """Plot-ready trace for environment and walk data.
+    environments: List[World] = field(default_factory=list)  # Batch of environments
+    walks: AgentTrace = field(default_factory=AgentTrace)
+    visited: List[Optional[List[List[bool]]]] = field(default_factory=list)
 
-    Container-style trace assembled from already-collected arrays.
-    Does not support incremental construction via append().
-    """
+    def get_item(self, idx: int) -> TStep:
+        return DataStep(self.environments, self.walks[idx], self.visited[idx])
 
-    worlds: list[World] = field(default_factory=list)
-    walks: list[Walk] = field(default_factory=list)
-    visited: list[list[bool]] | None = None
-
-    def batch_size(self) -> int:
-        return len(self.worlds)
+    def _append(self, step: DataStep) -> None:
+        self.environments = step.environments
+        self.walks.append(step.agent_info)
+        self.visited.append(step.visited)
 
 
 @dataclass
@@ -263,7 +316,33 @@ class SimulationTrace(TraceBase[SimulationStep]):
     Does not support incremental construction via append().
     """
 
-    worlds: list[World] = field(default_factory=list)
-    location_ids: list[list[int]] = field(default_factory=list)
-    walks: list[Walk] = field(default_factory=list)
+    worlds: List[World] = field(default_factory=list)
+    location_ids: List[List[int]] = field(default_factory=list)
+    walks: List[Walk] = field(default_factory=list)
     model: TEMTrace = field(default_factory=TEMTrace)
+
+
+def _batch_size_from_multiscale(code: MultiScaleCode | None) -> int:
+    """Infer batch size from a multi-scale code.
+
+    A multi-scale code is a list of tensors, one per frequency module, each of
+    shape `(B, n_cells_f)`.
+
+    Args:
+        code: Multi-scale code or `None`.
+
+    Returns:
+        The inferred batch size `B`, or 0 if the code is missing/empty.
+    """
+
+    if not code:
+        return 0
+    return int(code[0].shape[0]) if len(code) > 0 else 0
+
+
+def _batch_size_from_multiscale_trace(trace: Sequence[MultiScaleCode]) -> int:
+    """Infer batch size from a trace of multi-scale codes."""
+
+    if not trace:
+        return 0
+    return _batch_size_from_multiscale(trace[0])

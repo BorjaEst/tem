@@ -79,10 +79,7 @@ class TEMLabelTrace(TraceBase[TEMLabel]):
         return int(self.observation[0].shape[0]) if self.observation else 0
 
     def get_item(self, idx: int) -> TStep:
-        return TEMLabel(
-            observation=self.observation[idx],
-            locations=self.locations,
-        )
+        return TEMLabel( self.observation[idx], self.locations)
 
     def _append(self, step: TEMLabel) -> None:
         self.observation.append(step.observation)
@@ -90,14 +87,19 @@ class TEMLabelTrace(TraceBase[TEMLabel]):
 
 
 @dataclass
-class TEMInferenceTrace(_TraceBase[TEMInference]):
-    """inference trace."""
-
+class TEMInferenceTrace(TraceBase[TEMInference]):
     g_inf: list[AbstractLocation] = field(default_factory=list)
     p_inf: list[GroundedLocation] = field(default_factory=list)
     p_xi: list[GroundedLocation] = field(default_factory=list)
 
-    def append(self, step: TEMInference) -> None:
+    @property
+    def batch_size(self) -> int:
+        return int(self.g_inf[0].shape[0]) if self.g_inf else 0
+    
+    def get_item(self, idx: int) -> TStep:
+        return TEMInference( self.g_inf[idx], self.p_inf[idx], self.p_xi[idx])
+
+    def _append(self, step: TEMInference) -> None:
         self.g_inf.append(step.g_inf)
         self.p_inf.append(step.p_inf)
         self.p_xi.append(step.p_xi)

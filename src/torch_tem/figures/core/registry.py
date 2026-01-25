@@ -42,7 +42,7 @@ class FigureSpec:
     """Specification for a registered figure module.
 
     Attributes:
-        name: Unique stable identifier (e.g., "tem.overview").
+        name: Unique stable identifier (e.g., "overview").
         description: Human-readable description of the figure.
         plot: Plotting function (trace, ctx) -> Figure.
         accepts: Type hint for accepted trace type.

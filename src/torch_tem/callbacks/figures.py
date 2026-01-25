@@ -37,11 +37,11 @@ class FigureCallbackSettings(BaseModel):
         description="Whether to enable figure generation callback.",
     )
     figures: List[str] = Field(
-        default_factory=lambda: ["tem.overview"],
+        default_factory=lambda: ["overview", "environment.layout", "walk.trajectories", "walk.statistics", "split.statistics"],
         description="List of figure names to generate (from registry).",
     )
     every_n_steps: int = Field(
-        default=1,
+        default=10,
         description="Generate figures every N training steps.",
     )
     max_rollout_steps: int = Field(

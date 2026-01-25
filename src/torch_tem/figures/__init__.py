@@ -15,11 +15,13 @@ Usage:
     from torch_tem.figures import style, sinks
 """
 
-from torch_tem.figures import environment, split, style, walk
+from torch_tem.figures import style
 from torch_tem.figures.core import REGISTRY, FigureContext, FigureSpec
+from torch_tem.figures.modules import environment, overview, split, walk
 from torch_tem.figures.sinks import log_tensorboard_figure, save_pdf, save_png
 
 __all__ = [
+    "overview",
     "environment",
     "walk",
     "split",

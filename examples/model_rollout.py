@@ -26,8 +26,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
+from torch_tem.diagnostics import RolloutTrace
 from torch_tem.figures import register
-from torch_tem.figures.core import FigureContext, collect_rollout_trace
+from torch_tem.figures.registry import FigureContext
 from torch_tem.model import Model as TEMModel
 from torch_tem.model import TEMConfig
 from torch_tem.settings import (
@@ -229,7 +230,7 @@ def main() -> None:
     # Step 3: Collect rollout trace with spatial alignment.
     # ------------------------------------------------------------------
     print("Step 3: Collecting rollout trace...")
-    trace = collect_rollout_trace(
+    trace = RolloutTrace.from_datamodule(
         model=model,
         datamodule=datamodule,
         split="validate",

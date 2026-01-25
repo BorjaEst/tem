@@ -31,7 +31,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.figures.core import FigureContext, collect_data_trace
+from torch_tem.diagnostics.traces import DataTrace
+from torch_tem.figures.registry import FigureContext
 from torch_tem.settings import CurriculumSettings, EnvironmentSettings, EnvSamplingSettings, RolloutStreamSettings, SpaceContractSettings
 
 NAME = __file__.split("/")[-1].replace(".py", "")
@@ -167,7 +168,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step 3: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
-    trace = collect_data_trace(datamodule, "validate")
+    trace = DataTrace.from_datamodule(datamodule, "validate")
     ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
 
     figs: list[tuple[str, plt.Figure]] = [

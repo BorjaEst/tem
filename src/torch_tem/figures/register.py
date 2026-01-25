@@ -4,7 +4,7 @@ Import this module to register all built-in figures. This avoids circular
 import issues by separating registration from core infrastructure.
 """
 
-from torch_tem.diagnostics.traces import DataTrace, RolloutTrace, TEMTrace
+from torch_tem.diagnostics.traces import RolloutTrace, TEMOutputTrace, TEMStateTrace, WorldTrace
 from torch_tem.figures.modules import environment, overview, split, walk
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
@@ -21,7 +21,7 @@ def register_builtin_figures() -> None:
             name="overview",
             description="Multi-panel TEM model overview (g_inf, g_gen, actions)",
             plot=overview.observations.plot,
-            accepts=TEMTrace,
+            accepts=TEMStateTrace,
             tags={"model", "rollout", "overview"},
         )
     )
@@ -43,7 +43,7 @@ def register_builtin_figures() -> None:
             name="environment.layout",
             description="Static environment layout showing locations and connectivity",
             plot=environment.layout.plot,
-            accepts=DataTrace,
+            accepts=WorldTrace,
             tags={"data", "environment", "debug"},
         )
     )
@@ -54,7 +54,7 @@ def register_builtin_figures() -> None:
             name="walk.trajectories",
             description="Walk trajectories overlaid on environment map (deterministic)",
             plot=walk.trajectories.plot,
-            accepts=DataTrace,
+            accepts=WorldTrace,
             tags={"data", "walk", "debug"},
         )
     )
@@ -64,7 +64,7 @@ def register_builtin_figures() -> None:
             name="walk.statistics",
             description="Walk summary statistics (length, actions, revisits, shiny hits)",
             plot=walk.statistics.plot,
-            accepts=DataTrace,
+            accepts=WorldTrace,
             tags={"data", "walk", "statistics"},
         )
     )
@@ -75,7 +75,7 @@ def register_builtin_figures() -> None:
             name="split.statistics",
             description="Dataset split summary statistics (env sizes, walk lengths)",
             plot=split.statistics.plot,
-            accepts=DataTrace,
+            accepts=WorldTrace,
             tags={"data", "split", "statistics"},
         )
     )

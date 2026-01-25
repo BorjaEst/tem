@@ -11,11 +11,11 @@ import numpy as np
 import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import TEMTrace
+from torch_tem.diagnostics.traces import TEMStateTrace
 from torch_tem.figures.registry import FigureContext
 
 
-def plot(trace: TEMTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TEMStateTrace, ctx: FigureContext) -> Figure:
     """Generate TEM overview figure from a model rollout trace.
 
     Creates a multi-panel figure showing:
@@ -24,7 +24,7 @@ def plot(trace: TEMTrace, ctx: FigureContext) -> Figure:
     - Actions taken over time
 
     Args:
-        trace: TEMTrace with model outputs (CPU/NumPy).
+        trace: TEMStateTrace with model outputs (CPU/NumPy).
         ctx: Figure context (env_idx, freq_idx, figsize, style, etc.).
 
     Returns:
@@ -47,7 +47,7 @@ def plot(trace: TEMTrace, ctx: FigureContext) -> Figure:
     # Panel 1: g_inf over time (selected frequency scale, all features)
     g_inf_steps = trace.output.inference.g_inf  # list[T] of MultiScaleCode
     if len(g_inf_steps) == 0:
-        raise ValueError("TEMTrace has no inference steps")
+        raise ValueError("TEMStateTrace has no inference steps")
     if not (0 <= freq_idx < len(g_inf_steps[0])):
         raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(g_inf_steps[0])})")
 
@@ -61,7 +61,7 @@ def plot(trace: TEMTrace, ctx: FigureContext) -> Figure:
     # Panel 2: g_gen over time (selected frequency scale, all features)
     g_gen_steps = trace.output.generative.g_gen
     if len(g_gen_steps) == 0:
-        raise ValueError("TEMTrace has no generative steps")
+        raise ValueError("TEMStateTrace has no generative steps")
     if not (0 <= freq_idx < len(g_gen_steps[0])):
         raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(g_gen_steps[0])})")
 

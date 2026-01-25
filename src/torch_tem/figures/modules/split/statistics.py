@@ -9,11 +9,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import DataTrace
+from torch_tem.diagnostics.traces import WorldTrace
 from torch_tem.figures.registry import FigureContext
 
 
-def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
+def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     """Generate dataset split statistics figure.
 
     Creates a summary figure showing:
@@ -23,7 +23,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     - Split metadata
 
     Args:
-        trace: DataTrace with environment(s) and walk(s).
+        trace: WorldTrace with environment(s) and walk(s).
         ctx: Figure context (env_idx, figsize, style, etc.).
 
     Returns:

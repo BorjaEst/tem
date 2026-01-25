@@ -16,8 +16,7 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
-from torch_tem.data import rollout
-from torch_tem.diagnostics.traces import DataTrace, RolloutTrace
+from torch_tem.diagnostics.traces import RolloutTrace
 from torch_tem.figures import register, sinks
 from torch_tem.figures.registry import REGISTRY, FigureContext
 
@@ -129,7 +128,7 @@ class FiguresCallback(pl.Callback):
     def _generate_figures(self, trainer: Trainer, pl_module: LightningModule, batch: Any) -> None:
         """Generate and persist all configured figures.
 
-        Builds TEMTrace (for model diagnostics), DataTrace (for data/walk figures),
+        Builds TEMStateTrace (for model diagnostics), WorldTrace (for data/walk figures),
         and RolloutTrace (for combined spatial figures), then dispatches each requested
         figure to the appropriate trace using isinstance-based type matching.
 
@@ -163,7 +162,7 @@ class FiguresCallback(pl.Callback):
 
         # Generate and persist each figure
         context = self.figure_context(trainer, split_name="train")
-        traces = [rollout_trace, rollout_trace.model, rollout_trace.data]
+        traces = [rollout_trace, rollout_trace.world_step, rollout_trace.output, rollout_trace.state]
 
         for figure_name in self.settings.figures:
             spec = REGISTRY.get(figure_name)

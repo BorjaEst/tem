@@ -10,19 +10,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import DataTrace
+from torch_tem.diagnostics.traces import WorldTrace
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
 
 
-def plot(trace: DataTrace, ctx: FigureContext, *, deterministic: bool = True, seed: int = 42, max_steps: int | None = None) -> Figure:
+def plot(trace: WorldTrace, ctx: FigureContext, *, deterministic: bool = True, seed: int = 42, max_steps: int | None = None) -> Figure:
     """Generate walk trajectory figure.
 
     Renders walk trajectories overlaid on the environment map. By default,
     uses deterministic jitter for reproducible visualizations.
 
     Args:
-        trace: DataTrace with environment(s) and walk(s).
+        trace: WorldTrace with environment(s) and walk(s).
         ctx: Figure context (env_idx, figsize, style, etc.).
         deterministic: Whether to use deterministic jitter (default: True).
         seed: Random seed for deterministic jitter (default: 42).

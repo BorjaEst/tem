@@ -12,11 +12,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import DataTrace
+from torch_tem.diagnostics.traces import WorldTrace
 from torch_tem.figures.registry import FigureContext
 
 
-def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
+def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     """Generate walk statistics figure.
 
     Creates a multi-panel figure showing:
@@ -26,7 +26,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     - Shiny object hit statistics (if applicable)
 
     Args:
-        trace: DataTrace with environment(s) and walk(s).
+        trace: WorldTrace with environment(s) and walk(s).
         ctx: Figure context (env_idx, figsize, style, etc.).
 
     Returns:
@@ -107,7 +107,7 @@ def _infer_action_count(environments: list[Any], action_counts: Counter) -> int:
     return max(max_env_actions, 1)
 
 
-def _collect_shiny_hits(trace: DataTrace) -> list[int]:
+def _collect_shiny_hits(trace: WorldTrace) -> list[int]:
     """Count shiny hits per environment over the trace duration."""
     if not trace.environments or not trace.world_step:
         return []

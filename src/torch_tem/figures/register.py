@@ -4,7 +4,7 @@ Import this module to register all built-in figures. This avoids circular
 import issues by separating registration from core infrastructure.
 """
 
-from torch_tem.diagnostics import DataTrace, ModelTrace, RolloutTrace
+from torch_tem.diagnostics import DataTrace, SimulationTrace, TEMTrace
 from torch_tem.figures.modules import environment, overview, split, walk
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
@@ -21,7 +21,7 @@ def register_builtin_figures() -> None:
             name="overview",
             description="Multi-panel TEM model overview (g_inf, g_gen, actions)",
             plot=overview.observations.plot,
-            accepts=ModelTrace,
+            accepts=TEMTrace,
             tags={"model", "rollout", "overview"},
         )
     )
@@ -32,7 +32,7 @@ def register_builtin_figures() -> None:
             name="overview.rate_maps",
             description="Multi-panel overview with spatial rate maps (g_inf, g_gen)",
             plot=overview.rate_maps.plot,
-            accepts=RolloutTrace,
+            accepts=SimulationTrace,
             tags={"model", "rollout", "spatial", "overview"},
         )
     )

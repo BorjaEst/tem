@@ -13,7 +13,7 @@ Settings composition:
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, TypeAlias
 
 import lightning.pytorch as pl
 import numpy as np
@@ -23,6 +23,8 @@ from torch.utils.data import DataLoader, IterableDataset
 
 from torch_tem import data, settings
 from torch_tem.data.env_validation import validate_envs_against_contract
+
+DataStep: TypeAlias = None  # TODO: replace with actual DataStep
 
 
 class DataConfig(BaseModel):

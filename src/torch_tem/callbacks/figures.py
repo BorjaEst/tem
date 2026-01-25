@@ -16,7 +16,7 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
-from torch_tem.diagnostics import DataTrace, RolloutTrace
+from torch_tem.diagnostics import DataTrace, SimulationTrace
 from torch_tem.figures import register, sinks
 from torch_tem.figures.registry import REGISTRY, FigureContext
 from torch_tem.model import RolloutStream
@@ -129,8 +129,8 @@ class FiguresCallback(pl.Callback):
     def _generate_figures(self, trainer: Trainer, pl_module: LightningModule, batch: Any) -> None:
         """Generate and persist all configured figures.
 
-        Builds ModelTrace (for model diagnostics), DataTrace (for data/walk figures),
-        and RolloutTrace (for combined spatial figures), then dispatches each requested
+        Builds TEMTrace (for model diagnostics), DataTrace (for data/walk figures),
+        and SimulationTrace (for combined spatial figures), then dispatches each requested
         figure to the appropriate trace using isinstance-based type matching.
 
         Args:
@@ -160,9 +160,9 @@ class FiguresCallback(pl.Callback):
         chunk_limied = chunk[: self.settings.max_rollout_steps]
         meta = {"global_step": trainer.global_step, "split": "train"}
 
-        # Create RolloutTrace via canonical constructor (single source of truth
+        # Create SimulationTrace via canonical constructor (single source of truth
         # for max-steps + downsampling across walk/location/model components)
-        rollout_trace = RolloutTrace.from_rollout(
+        rollout_trace = SimulationTrace.from_iter(
             worlds=datamodule.dataset.environments,
             rollout=RolloutStream(model, chunk_limied, initial=None),
             chunk=chunk_limied,
@@ -171,7 +171,7 @@ class FiguresCallback(pl.Callback):
             meta=meta,
         )
 
-        # Derive ModelTrace and DataTrace from the same aligned rollout
+        # Derive TEMTrace and DataTrace from the same aligned rollout
         model_trace = rollout_trace.model
         data_trace = DataTrace(
             worlds=rollout_trace.worlds,

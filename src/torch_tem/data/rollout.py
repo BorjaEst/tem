@@ -29,6 +29,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
+from torch import nn
+
+from torch_tem.data.world import World
+from torch_tem.types import Walk
+
 # Type parameters for generic RolloutStep
 ActionT = TypeVar("ActionT")
 OutputT = TypeVar("OutputT")
@@ -44,10 +49,23 @@ class RolloutStep(Generic[ActionT, OutputT, LabelT, StateT]):
     the action taken, model output, supervision labels, and recurrent state.
     """
 
-    action: ActionT
+    actions: ActionT
     output: OutputT
     label: LabelT
     state: StateT
 
 
-__all__ = ["RolloutStep"]
+@dataclass
+class SimulationStep:
+    """Specialized RolloutStep for simulation traces.
+
+    Uses specific types for TEM models.
+    """
+
+    wolrds: list[World]
+    walks: Walk
+    location_ids: list[int]
+    model: nn.Module
+
+
+__all__ = ["RolloutStep", "SimulationStep"]

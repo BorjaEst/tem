@@ -9,14 +9,15 @@ from typing import Any, Generic, Iterable, List, Optional, TypeVar
 import numpy as np
 from torch import Tensor
 
-from torch_tem.data.datamodule import DataModule
+from torch_tem.data.datamodule import DataModule, DataStep
+from torch_tem.data.rollout import RolloutStep, SimulationStep
 from torch_tem.data.world import World
 from torch_tem.model import Model as TEMModel
 from torch_tem.model import Prediction, RolloutStream, TEMAction, TEMGenerative, TEMInference, TEMLabel, TEMOutput, TEMReconstruction, TEMState, TEMStep
 from torch_tem.modules.hpc import HPCState
 from torch_tem.modules.lec import LECState
 from torch_tem.modules.mec import MECState
-from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Matrix, MultiScaleCode, Observation
+from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Matrix, MultiScaleCode, Observation, Walk
 from torch_tem.utils.walks import downsample_env_major, time_major_location_ids, time_major_to_env_major_walks
 
 TStep = TypeVar("TStep")
@@ -220,7 +221,7 @@ class TEMStateTrace(TraceBase[TEMState]):
 
 
 @dataclass
-class ModelTrace(TraceBase[TEMStep]):
+class TEMTrace(TraceBase[TEMStep]):
     """full model trace.
 
     Stores all per-step outputs and states from a TEM rollout.
@@ -239,7 +240,7 @@ class ModelTrace(TraceBase[TEMStep]):
 
 
 @dataclass
-class DataTrace(TraceBase):
+class DataTrace(TraceBase[DataStep]):
     """Plot-ready trace for environment and walk data.
 
     Container-style trace assembled from already-collected arrays.
@@ -247,12 +248,15 @@ class DataTrace(TraceBase):
     """
 
     worlds: list[World] = field(default_factory=list)
-    walks: list[list[list[Any]]] = field(default_factory=list)  # env-major: walks[env][t] = [location, obs, action]
+    walks: list[Walk] = field(default_factory=list)
     visited: list[list[bool]] | None = None
+
+    def batch_size(self) -> int:
+        return len(self.worlds)
 
 
 @dataclass
-class RolloutTrace(TraceBase):
+class SimulationTrace(TraceBase[SimulationStep]):
     """Plot-ready combined trace for model+position figures.
 
     Container-style trace combining walk data with model outputs.
@@ -260,6 +264,6 @@ class RolloutTrace(TraceBase):
     """
 
     worlds: list[World] = field(default_factory=list)
-    walks: list[list[list[Any]]] = field(default_factory=list)  # env-major: walks[env][t] = [location, obs, action]
-    location_ids: list[list[int]] = field(default_factory=list)  # location_ids[env][t] = int
-    model: ModelTrace = field(default_factory=ModelTrace)
+    location_ids: list[list[int]] = field(default_factory=list)
+    walks: list[Walk] = field(default_factory=list)
+    model: TEMTrace = field(default_factory=TEMTrace)

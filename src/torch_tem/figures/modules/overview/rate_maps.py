@@ -11,12 +11,12 @@ import numpy as np
 import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics import RolloutTrace
+from torch_tem.diagnostics import SimulationTrace
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
 
 
-def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
+def plot(trace: SimulationTrace, ctx: FigureContext) -> Figure:
     """Generate TEM overview rate-maps figure from a combined rollout trace.
 
     Creates a 2x2 layout:
@@ -26,7 +26,7 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     - Bottom-right: Spatial rate map for a single g_gen feature
 
     Args:
-        trace: RolloutTrace with model outputs + world geometry + location IDs.
+        trace: SimulationTrace with model outputs + world geometry + location IDs.
         ctx: Figure context (env_idx, freq_idx, figsize, style, etc.).
 
     Returns:
@@ -56,7 +56,7 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     # Panel 1 (top-left): g_inf time heatmap
     g_inf_steps = model_trace.output.inference.g_inf
     if len(g_inf_steps) == 0:
-        raise ValueError("ModelTrace has no inference steps")
+        raise ValueError("TEMTrace has no inference steps")
     if not (0 <= freq_idx < len(g_inf_steps[0])):
         raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(g_inf_steps[0])})")
 
@@ -70,7 +70,7 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     # Panel 2 (top-right): g_gen time heatmap
     g_gen_steps = model_trace.output.generative.g_gen
     if len(g_gen_steps) == 0:
-        raise ValueError("ModelTrace has no generative steps")
+        raise ValueError("TEMTrace has no generative steps")
     if not (0 <= freq_idx < len(g_gen_steps[0])):
         raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(g_gen_steps[0])})")
 

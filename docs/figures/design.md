@@ -1,196 +1,167 @@
-# Figures Subsystem — Design
+# TEM Figures Submodule — Design
 
-## Status
+## Summary
 
-Planned (design-first)
+This design extends the existing `torch_tem.figures` infrastructure to support:
 
-## High-Level Architecture
+- domain-namespaced figure modules (e.g., `figures.environment.layout.plot(...)`)
+- registry-driven figure generation for both model traces and data/environment traces
+- deterministic walk trajectory plotting by default
 
-### Layers and Responsibilities
+The design is intentionally minimal: it keeps the existing `FigureSpec` and `REGISTRY` APIs and extends the callback to build the right trace objects.
 
-1. Streams (live, online)
-   - torch_tem.model.RolloutStream: iterates a walk through the model, yielding (TEMOutput, TEMLabel, TEMState).
-   - Extended with Option 1: RolloutStream.iter_events() to yield richer RolloutEvent objects (includes actions / a_prev).
+## Existing Components (baseline)
 
-2. Diagnostics / Adapters (offline, CPU/NumPy)
-   - Generic collect_trace(...) utility consumes a stream of events and a TraceExtractor.
-   - Concrete extractors produce plot-ready traces:
-     - ModelRolloutTrace (TEM outputs over time; CPU NumPy arrays).
-     - DataRolloutTrace (environment + walk statistics; CPU structures).
-   - Invariant: traces contain CPU/NumPy only.
+- Registry types: [src/torch_tem/figures/core/registry.py](src/torch_tem/figures/core/registry.py)
+- Trace protocol: [src/torch_tem/figures/core/types.py](src/torch_tem/figures/core/types.py)
+- Style: [src/torch_tem/figures/style.py](src/torch_tem/figures/style.py)
+- Sinks: [src/torch_tem/figures/sinks.py](src/torch_tem/figures/sinks.py)
+- Environment drawing primitives: [src/torch_tem/figures/primitives.py](src/torch_tem/figures/primitives.py)
+- Training callback: [src/torch_tem/callbacks/figures.py](src/torch_tem/callbacks/figures.py)
+- Example model figure: [src/torch_tem/figures/modules/overview.py](src/torch_tem/figures/modules/overview.py)
 
-3. Figures (pure plotting)
-   - Figure modules accept traces + styling/context and return matplotlib.figure.Figure.
-   - No filesystem/Lightning dependencies.
+## Package Layout
 
-4. Orchestration (outside figures)
-   - torch_tem.callbacks.FiguresCallback: decides when to extract trace(s), which figures to generate, and which sinks to use.
-   - torch_tem.figures.sinks: persists figures (PDF/PNG, TensorBoard previews).
+Add domain subpackages under `torch_tem.figures`:
 
-### Package Layout (target)
+- `torch_tem/figures/__init__.py`
+  - re-export domains: `environment`, `walk`, `split`, `overview`
+  - re-export `style`, `sinks` (optional)
 
-- src/torch_tem/figures/
-  - primitives.py (existing)
-  - style.py (existing)
-  - sinks.py (existing)
-  - tem_overview.py (existing; will be registry-registered)
-  - core/
-    - types.py (Protocols: PlotTrace, TraceExtractor, registry spec types)
-    - collect.py (generic collect_trace)
-    - registry.py (figure registry)
-    - context.py (FigureContext metadata; style; default figsize; etc.)
-  - Future (planned, not required in first slice):
-    - environment/layout.py
-    - walk/trajectories.py, walk/statistics.py
-    - split/statistics.py
+- `torch_tem/figures/modules/environment/`
+  - `layout.py` → `plot(trace: DataTrace, ctx: FigureContext) -> Figure`
 
-## Key Interfaces
+- `torch_tem/figures/modules/walk/`
+  - `trajectories.py` → `plot(trace: DataTrace, ctx: FigureContext) -> Figure`
+  - `statistics.py` → `plot(trace: DataTrace, ctx: FigureContext) -> Figure`
 
-### 1) Rollout Events (Option 1)
+- `torch_tem/figures/modules/split/`
+  - `statistics.py` → `plot(trace: DataTrace, ctx: FigureContext) -> Figure`
 
-Define RolloutEvent dataclass in a diagnostics-friendly module.
+Model figures remain where they are (`torch_tem/figures/modules/*`) in v1.
 
-Fields:
+## Core Design: Two Trace Families
 
-- t: int
-- locations: list[LocationLabel]
-- observation: Observation
-- action: list[Optional[int]] (current step action list)
-- a_prev: list[Optional[int]] (previous actions used for reset logic)
-- output: TEMOutput
-- label: TEMLabel
-- state: TEMState
+### 1) ModelTrace
 
-Add to RolloutStream:
+Used by existing training diagnostics. Produced in the callback via `ModelTrace.from_rollout(...)`.
 
-- iter_events(self) -> Iterator[RolloutEvent]
-- Does not change **next** output; existing code remains valid.
+### 2) DataTrace (new)
 
-### 2) PlotTrace Protocol
+Used for environment/walk/split figures.
 
-Define PlotTrace as a Protocol (capabilities-based, not field-based):
+#### Data model
 
-- batch_size: int
-- n_steps: int
-- select_env(env_idx: int) -> Self
-- downsample_time(stride: int) -> Self
-- meta: Mapping[str, Any] (recommended for run/split/step metadata)
+`DataTrace` is a lightweight, plot-oriented wrapper around a batch of environments and walks.
 
-Concrete traces implement this Protocol.
+Proposed fields:
 
-### 3) TraceExtractor Protocol
+- `worlds: list[torch_tem.data.world.World]`
+- `walks: list[list[list[Any]]]` (current walk step shape: `[location_dict, observation_tensor, action_int]`)
+- `visited: list[list[bool]] | None`
+- `meta: dict[str, Any]`
 
-Generic builder:
+#### Protocol compliance
 
-- observe(event: EventT) -> None
-- finalize() -> TraceT
+`DataTrace` SHALL implement the `PlotTrace` protocol:
 
-TraceT must satisfy PlotTrace when used for figures.
+- `batch_size: int` → number of environments
+- `n_steps: int` → number of timesteps in the selected walk
+- `select_env(env_idx)` → returns a single-env `DataTrace`
+- `downsample_time(stride)` → downsample walk steps deterministically
 
-### 4) collect_trace
+This enables:
 
-collect_trace(stream, extractor, \*, max_steps: Optional[int], downsample_stride: int) -> TraceT
+- uniform registry execution (`spec.plot(trace, ctx)`)
+- type-based dispatch in the callback (`isinstance(trace, spec.accepts)`)
 
-Semantics:
+## Determinism Strategy
 
-- Iterate stream events.
-- Keep event if step_count % downsample_stride == 0.
-- Stop when step_count >= max_steps (counts observed events).
-- Raise ValueError if no samples were collected (unless extractor declares empty_ok).
+Current primitives (notably walk plotting) introduce randomness via jitter.
 
-### 5) Figure Registry
+Design requirement: deterministic by default.
 
-Registry is the single source of truth for name → plotting function mapping.
+Approach:
 
-FigureSpec fields:
+- Add a deterministic RNG parameterization to the trajectory plotting path.
+- Prefer injecting a local RNG (NumPy `Generator`) into the plotting function rather than using global `np.random`.
+- Provide an explicit config flag (e.g., `deterministic: bool = True`) and optional `seed`.
 
-- name: str (stable id, e.g., "tem.overview")
-- description: str
-- plot(trace: PlotTrace, ctx: FigureContext) -> matplotlib.figure.Figure
-- accepts: type[PlotTrace] (start type-based; predicate optional later)
-- optional: default_filename: str, tags: set[str]
+Implementation detail:
 
-FigureRegistry:
+- Either update [src/torch_tem/figures/primitives.py](src/torch_tem/figures/primitives.py) to accept `rng`/`seed`, or keep primitives unchanged and implement deterministic jitter in the higher-level `walk.trajectories` figure.
 
-- register(spec: FigureSpec) -> None
-- get(name: str) -> FigureSpec
-- list() -> list[FigureSpec]
-- validate(names: list[str]) -> None (used by Settings validation and callback startup)
+## Styling Strategy
 
-Registry import model (explicit import, recommended):
+Use the existing `StyleConfig.apply_context()` from [src/torch_tem/figures/style.py](src/torch_tem/figures/style.py).
 
-- A single module imports known figure modules (e.g., tem_overview) and registers them deterministically.
+Rule:
 
-## Data Flow / Sequence Diagrams
+- Figure modules should wrap plotting in a context manager:
+  - `with (ctx.style or DEFAULT_STYLE).apply_context(): ...`
 
-### A) Lightning callback figure generation
+This prevents global matplotlib state leakage.
 
-```mermaid
-sequenceDiagram
-  participant Trainer
-  participant Callback as FiguresCallback
-  participant Model as torch_tem.model.Model
-  participant RS as RolloutStream
-  participant Extract as collect_trace + Extractor
-  participant Reg as FigureRegistry
-  participant Fig as FigureModule (plot)
-  participant Sinks as sinks.py
+## Registry Naming and Tags
 
-  Trainer->>Callback: on_train_batch_start(batch, global_step)
-  Callback->>RS: RolloutStream(Model, chunk, initial=None)
-  Callback->>RS: iter_events()
-  Callback->>Extract: collect_trace(events, extractor, max_steps, stride)
-  Extract-->>Callback: ModelRolloutTrace (CPU/NumPy)
-  Callback->>Reg: get("tem.overview")
-  Reg-->>Callback: FigureSpec
-  Callback->>Fig: plot(trace, ctx)
-  Fig-->>Callback: matplotlib Figure
-  Callback->>Sinks: save_pdf(...) and/or log_tensorboard_figure(...)
-  Sinks-->>Callback: done (optionally closes figure)
-```
+Stable registry names mirror domain paths:
 
-### B) Notebook usage (pure figures)
+- `overview` (existing)
+- `environment.layout`
+- `walk.trajectories`
+- `walk.statistics`
+- `split.statistics`
 
-```mermaid
-sequenceDiagram
-  participant User
-  participant RS as RolloutStream
-  participant Extract as collect_trace
-  participant Fig as figures.tem_overview (plot/make_figure)
+Tags:
 
-  User->>RS: RolloutStream(model, walk)
-  User->>Extract: collect_trace(RS.iter_events(), extractor)
-  Extract-->>User: ModelRolloutTrace
-  User->>Fig: plot(trace, ctx/style)
-  Fig-->>User: Figure
-```
+- Model figures: `{"model", "rollout"}`
+- Data figures: `{"data", "debug"}`
 
-## Migration Plan (Design)
+## Callback Integration
 
-1. Keep existing TEMRolloutTrace initially but rebrand as ModelRolloutTrace (type alias or new name).
-2. Rewrite extract_rollout_trace into:
-   - a concrete extractor (ModelRolloutTraceExtractor)
-   - and a thin wrapper function for compatibility.
-3. Introduce registry and register tem_overview as "tem.overview".
-4. Update callback dispatch to registry lookup.
+The existing callback currently builds only `ModelTrace`.
 
-## Alternatives Considered
+To support data figures in v1 without changing `FigureSpec`:
 
-- Dynamic import by name (rejected): couples config strings to module paths; weaker validation; harder to list figures.
-- One mega GenericPlotTrace dataclass (rejected): becomes a dumping ground; harms maintainability; Protocol + concrete traces is better.
-- Extending RolloutStream to store full trace (rejected): breaks streaming/memory efficiency; extraction should remain offline.
+1. build `ModelTrace` as today
+2. build `DataTrace` from the training batch and datamodule environments
+3. for each requested figure name:
+   - if `spec.accepts` matches `ModelTrace`, pass `ModelTrace`
+   - if it matches `DataTrace`, pass `DataTrace`
+   - otherwise skip with a warning
 
-## Dependencies
+This keeps `FigureSpec` stable and avoids introducing a second registry.
 
-- Matplotlib + NumPy (already used).
-- Existing Lightning callback + TensorBoard logging utilities (already present).
-- typing.Protocol + TypeVar.
+## Offline Integration
 
-## Testing Strategy
+Offline scripts should not access internal dataset state directly.
 
-- Unit tests for:
-  - collect_trace stride/max_steps semantics.
-  - RolloutStream.iter_events() correctness (actions and a_prev alignment).
-  - Registry: register/get/list/validate.
-- Smoke test:
-  - Generate "tem.overview" from a short trace and ensure a Figure is returned and closed appropriately by sinks.
+Provide a “collector” utility:
+
+- `collect_data_trace(datamodule, split) -> DataTrace`
+  which:
+- samples a batch using `sample_batch(split)`
+- retrieves the corresponding `World` objects for that split
+- assembles a `DataTrace`
+
+This standardizes access patterns and makes it easier to test.
+
+## Error Handling Matrix
+
+- Unknown figure name: `REGISTRY.validate(...)` raises `ValueError` with available names.
+- Incompatible trace type:
+  - training callback: warn and skip
+  - offline direct usage: raise `TypeError` with expected type
+- Invalid `env_idx`: raise `IndexError` with valid range.
+- Missing optional deps for sinks (e.g., PIL): raise `ImportError` with install hint.
+
+## Testing Plan
+
+- Unit tests for `DataTrace` protocol behavior (`select_env`, `downsample_time`).
+- Unit tests that each new figure module returns a `matplotlib.figure.Figure`.
+- Determinism test: generate `walk.trajectories` twice with same seed/config and compare rendered pixel arrays (PNG buffer) or compare plotted coordinates.
+- Smoke test: run the offline example path to generate figures to disk.
+
+## Decision Record (compressed)
+
+Decision: Use a `DataTrace` implementing `PlotTrace` | Rationale: enables registry + callback parity for data figures | Impact: adds a small new trace type and collector utility | Review: revisit if data pipeline batch contract is refactored.

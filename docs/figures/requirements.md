@@ -1,61 +1,83 @@
-# Figures Subsystem — Requirements
+# TEM Figures Submodule — Requirements
 
-## Goal
+## Objective
 
-Provide a composable, extensible figures subsystem that:
+Provide a cohesive `torch_tem.figures` submodule that supports:
 
-- Keeps plotting logic pure and reusable (notebook + Lightning).
-- Uses stable, discoverable figure names (registry-based).
-- Builds plot inputs via traces (CPU/NumPy), extracted from streaming sources (e.g., RolloutStream).
+1. registry-driven figure generation during training (Lightning callback), and
+2. offline/debug visualization of environments, policies, walks, and dataset splits.
 
-## User Stories
+The design MUST preserve the existing figure infrastructure:
 
-- As a researcher, I want to generate standardized figures from experiment artifacts (data, model rollouts) so I can understand behavior quickly and reproducibly.
-- As a developer, I want to add a new figure module by implementing a small contract and registering it, without editing central dispatch code in multiple places.
-- As a training user, I want Lightning callbacks to generate selected figures by name, saving PDF artifacts and logging previews to TensorBoard, without plotting code depending on Lightning.
+- registry/specs in [src/torch_tem/figures/core/registry.py](src/torch_tem/figures/core/registry.py)
+- sinks in [src/torch_tem/figures/sinks.py](src/torch_tem/figures/sinks.py)
+- style in [src/torch_tem/figures/style.py](src/torch_tem/figures/style.py)
+- environment drawing primitives in [src/torch_tem/figures/primitives.py](src/torch_tem/figures/primitives.py)
+- training integration in [src/torch_tem/callbacks/figures.py](src/torch_tem/callbacks/figures.py)
 
-## Acceptance Criteria (EARS)
+## Actors
 
-### Plotting Purity / Boundaries
+- Researcher (offline): runs scripts such as [examples/data_datamodule.py](examples/data_datamodule.py)
+- Trainer (online): uses [src/torch_tem/callbacks/figures.py](src/torch_tem/callbacks/figures.py)
 
-- REQ-001: WHEN a figure is generated, THE SYSTEM SHALL require a plot-ready trace input (not a live model or DataModule) as the primary plotting input.
-- REQ-002: WHEN figure code is executed, THE SYSTEM SHALL NOT depend on Lightning objects (Trainer/Logger) or filesystem paths.
-- REQ-003: WHEN a plot is generated, THE SYSTEM SHALL return a matplotlib Figure and SHALL NOT call plt.show().
+## Decisions (locked)
 
-### Trace Invariants
+- Data/environment figures SHALL be callable through the registry and usable from the Lightning callback in v1.
+- Walk trajectory plotting SHALL be deterministic by default.
+- Data/environment figure inputs SHALL use a structured trace object (a “data trace”) rather than relying on ad-hoc access to internal dataset fields.
 
-- REQ-010: WHEN a trace is created for plotting, THE SYSTEM SHALL detach tensors and move data to CPU and store them as NumPy arrays (or Python scalars/structures).
-- REQ-011: WHEN a trace is created from a stream, THE SYSTEM SHALL support downsampling via a stride parameter.
-- REQ-012: WHEN a trace is created from a stream, THE SYSTEM SHALL support a maximum-step limit.
+## Functional Requirements (EARS)
 
-### Rollout Reuse
+### Imports and Namespacing
 
-- REQ-020: WHEN extracting model-rollout plot traces, THE SYSTEM SHALL reuse torch_tem.model.RolloutStream as the underlying rollout mechanism.
-- REQ-021: WHEN action/episode-boundary information is needed for plotting, THE SYSTEM SHALL expose it via an event iterator API (Option 1) without breaking existing RolloutStream iteration semantics.
+- WHEN a user imports `from torch_tem import figures`, THE SYSTEM SHALL expose importable domains such that `figures.environment`, `figures.walk`, and `figures.split` are available.
 
-### Figure Registry / Naming
+### Registry and Discovery
 
-- REQ-030: WHEN figures are configured by string name (e.g., via FigureCallbackSettings.figures), THE SYSTEM SHALL resolve names via a registry (not hardcoded if/else dispatch).
-- REQ-031: WHEN a figure name is unknown, THE SYSTEM SHALL fail with a clear error that includes available figure names.
-- REQ-032: WHEN listing figures (for help/CLI/validation), THE SYSTEM SHALL provide a deterministic list of registered figures including name and description.
+- WHEN built-in figures are loaded, THE SYSTEM SHALL register all built-in figure specs into the global `REGISTRY` with stable names.
+- WHEN a user configures the training callback with `figures=[...]`, THE SYSTEM SHALL validate requested names and fail fast with an actionable error if any are unknown.
 
-### Compatibility / Migration
+### Figure Generation
 
-- REQ-040: WHEN migrating from the current TEMRolloutTrace, THE SYSTEM SHALL provide a compatible trace type that can be used by existing figures (tem_overview) with minimal refactor.
-- REQ-041: WHEN migrating the callback dispatch, THE SYSTEM SHALL preserve existing behaviors: periodic generation, PDF saving, TensorBoard logging, rank-zero safety, and figure closing.
+- WHEN a registered figure is executed, THE SYSTEM SHALL call its `plot(trace, ctx)` callable and return a `matplotlib.figure.Figure`.
+- WHEN a figure receives an incompatible trace type, THE SYSTEM SHALL skip generation (training) or raise a clear `TypeError` (offline usage), depending on entrypoint.
 
-## Security / Safety
+### Trace Types
 
-- SEC-001: IF figure generation fails during training, THEN THE SYSTEM SHALL catch exceptions and continue training (log/print error), preserving current callback fault-tolerance behavior.
-- SEC-002: WHEN saving/logging figures, THE SYSTEM SHALL ensure figures are closed when configured to prevent memory leaks during long runs.
+- WHEN generating model figures in training, THE SYSTEM SHALL support `ModelTrace` inputs.
+- WHEN generating environment/walk figures, THE SYSTEM SHALL support a dedicated `DataTrace` type that:
+  - contains the environment(s)
+  - contains the walk sequence(s)
+  - implements the `PlotTrace` protocol (batch selection and time downsampling)
 
-## Constraints
+### Styling
 
-- CON-001: Use Matplotlib as the figure backend (current codebase usage).
-- CON-002: Keep the figures package layered: primitives/style/sinks + figure modules.
-- CON-003: Prefer minimal OOP: Protocols + dataclasses + registry; avoid deep inheritance trees.
+- WHEN generating a figure, THE SYSTEM SHALL apply `StyleConfig` without permanently mutating global matplotlib state.
 
-## Out of Scope (for this iteration)
+### Outputs
 
-- Formal CLI tooling for figure generation beyond what already exists.
-- Reworking all legacy plotting functions (plot_map, plot_walk, etc.) beyond what is required to integrate the new architecture.
+- WHEN configured to save artifacts, THE SYSTEM SHALL save PDF and/or PNG outputs using sinks.
+- WHEN configured to log previews, THE SYSTEM SHALL log TensorBoard images via sinks.
+
+### Determinism
+
+- WHEN plotting walk trajectories, THE SYSTEM SHALL be deterministic by default.
+- IF a user requests non-determinism, THEN THE SYSTEM SHALL provide an explicit configuration switch to enable randomness.
+
+## Non-Functional Requirements
+
+- THE SYSTEM SHALL keep figure modules small and composable (“one module = one figure”).
+- THE SYSTEM SHALL preserve backward compatibility with legacy plotting primitives re-exported elsewhere.
+- THE SYSTEM SHALL avoid introducing new heavy plotting dependencies (matplotlib is sufficient).
+- THE SYSTEM SHALL be testable with fast unit tests.
+
+## Acceptance Criteria
+
+- Offline: [examples/data_datamodule.py](examples/data_datamodule.py) can generate at least:
+  - `environment.layout`
+  - `walk.trajectories`
+  - `walk.statistics`
+  - `split.statistics` (if implemented)
+    without placeholders (`...`) and without exceptions.
+- Online: the Lightning callback can generate both `overview` and at least one data figure from the same registry using the batch available at `on_train_batch_start`.
+- Determinism: repeated runs with the same seed/config produce identical trajectory visuals (within rasterization tolerances).

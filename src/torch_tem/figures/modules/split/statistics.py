@@ -33,7 +33,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     axes = axes.flatten()
 
     # Panel 1: Environment size distribution (n_locations)
-    env_sizes = [env.n_locations for env in trace.worlds]
+    env_sizes = [env.n_locations for env in trace.environments]
     axes[0].hist(env_sizes, bins=20, edgecolor="black", alpha=0.7, color="steelblue")
     axes[0].set_title("Environment Size Distribution")
     axes[0].set_xlabel("Number of Locations")
@@ -41,7 +41,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     axes[0].grid(alpha=0.3)
 
     # Panel 2: Walk length distribution
-    walk_lengths = [len(walk) for walk in trace.walks]
+    walk_lengths = [len(trace.agent_info)] * trace.batch_size
     axes[1].hist(walk_lengths, bins=20, edgecolor="black", alpha=0.7, color="coral")
     axes[1].set_title("Walk Length Distribution")
     axes[1].set_xlabel("Walk Length (steps)")
@@ -49,7 +49,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     axes[1].grid(alpha=0.3)
 
     # Panel 3: Number of actions per environment
-    n_actions_list = [env.n_actions for env in trace.worlds]
+    n_actions_list = [env.n_actions for env in trace.environments]
     axes[2].hist(n_actions_list, bins=20, edgecolor="black", alpha=0.7, color="mediumseagreen")
     axes[2].set_title("Action Space Size")
     axes[2].set_xlabel("Number of Actions")

@@ -182,6 +182,26 @@ class DataModule(pl.LightningDataModule):
         raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
 
 
+@dataclass
+class AgentStep:
+    """Container for a single time step of agent data (batched).
+
+    Notes:
+        Locations and actions are stored per environment in the batch.
+    """
+
+    locations: List[LocationLabel]  # (B, )
+    observation: Observation  # (B, n_o)
+    action: List[Action]  # (B, )
+
+
+@dataclass
+class DataStep:
+    environments: List[World]
+    agent_info: AgentStep
+    visited: Optional[List[List[bool]]]
+
+
 class TEMDataset(IterableDataset):
     """Iterable dataset that generates TEM batches on-the-fly.
 
@@ -324,17 +344,3 @@ class TEMDataset(IterableDataset):
             "n": shiny_settings.shiny_n,
             "returns": shiny_settings.shiny_returns,
         }
-
-
-@dataclass
-class AgentStep:
-    locations: List[LocationLabel]
-    observation: Observation
-    action: Action
-
-
-@dataclass
-class DataStep:
-    environments: List[World]
-    agent_info: AgentStep
-    visited: Optional[List[List[bool]]]

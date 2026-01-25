@@ -276,9 +276,9 @@ class TEMTrace(TraceBase[TEMStep]):
 
 @dataclass
 class AgentTrace(TraceBase[AgentStep]):
-    locations: List[LocationLabel] | None = field(default=None)
-    observation: List[Observation] = field(default_factory=list)
-    action: List[Action] = field(default_factory=list)
+    locations: List[LocationLabel] | None = field(default=None)  # (B, )
+    observation: List[Observation] = field(default_factory=list)  # (T, B)
+    action: List[List[Action]] = field(default_factory=list)  # (T, B)
 
     @property
     def batch_size(self) -> int:

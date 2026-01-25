@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
-"""Data generation example with CLI configuration and visualizations.
+"""Generate TEM data via CLI and visualize results.
 
-This example demonstrates the torch_tem.data module capabilities:
-- Environment loading and validation
-- Policy generation (random, distance-based, Q-learning)
-- Walk sampling with different strategies
-- Shiny object environments
-- PyTorch Lightning DataModule integration
+This script is a runnable, end-to-end example of the `torch_tem.data` stack:
 
-Usage:
-    python examples/data_datamodule.py --sequence-length 150 --batch-size 32 --n-train-batches 500
-    python examples/data_datamodule.py --environment.width 10 --environment.height 10 --policy.type distance --policy.beta 2.0
-    python examples/data_datamodule.py --help
+- Load and validate an environment.
+- Configure policies (random, distance-based, Q-learning) and optional shiny
+    object sampling.
+- Sample agent walks under different curricula.
+- Integrate the resulting streams with a Lightning-style `DataModule`.
+- Produce quick diagnostic figures for sanity-checking the generated data.
+
+Examples:
+        # Default settings (interactive plots).
+        python examples/data_datamodule.py
+
+        # Run headless (do not show or save figures).
+    python examples/data_datamodule.py --show_plots false --save_plots false
+
+        # Override nested settings.
+        python examples/data_datamodule.py --env.width 10 --env.height 10 \
+                --policy.type distance --policy.beta 2.0
 """
 
+import logging
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 from pydantic import Field, field_validator
@@ -23,45 +31,88 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
+from torch_tem.figures.core import FigureContext, collect_data_trace
 from torch_tem.settings import CurriculumSettings, EnvironmentSettings, EnvSamplingSettings, RolloutStreamSettings, SpaceContractSettings
+
+NAME = __file__.split("/")[-1].replace(".py", "")
+logger = logging.getLogger(NAME)
 
 
 # ==============================================================================
 # Configuration
 # ==============================================================================
 class ExampleArguments(BaseSettings):
-    """Configuration for data generation example."""
+    """CLI configuration for this example.
 
-    model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name="data_generation")
+    This settings object is intentionally composed of the same "leaf" settings
+    used by the library so the example stays close to real training runs.
+    """
 
-    # General settings
-    drop_last: bool = Field(default=False, description="Drop last incomplete batch")
+    model_config = SettingsConfigDict(extra="forbid", cli_parse_args=True, cli_prog_name=NAME)
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
+    )
 
     # Data configuration (leaves)
-    space: SpaceContractSettings = Field(default_factory=SpaceContractSettings, description="Space contract: observation and action space dimensions.")
-    env: EnvironmentSettings = Field(default_factory=EnvironmentSettings, description="Environment generation settings.")
-    iterator: RolloutStreamSettings = Field(default_factory=RolloutStreamSettings, description="Iterator protocol settings (rollout chunking + eval protocol).")
-    policy: EnvSamplingSettings = Field(default_factory=EnvSamplingSettings, description="Data generation policies (exploration + shiny).")
-    walk: CurriculumSettings = Field(default_factory=CurriculumSettings, description="Walk length curriculum settings.")
+    space: SpaceContractSettings = Field(
+        default_factory=SpaceContractSettings,
+        description="Space contract: observation and action space dimensions.",
+    )
+    env: EnvironmentSettings = Field(
+        default_factory=EnvironmentSettings,
+        description="Environment generation settings.",
+    )
+    iterator: RolloutStreamSettings = Field(
+        default_factory=RolloutStreamSettings,
+        description="Iterator protocol settings (rollout chunking + eval protocol).",
+    )
+    policy: EnvSamplingSettings = Field(
+        default_factory=EnvSamplingSettings,
+        description="Data generation policies (exploration + shiny).",
+    )
+    walk: CurriculumSettings = Field(
+        default_factory=CurriculumSettings,
+        description="Walk length curriculum settings.",
+    )
 
     # Output
-    output_dir: Path = Field(default=Path("outputs/data_generation"), description="Directory for saving plots")
-    show_plots: bool = Field(default=True, description="Display plots interactively")
-    save_plots: bool = Field(default=True, description="Save plots to output directory")
+    output_dir: Path = Field(
+        default=Path("outputs/data_generation"),
+        description="Directory for saving plots",
+    )
+    show_plots: bool = Field(
+        default=True,
+        description="Display plots interactively",
+    )
+    save_plots: bool = Field(
+        default=True,
+        description="Save plots to output directory",
+    )
 
     @field_validator("output_dir")
     @classmethod
     def create_output_dir(cls, v: Path) -> Path:
-        """Create output directory if it doesn't exist."""
+        """Create `output_dir` if it does not exist.
+
+        Args:
+            v: Output directory path.
+
+        Returns:
+            The same path, after ensuring it exists.
+        """
         v.mkdir(parents=True, exist_ok=True)
         return v
 
     @property
     def data(self) -> DataConfig:
-        """Compose DataConfig from leaf settings.
+        """Create the aggregate `DataConfig` consumed by the `DataModule`.
 
-        Creates the aggregate data configuration consumed by DataModule.
-        The walk settings are shared with trainer to maintain single source of truth.
+        The example keeps the same structure as training code: the `walk`
+        curriculum is shared with the trainer to ensure a single source of truth.
+
+        Returns:
+            A validated `DataConfig` instance.
         """
         return DataConfig.model_validate(self, from_attributes=True)
 
@@ -69,70 +120,80 @@ class ExampleArguments(BaseSettings):
 # ==============================================================================
 # Main Experiment
 # ==============================================================================
-if __name__ == "__main__":
-    """Run the data generation example with visualizations."""
+def main() -> None:
+    """Run the data generation example.
 
-    # Step 1: Parse all settings from CLI and environment
-    # Pydantic Settings will automatically parse sys.argv when cli_parse_args=True
+    The flow is:
+    1) Parse configuration from CLI.
+    2) Build a `DataModule` and sample a single batch.
+    3) Generate a few diagnostic figures.
+    4) Optionally save/show the figures.
+    """
+
+    # Parse all settings from CLI and environment.
+    # Pydantic Settings parses `sys.argv` when `cli_parse_args=True`.
     args = ExampleArguments()
+    logging.basicConfig(format="%(levelname)s:%(message)s", level=args.log_level.upper())
 
-    print("=" * 80)
-    print("TEM DataModule Example")
-    print("=" * 80)
-    # TODO: Add more detailed argument summaries
+    print("=" * 80); print("TEM DataModule Example"); print("=" * 80)  # fmt: skip
+    print(f" - Log level: {args.log_level.upper()}")
+    print(f" - Output directory: { args.output_dir}")
+    print(f" - Save plots: { args.save_plots}")
+    print(f" - Show plots: { args.show_plots}")
     print()
 
     # ------------------------------------------------------------------
-    # Step 1: Instantiate TEMDataModule and build runtime objects
+    # Step 1: Instantiate `DataModule` and build runtime objects.
     # ------------------------------------------------------------------
     datamodule = data.DataModule(args.data)
-    datamodule.setup(None)  # Use `None` so all configured splits are available.
+    datamodule.setup(None)  # `None` enables all configured splits.
 
-    print("Step 1 → Environment and data generation setup complete.")
-    # TODO: Add more detailed datamodule summaries
+    print("Step 1: Setup complete (environment + generators).")
     print()
 
     # ------------------------------------------------------------------
-    # Step 2: Fetch a single time-major batch and print shapes
+    # Step 2: Fetch a single batch and print key tensor shapes.
     # ------------------------------------------------------------------
     walk, visited = datamodule.sample_batch("validate")
     locations, observation_0, action_0 = walk[0]
 
-    print("Step 2 → Inspecting a single batch (time-major tensors)")
-    # TODO: Add more detailed datamodule summaries
+    print("Step 2: Sampled one validation batch (time-major).")
+    print(f" - Number of locations: {len(locations)}")
+    print(f" - Observation[0] shape: {observation_0.shape}")
+    print(f" - Action[0] len: {len(action_0)}")
+    print(f" - Visited len: {len(visited)}")
     print()
 
     # ------------------------------------------------------------------
-    # Step 3: Additonal visualizations (environment, policies, walks, batch)
+    # Step 3: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
-    from torch_tem.figures.core import FigureContext, collect_data_trace
-
-    # Collect DataTrace from validation split
     trace = collect_data_trace(datamodule, "validate")
-
-    # Create figure context
     ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
 
-    figs: list[tuple[str, plt.Figure]] = []
-    figs.append(("01_environment_layout.png", figures.environment.layout.plot(trace, ctx)))
-    figs.append(("02_walk_trajectories.png", figures.walk.trajectories.plot(trace, ctx)))
-    figs.append(("03_walk_statistics.png", figures.walk.statistics.plot(trace, ctx)))
-    figs.append(("04_split_statistics.png", figures.split.statistics.plot(trace, ctx)))
+    figs: list[tuple[str, plt.Figure]] = [
+        ("01_environment_layout.png", figures.environment.layout.plot(trace, ctx)),
+        ("02_walk_trajectories.png", figures.walk.trajectories.plot(trace, ctx)),
+        ("03_walk_statistics.png", figures.walk.statistics.plot(trace, ctx)),
+        ("04_split_statistics.png", figures.split.statistics.plot(trace, ctx)),
+    ]
 
-    print("Step 3 → Generated visualizations.")
-    # TODO: Add more detailed figure summaries
+    print(f"Step 3: Generated {len(figs)} figure(s).")
     print()
 
     # ------------------------------------------------------------------
-    # Step 4: Save and/or show plots
+    # Step 4: Save and/or show plots.
     # ------------------------------------------------------------------
-
-    # Save and/or show plots as per user configuration
     if args.save_plots:
         for filename, fig in figs:
             fig.savefig(args.output_dir / filename, dpi=150, bbox_inches="tight")
         print(f"Saved {len(figs)} figure(s) to: {args.output_dir}")
     plt.show() if args.show_plots else plt.close("all")
 
-    print("Example complete.")
-    print("=" * 80)
+    print("Example completed."); print("=" * 80)  # fmt: skip
+
+
+# ==============================================================================
+# Main Entry Point
+# ==============================================================================
+if __name__ == "__main__":
+    main()

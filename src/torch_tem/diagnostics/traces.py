@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Generic, Iterable, Optional, TypeVar
-
-from torch import Tensor
+from collections.abc import Sequence
+from dataclasses import dataclass, field, fields
 from itertools import islice
+from typing import Any, Generic, Iterable, List, Optional, TypeVar
+
 import numpy as np
+from torch import Tensor
 
 from torch_tem.data.datamodule import DataModule
 from torch_tem.data.world import World
@@ -18,43 +19,55 @@ from torch_tem.modules.mec import MECState
 from torch_tem.types import AbstractLocation, GroundedLocation, LocationLabel, Matrix, MultiScaleCode, Observation
 from torch_tem.utils.walks import downsample_env_major, time_major_location_ids, time_major_to_env_major_walks
 
-from dataclasses import dataclass, field, fields
-from collections.abc import Sequence
-from typing import Generic, TypeVar, List
-
-
 TStep = TypeVar("TStep")
 TraceT = TypeVar("TraceT", bound="TraceBase")
 
+
 @dataclass
 class TraceBase(Sequence[TStep], Generic[TStep], ABC):
-    _batch_size: int = field()  # Required
-    _n_steps: int = field() # Required
-    _meta: dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
+    _n_steps: int = field(default=0)
+
+    def __getitem__(self, idx: int | slice) -> TStep | TraceBase[TStep]:
+        if isinstance(idx, int):
+            return self.get_item(idx)
+        out = self.__class__(meta=self.meta.copy())
+        return out.attach(list(self)[idx])
 
     @abstractmethod
-    def __getitem__(self, idx: int | slice) -> TStep | TraceBase[TStep]:
+    def get_item(self, idx: int) -> TStep:
         raise NotImplementedError
 
-    @abstractmethod
+    def attach(self, steps: Iterable[TStep]) -> TraceBase[TStep]:
+        for step in steps:
+            self.append(step)
+        return self
+
     def append(self, step: TStep) -> None:
+        self._append(step)
+        self._n_steps += 1
+
+    @abstractmethod
+    def _append(self, step: TStep) -> None:
         raise NotImplementedError
 
     def __len__(self) -> int:
         return self._n_steps
 
+    @abstractmethod
     @property
     def batch_size(self) -> int:
-        return self._batch_size
+        raise NotImplementedError
 
     def downsample_time(self, stride: int) -> "TraceBase":
-        return self.__class__.from_iter(self, stop=None, _meta=self.meta.copy())
+        iterable = (x for i, x in enumerate(self) if i % stride == 0)
+        return self.__class__.from_iter(iterable, stop=None, meta=self.meta.copy())
 
     @classmethod
     def from_iter(cls, iterable: Iterable[TStep], *, stop: int | None = None, meta: dict[str, Any] | None = None) -> TraceT:
         trace = cls(meta=(meta or {}))
-        [trace.append(x) for x in islice(iterable, stop)]
-        return trace
+        return trace.attach(islice(iterable, stop))
+
 
 @dataclass
 class TEMLabelTrace(TraceBase[TEMLabel]):
@@ -63,15 +76,17 @@ class TEMLabelTrace(TraceBase[TEMLabel]):
 
     @property
     def batch_size(self) -> int:
-        return int(self.observation[0].shape[0])
+        return int(self.observation[0].shape[0]) if self.observation else 0
 
-    @property
-    def n_steps(self) -> int:
-        return len(self.observation)
+    def get_item(self, idx: int) -> TStep:
+        return TEMLabel(
+            observation=self.observation[idx],
+            locations=self.locations,
+        )
 
-    def append(self, step: TEMLabel) -> None:
-        self.locations = self.locations or step.locations
+    def _append(self, step: TEMLabel) -> None:
         self.observation.append(step.observation)
+        self.locations = step.locations
 
 
 @dataclass

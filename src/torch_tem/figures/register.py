@@ -8,7 +8,7 @@ from torch_tem.diagnostics.traces import ModelTrace
 from torch_tem.figures.core.data_trace import DataTrace
 from torch_tem.figures.core.registry import REGISTRY, FigureSpec
 from torch_tem.figures.core.rollout_trace import RolloutTrace
-from torch_tem.figures.modules import environment, overview, overview_rate_maps, split, walk
+from torch_tem.figures.modules import environment, overview, split, walk
 
 
 def register_builtin_figures() -> None:
@@ -22,7 +22,7 @@ def register_builtin_figures() -> None:
         FigureSpec(
             name="overview",
             description="Multi-panel TEM model overview (g_inf, g_gen, actions)",
-            plot=overview.plot,
+            plot=overview.observations.plot,
             accepts=ModelTrace,
             tags={"model", "rollout", "overview"},
         )
@@ -33,7 +33,7 @@ def register_builtin_figures() -> None:
         FigureSpec(
             name="overview.rate_maps",
             description="Multi-panel overview with spatial rate maps (g_inf, g_gen)",
-            plot=overview_rate_maps.plot,
+            plot=overview.rate_maps.plot,
             accepts=RolloutTrace,
             tags={"model", "rollout", "spatial", "overview"},
         )

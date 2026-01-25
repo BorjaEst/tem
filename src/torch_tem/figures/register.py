@@ -7,7 +7,8 @@ import issues by separating registration from core infrastructure.
 from torch_tem.diagnostics.traces import ModelTrace
 from torch_tem.figures.core.data_trace import DataTrace
 from torch_tem.figures.core.registry import REGISTRY, FigureSpec
-from torch_tem.figures.modules import environment, overview, split, walk
+from torch_tem.figures.core.rollout_trace import RolloutTrace
+from torch_tem.figures.modules import environment, overview, overview_rate_maps, split, walk
 
 
 def register_builtin_figures() -> None:
@@ -24,6 +25,17 @@ def register_builtin_figures() -> None:
             plot=overview.plot,
             accepts=ModelTrace,
             tags={"model", "rollout", "overview"},
+        )
+    )
+
+    # Combined model + spatial figures
+    REGISTRY.register(
+        FigureSpec(
+            name="overview.rate_maps",
+            description="Multi-panel overview with spatial rate maps (g_inf, g_gen)",
+            plot=overview_rate_maps.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "spatial", "overview"},
         )
     )
 

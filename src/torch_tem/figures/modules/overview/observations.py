@@ -11,8 +11,8 @@ import numpy as np
 import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import ModelTrace
-from torch_tem.figures.core.registry import FigureContext
+from torch_tem.diagnostics import ModelTrace
+from torch_tem.figures.registry import FigureContext
 
 
 def plot(trace: ModelTrace, ctx: FigureContext) -> Figure:

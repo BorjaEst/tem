@@ -10,9 +10,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.figures.core.data_trace import DataTrace
-from torch_tem.figures.core.registry import FigureContext
+from torch_tem.diagnostics.traces import DataTrace
 from torch_tem.figures.primitives import initialise_axes, plot_map
+from torch_tem.figures.registry import FigureContext
 
 
 def plot(
@@ -88,9 +88,7 @@ def _plot_walk_deterministic(
     rng = np.random.default_rng(seed) if seed is not None else np.random
 
     # Infer radius from existing patches
-    location_patches = [
-        patch for patch in ax.patches if isinstance(patch, (plt.Circle, plt.Rectangle))
-    ]
+    location_patches = [patch for patch in ax.patches if isinstance(patch, (plt.Circle, plt.Rectangle))]
     if len(location_patches) > 0:
         last_patch = location_patches[-1]
         if isinstance(last_patch, plt.Circle):

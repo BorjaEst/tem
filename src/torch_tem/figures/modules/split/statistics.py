@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.figures.core.data_trace import DataTrace
-from torch_tem.figures.core.registry import FigureContext
+from torch_tem.diagnostics.traces import DataTrace
+from torch_tem.figures.registry import FigureContext
 
 
 def plot(trace: DataTrace, ctx: FigureContext) -> Figure:

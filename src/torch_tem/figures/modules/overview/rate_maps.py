@@ -11,9 +11,9 @@ import numpy as np
 import torch
 from matplotlib.figure import Figure
 
-from torch_tem.figures.core.registry import FigureContext
-from torch_tem.figures.core.rollout_trace import RolloutTrace
+from torch_tem.diagnostics import RolloutTrace
 from torch_tem.figures.primitives import plot_map
+from torch_tem.figures.registry import FigureContext
 
 
 def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:

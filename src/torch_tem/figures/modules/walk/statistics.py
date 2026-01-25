@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.figures.core.data_trace import DataTrace
-from torch_tem.figures.core.registry import FigureContext
+from torch_tem.diagnostics.traces import DataTrace
+from torch_tem.figures.registry import FigureContext
 
 
 def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
@@ -46,11 +46,11 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
     all_actions = []
     for walk in trace.walks:
         all_actions.extend([step[2] for step in walk[:-1]])  # Exclude terminal step
-    
+
     action_counts = Counter(all_actions)
     n_actions = max(action_counts.keys()) + 1 if action_counts else 4
     action_freqs = [action_counts.get(i, 0) for i in range(n_actions)]
-    
+
     axes[1].bar(range(n_actions), action_freqs, edgecolor="black", alpha=0.7)
     axes[1].set_title("Action Frequency")
     axes[1].set_xlabel("Action ID")
@@ -75,7 +75,7 @@ def plot(trace: DataTrace, ctx: FigureContext) -> Figure:
         if env.shiny is not None:
             hits = sum(1 for step in walk if step[0].get("shiny", False))
             shiny_hits.append(hits)
-    
+
     if shiny_hits:
         axes[3].hist(shiny_hits, bins=20, edgecolor="black", alpha=0.7, color="gold")
         axes[3].set_title("Shiny Object Hits")

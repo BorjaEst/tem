@@ -4,7 +4,7 @@ Import this module to register all built-in figures. This avoids circular
 import issues by separating registration from core infrastructure.
 """
 
-from torch_tem.diagnostics import traces
+from torch_tem.diagnostics import DataTrace, ModelTrace, RolloutTrace
 from torch_tem.figures.modules import environment, overview, split, walk
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
@@ -21,7 +21,7 @@ def register_builtin_figures() -> None:
             name="overview",
             description="Multi-panel TEM model overview (g_inf, g_gen, actions)",
             plot=overview.observations.plot,
-            accepts=traces.ModelTrace,
+            accepts=ModelTrace,
             tags={"model", "rollout", "overview"},
         )
     )
@@ -32,7 +32,7 @@ def register_builtin_figures() -> None:
             name="overview.rate_maps",
             description="Multi-panel overview with spatial rate maps (g_inf, g_gen)",
             plot=overview.rate_maps.plot,
-            accepts=traces.RolloutTrace,
+            accepts=RolloutTrace,
             tags={"model", "rollout", "spatial", "overview"},
         )
     )
@@ -43,7 +43,7 @@ def register_builtin_figures() -> None:
             name="environment.layout",
             description="Static environment layout showing locations and connectivity",
             plot=environment.layout.plot,
-            accepts=traces.DataTrace,
+            accepts=DataTrace,
             tags={"data", "environment", "debug"},
         )
     )
@@ -54,7 +54,7 @@ def register_builtin_figures() -> None:
             name="walk.trajectories",
             description="Walk trajectories overlaid on environment map (deterministic)",
             plot=walk.trajectories.plot,
-            accepts=traces.DataTrace,
+            accepts=DataTrace,
             tags={"data", "walk", "debug"},
         )
     )
@@ -64,7 +64,7 @@ def register_builtin_figures() -> None:
             name="walk.statistics",
             description="Walk summary statistics (length, actions, revisits, shiny hits)",
             plot=walk.statistics.plot,
-            accepts=traces.DataTrace,
+            accepts=DataTrace,
             tags={"data", "walk", "statistics"},
         )
     )
@@ -75,7 +75,7 @@ def register_builtin_figures() -> None:
             name="split.statistics",
             description="Dataset split summary statistics (env sizes, walk lengths)",
             plot=split.statistics.plot,
-            accepts=traces.DataTrace,
+            accepts=DataTrace,
             tags={"data", "split", "statistics"},
         )
     )

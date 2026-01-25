@@ -11,7 +11,7 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from torch_tem.diagnostics.traces import DataTrace
-from torch_tem.figures.primitives import initialise_axes, plot_map
+from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
 
 

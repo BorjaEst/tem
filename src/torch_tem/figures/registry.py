@@ -11,6 +11,8 @@ from typing import Any, Callable, Optional
 
 from matplotlib.figure import Figure
 
+from torch_tem.diagnostics.traces import TraceBase
+
 
 @dataclass
 class FigureContext:
@@ -57,12 +59,15 @@ class FigureSpec:
 
     def __post_init__(self):
         """Set default filename if not provided."""
+        # Set default filename from name if not provided.
         if self.default_filename is None:
             self.default_filename = self.name.replace(".", "_")
-
         # Normalize tags to an immutable set for deterministic behavior.
         if not isinstance(self.tags, frozenset):
             self.tags = frozenset(self.tags)
+        # Enforce nominal typing for dispatch.
+        if not isinstance(self.accepts, type) or not issubclass(self.accepts, TraceBase):
+            raise TypeError(f"FigureSpec.accepts must be a subclass of TraceBase; got {self.accepts!r}")
 
 
 class FigureRegistry:

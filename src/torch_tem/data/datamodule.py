@@ -14,7 +14,7 @@ Settings composition:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Literal, Optional, TypeAlias, Union
 
 import lightning.pytorch as pl
 import numpy as np
@@ -25,6 +25,8 @@ from torch.utils.data import DataLoader, IterableDataset
 from torch_tem import settings
 from torch_tem.data.env_validation import validate_envs_against_contract
 from torch_tem.data.world import World, WorldStep
+
+SplitName: TypeAlias = Literal["train", "validate", "test"]
 
 
 class DataConfig(BaseModel):
@@ -77,12 +79,10 @@ class DataModule(pl.LightningDataModule):
     def __init__(self, data_settings: DataConfig):
         super().__init__()
         self.data_settings = data_settings
-        self.dataset: Optional[TEMDataset] = None
-        self.val_dataset: Optional[TEMDataset] = None
-        self.test_dataset: Optional[TEMDataset] = None
+        self.datasets: Dict[SplitName, TEMDataset] = {}
         self._validated = False  # Track whether env validation has been performed
 
-    def setup(self, stage: str = None):
+    def setup(self, stage: Optional[str] = None) -> None:
         """Setup is called on every process in DDP.
 
         Create the dataset here (not in train_dataloader) to ensure it's only
@@ -94,8 +94,8 @@ class DataModule(pl.LightningDataModule):
             validate_envs_against_contract(self.data_settings.env.envs, self.data_settings.space)
             self._validated = True
 
-        if stage in (None, "fit") and self.dataset is None:
-            self.dataset = TEMDataset(
+        if stage in (None, "fit") and self.get_dataset("train") is None:
+            self.datasets["train"] = TEMDataset(
                 self.data_settings,
                 walk_it_min=self.data_settings.walk.walk_it_min,
                 walk_it_max=self.data_settings.walk.walk_it_max,
@@ -103,8 +103,8 @@ class DataModule(pl.LightningDataModule):
             )
 
         # Create validation dataset (finite, deterministic)
-        if stage in (None, "fit", "validate") and self.data_settings.iterator.eval.enable_validation and self.val_dataset is None:
-            self.val_dataset = TEMDataset(
+        if stage in (None, "fit", "validate") and self.data_settings.iterator.eval.enable_validation and self.get_dataset("validate") is None:
+            self.datasets["validate"] = TEMDataset(
                 self.data_settings,
                 walk_it_min=self.data_settings.walk.walk_it_min,
                 walk_it_max=self.data_settings.walk.walk_it_max,
@@ -114,8 +114,8 @@ class DataModule(pl.LightningDataModule):
             )
 
         # Create test dataset (finite, deterministic)
-        if stage in (None, "test") and self.data_settings.iterator.eval.enable_test and self.test_dataset is None:
-            self.test_dataset = TEMDataset(
+        if stage in (None, "test") and self.data_settings.iterator.eval.enable_test and self.get_dataset("test") is None:
+            self.datasets["test"] = TEMDataset(
                 self.data_settings,
                 walk_it_min=self.data_settings.walk.walk_it_min,
                 walk_it_max=self.data_settings.walk.walk_it_max,
@@ -124,7 +124,79 @@ class DataModule(pl.LightningDataModule):
                 seed=self.data_settings.iterator.eval.test_seed,
             )
 
-    def train_dataloader(self):
+    @property
+    def dataset(self) -> Optional["TEMDataset"]:
+        """Compatibility accessor for the training dataset."""
+        return self.get_dataset("train")
+
+    @property
+    def val_dataset(self) -> Optional["TEMDataset"]:
+        """Compatibility accessor for the validation dataset."""
+        return self.get_dataset("validate")
+
+    @property
+    def test_dataset(self) -> Optional["TEMDataset"]:
+        """Compatibility accessor for the test dataset."""
+        return self.get_dataset("test")
+
+    def get_dataset(self, split: SplitName) -> Optional["TEMDataset"]:
+        """Return the dataset for the requested split, if available.
+
+        Args:
+            split: One of "train", "validate", or "test".
+
+        Returns:
+            The dataset for the split, or None if it has not been created.
+        """
+        return self.datasets.get(split)
+
+    def _ensure_dataset(self, split: SplitName) -> "TEMDataset":
+        """Ensure the dataset for the requested split is initialized.
+
+        Args:
+            split: One of "train", "validate", or "test".
+
+        Returns:
+            The initialized dataset.
+
+        Raises:
+            ValueError: If the split is invalid or disabled.
+        """
+        if split == "train":
+            if self.get_dataset("train") is None:
+                self.setup("fit")
+        elif split == "validate":
+            if self.get_dataset("validate") is None:
+                self.setup("validate")
+        elif split == "test":
+            if self.get_dataset("test") is None:
+                self.setup("test")
+        else:
+            raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
+
+        dataset = self.get_dataset(split)
+        if dataset is None:
+            raise ValueError(f"Dataset for split '{split}' is not available. " "Check that the split is enabled in settings.")
+        return dataset
+
+    def dataloader(self, split: SplitName) -> Union[DataLoader, list[DataLoader]]:
+        """Return dataloader for the specified split.
+
+        Args:
+            split: One of "train", "validate", or "test".
+
+        Returns:
+            DataLoader wrapping the appropriate dataset.
+        """
+        if split == "train":
+            return self.train_dataloader()
+        if split == "validate":
+            return self.val_dataloader()
+        if split == "test":
+            return self.test_dataloader()
+        raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
+
+    def train_dataloader(self) -> DataLoader:
         """Return training dataloader.
 
         Returns a DataLoader wrapping the iterable dataset.
@@ -132,13 +204,12 @@ class DataModule(pl.LightningDataModule):
         that are not safe to pickle across worker processes.
         """
         # Ensure dataset is created (in case setup wasn't called)
-        if self.dataset is None:
-            self.setup("fit")
+        dataset = self._ensure_dataset("train")
 
         # Return DataLoader with batch_size=None (dataset yields pre-batched data)
-        return DataLoader(self.dataset, batch_size=None, num_workers=0)
+        return DataLoader(dataset, batch_size=None, num_workers=0)
 
-    def val_dataloader(self):
+    def val_dataloader(self) -> Union[DataLoader, list[DataLoader]]:
         """Return validation dataloader (finite, deterministic).
 
         Returns empty list if validation is disabled (Lightning requires iterable, not None).
@@ -146,9 +217,10 @@ class DataModule(pl.LightningDataModule):
         if not self.data_settings.iterator.eval.enable_validation:
             return []
 
-        return DataLoader(self.val_dataset, batch_size=None, num_workers=0)
+        dataset = self._ensure_dataset("validate")
+        return DataLoader(dataset, batch_size=None, num_workers=0)
 
-    def test_dataloader(self):
+    def test_dataloader(self) -> Union[DataLoader, list[DataLoader]]:
         """Return test dataloader (finite, deterministic).
 
         Returns empty list if test is disabled (Lightning requires iterable, not None).
@@ -156,14 +228,19 @@ class DataModule(pl.LightningDataModule):
         if not self.data_settings.iterator.eval.enable_test:
             return []
 
-        return DataLoader(self.test_dataset, batch_size=None, num_workers=0)
+        dataset = self._ensure_dataset("test")
+        return DataLoader(dataset, batch_size=None, num_workers=0)
 
-    def set_walk_length_center(self, value: float):
-        """Control surface: set walk length center (called by trainer during training)."""
-        if self.dataset is not None:
-            self.dataset.walk_length_center = value
+    def set_walk_length_center(self, value: float) -> None:
+        """Control surface: set walk length center (called by trainer).
 
-    def sample_batch(self, split: str):
+        Args:
+            value: New walk length center for all initialized datasets.
+        """
+        for dataset in self.datasets.values():
+            dataset.walk_length_center = value
+
+    def sample_batch(self, split: SplitName) -> Any:
         """Utility to sample a single batch from the specified split.
 
         Args:
@@ -172,15 +249,10 @@ class DataModule(pl.LightningDataModule):
         Returns:
             A single batch from the specified split.
         """
-        if split == "train":
-            return next(iter(self.dataset))
-        elif split == "validate":
-            return next(iter(self.val_dataset))
-        elif split == "test":
-            return next(iter(self.test_dataset))
-        raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
+        dataset = self._ensure_dataset(split)
+        return next(iter(dataset))
 
-    def reset_split(self, split: str) -> None:
+    def reset_split(self, split: SplitName) -> None:
         """Reset a deterministic dataset split to its initial state.
 
         Args:
@@ -191,15 +263,12 @@ class DataModule(pl.LightningDataModule):
         """
         if split == "train":
             return
-        if split == "validate":
-            if self.val_dataset is not None:
-                self.val_dataset.reset()
+        if split not in ("validate", "test"):
+            raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
+        dataset = self.get_dataset(split)
+        if dataset is None:
             return
-        if split == "test":
-            if self.test_dataset is not None:
-                self.test_dataset.reset()
-            return
-        raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
+        dataset.reset()
 
 
 @dataclass

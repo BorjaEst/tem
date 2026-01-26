@@ -12,11 +12,27 @@ pattern for adding new figures.
 - Support batched traces and multi-scale model outputs.
 - Support both artifact saving (PDF/PNG) and training-time preview logging.
 
+## Additional goals: validation-oriented monitoring
+
+- Make training-time figure generation reflect generalization by default
+  (validation split).
+- Support two sampling modes:
+  - Contiguous episodes for temporal diagnostics.
+  - Aggregated coverage for spatial/statistical maps.
+- Provide deterministic and repeatable figure inputs (identical per validation
+  epoch when configured).
+
 ## Non-goals
 
 - The figures package does not own training loops or dataset construction.
 - The figures package does not define the TEM model; it consumes trace objects.
 - The figures package does not implement interactive GUIs.
+
+## Scope note
+
+This document describes the design of the figures package itself and the
+recommended integration pattern for training-time figure generation via the
+Lightning callback in `torch_tem.callbacks`.
 
 ## Architecture overview
 
@@ -42,6 +58,116 @@ The package is split into five layers:
    - **Primitives** (`torch_tem.figures.primitives`): environment-centric drawing utilities.
    - **Styling** (`torch_tem.figures.style`): centralized matplotlib rcParams via `StyleConfig`.
    - **Sinks** (`torch_tem.figures.sinks`): saving and logging outputs.
+
+## Training-time integration design (callback)
+
+### Overview
+
+The training-time figure generation mechanism lives outside the figures package
+as a Lightning callback (currently `FiguresCallback`). The callback is
+responsible for:
+
+- Selecting which split to visualize (default: validation).
+- Constructing one or more traces (`RolloutTrace`, `WorldTrace`, etc.) from
+  batches sampled from that split.
+- Dispatching requested figure specs by name through `REGISTRY`.
+- Persisting outputs via sinks (PDF artifacts and TensorBoard images).
+
+### Trigger policy
+
+Recommended default:
+
+- Trigger figure generation during the validation loop (e.g.
+  `on_validation_epoch_end` or `on_validation_batch_start` with `batch_idx==0`).
+- Keep step-based gating (`every_n_steps`) but evaluate it at validation time
+  against `trainer.global_step`.
+
+Rationale:
+
+- Validation-oriented figures align with generalization monitoring.
+- Training dynamics are already available via scalars logged every step.
+
+### Sampling modes
+
+The callback should support two sampling modes without requiring additional
+dataset splits:
+
+1. **Contiguous episode** (temporal diagnostics)
+   - Sample a single batch/episode (typically the first validation batch after
+     reset).
+   - Construct a `RolloutTrace` preserving temporal ordering.
+
+2. **Aggregated coverage** (spatial/statistical maps)
+   - Sample multiple validation batches and concatenate steps to improve
+     occupancy and rate-map stability.
+   - Construct an aggregated `RolloutTrace` (or equivalent trace) for figures
+     that benefit from coverage.
+
+Figure selection should be controlled by configuration (e.g., two lists or a
+name->mode mapping) and/or by figure tags.
+
+### Determinism and repeatability
+
+The data generation stack currently includes seeded validation/test datasets,
+but repeatability requires addressing two properties:
+
+- **Statefulness**: `TEMDataset` mutates internal walks and visited masks while
+  iterating. To achieve identical inputs per validation epoch, the dataset must
+  support a reset operation that restores deterministic initial state.
+- **World RNG**: `World` currently relies on global NumPy randomness. For seeded
+  datasets, stochastic world generation (start locations, shiny placement,
+  random observation assignments, action sampling) should instead be driven by
+  an injected RNG (`np.random.Generator`) owned by the dataset.
+
+Recommended interfaces:
+
+- `TEMDataset.reset()`: restores RNG state and reinitializes environments, walks
+  and visited masks.
+- `DataModule.reset_split("validate"|"test")`: convenience wrapper for callback.
+- `World(..., rng=Generator)`: all stochastic choices come from `rng`.
+
+### Trace construction
+
+For a sampled batch `(chunk, visited)`:
+
+- Build a `RolloutTrace` via the canonical constructor
+  `RolloutTrace.from_batch(...)`.
+- Apply `downsample_time(stride)`.
+- Optionally cap time steps for episode traces.
+
+For aggregated traces:
+
+- Collect `N` batches from validation after reset.
+- Concatenate time steps (world + output + state) in a consistent order.
+- Ensure batch dimension consistency (same environments in the batch or a clear
+  contract describing how aggregation behaves).
+
+### Configuration surface
+
+Suggested additions to callback settings (exact field names are implementation
+details):
+
+- Split selection: `split = "validate" | "test"` (default: `"validate"`).
+- Repeatability: `reset_each_val_epoch: bool`.
+- Sampling:
+  - `episode_steps` (or reuse `max_rollout_steps` explicitly as episode length).
+  - `aggregate_batches` (number of validation batches to concatenate).
+- Figure grouping:
+  - `figures_episode: list[str]`
+  - `figures_aggregate: list[str]`
+  - optional `figures_static: list[str]`
+
+### Spatiotemporal interpretability
+
+For spatially aggregated maps (rate maps, occupancy maps), temporal structure
+is intentionally collapsed. To support inspection of revisits and temporal
+ordering, prefer adding a companion panel rather than encoding time directly in
+the rate-map colormap.
+
+Recommended companion visualizations:
+
+- 2D trajectory colored by time (early->late) with optional activation overlay.
+- Location-id vs time (or position vs time) strips aligned with activation.
 
 ## Key data contracts
 

@@ -247,9 +247,10 @@ def _build_rollout_trace(args: ExampleArguments) -> RolloutTrace:
         model.load_state_dict(state_dict)
     model.eval()
 
+    dataset = datamodule.get_dataset("validate")
     trace = RolloutTrace.from_batch(
         batch=datamodule.sample_batch(split="validate"),
-        environments=datamodule.dataset.environments,
+        environments=dataset.environments,
         model=model,
         stop=args.max_rollout_steps,
         meta={"split": "validate"},

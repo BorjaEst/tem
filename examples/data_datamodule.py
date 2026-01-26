@@ -168,7 +168,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step 3: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
-    environments = datamodule.dataset.environments
+    dataset = datamodule.get_dataset("validate")
+    environments = dataset.environments
     trace = WorldTrace.from_batch(batch, environments, meta={"split": "validate"})
     ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
 

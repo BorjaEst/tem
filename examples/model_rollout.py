@@ -229,9 +229,10 @@ def main() -> None:
     # Step 3: Collect rollout trace with spatial alignment.
     # ------------------------------------------------------------------
     print("Step 3: Collecting rollout trace...")
+    dataset = datamodule.get_dataset("test")
     trace = RolloutTrace.from_batch(
         batch=datamodule.sample_batch(split="test"),
-        environments=datamodule.dataset.environments,
+        environments=dataset.environments,
         model=model,
         stop=args.max_rollout_steps,
         meta={"split": "test"},

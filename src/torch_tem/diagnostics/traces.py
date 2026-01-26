@@ -1,307 +1,339 @@
+"""Trace Tree implementation for batched simulation rollouts.
+
+This module provides a clean, minimal implementation of the Trace Tree
+Pattern with explicit handling of dense data, sparse metadata, and events.
+"""
+
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections.abc import Sequence
-from dataclasses import dataclass, field
-from itertools import islice
-from typing import Any, Generic, Iterable, List, Optional, Tuple, TypeVar
+from dataclasses import dataclass, field, fields, is_dataclass
+from numbers import Number
+from typing import Any, Iterable, Iterator, List, Optional
 
-from torch import Tensor
-
-from torch_tem.data.datamodule import WorldStep
-from torch_tem.data.world import World
-from torch_tem.model import Model, Prediction, RolloutStep, RolloutStream, TEMGenerative, TEMInference, TEMOutput, TEMReconstruction, TEMState
-from torch_tem.modules.hpc import HPCState
-from torch_tem.modules.lec import LECState
-from torch_tem.modules.mec import MECState
-from torch_tem.types import *
-
-TStep = TypeVar("TStep")
-TraceT = TypeVar("TraceT", bound="TraceBase")
-Batch = Tuple[WalkBatch, list[list[bool]]]
+import numpy as np
 
 
-@dataclass
-class TraceBase(Sequence[TStep], Generic[TStep], ABC):
-    meta: dict[str, Any] = field(default_factory=dict)
-    _n_steps: int = field(default=0)
+@dataclass(frozen=True)
+class MetaUpdate:
+    """Time-stamped metadata update."""
 
-    def __getitem__(self, idx: int | slice) -> TStep | TraceBase[TStep]:
-        if isinstance(idx, int):
-            return self.get_item(idx)
-        out = self.__class__(meta=self.meta.copy())
-        return out.attach(list(self)[idx])
+    t: int
+    value: Any
 
-    @abstractmethod
-    def get_item(self, idx: int) -> TStep:
-        raise NotImplementedError
 
-    def attach(self, steps: Iterable[TStep]) -> TraceBase[TStep]:
-        for step in steps:
-            self.append(step)
-        return self
+@dataclass(frozen=True)
+class Event:
+    """Time-stamped event payload."""
 
-    def append(self, step: TStep) -> None:
-        self._append(step)
-        self._n_steps += 1
-
-    @abstractmethod
-    def _append(self, step: TStep) -> None:
-        raise NotImplementedError
-
-    def __len__(self) -> int:
-        return self._n_steps
-
-    @property
-    @abstractmethod
-    def batch_size(self) -> int:
-        raise NotImplementedError
-
-    def downsample_time(self, stride: int) -> TraceBase[TStep]:
-        if stride <= 1:
-            return self
-        iterable = (x for i, x in enumerate(self) if i % stride == 0)
-        return type(self).from_iter(iterable, stop=None, meta=self.meta.copy())
-
-    @classmethod
-    def from_iter(cls, iterable: Iterable[TStep], *, stop: int | None = None, meta: dict[str, Any] | None = None) -> TraceT:
-        trace = cls(meta=(meta or {}))
-        return trace.attach(islice(iterable, stop))
+    t: int
+    payload: Any
 
 
 @dataclass
-class TEMInferenceTrace(TraceBase[TEMInference]):
-    g_inf: List[AbstractLocation] = field(default_factory=list)
-    p_inf: List[GroundedLocation] = field(default_factory=list)
-    p_xi: List[GroundedLocation] = field(default_factory=list)
+class TraceConfig:
+    """Configuration for trace construction and validation.
 
-    @property
-    def batch_size(self) -> int:
-        return _batch_size_from_multiscale_trace(self.g_inf)
+    Attributes:
+        strict: Whether to raise errors on invariant violations.
+        allow_events: Whether to record events for irregular data.
+        allow_meta_sparse: Whether to promote changing metadata to sparse.
+        global_paths: Paths treated as global (no batch axis enforced).
+        rebase_time_on_slice: Whether to rebase time to zero on slices.
+    """
 
-    def get_item(self, idx: int) -> TEMInference:
-        return TEMInference(self.g_inf[idx], self.p_inf[idx], self.p_xi[idx])
-
-    def _append(self, step: TEMInference) -> None:
-        self.g_inf.append(step.g_inf)
-        self.p_inf.append(step.p_inf)
-        self.p_xi.append(step.p_xi)
-
-
-@dataclass
-class TEMGenerativeTrace(TraceBase[TEMGenerative]):
-    g_gen: List[AbstractLocation] = field(default_factory=list)
-    p_gen_gg: List[GroundedLocation] = field(default_factory=list)
-    p_gen_gi: List[GroundedLocation] = field(default_factory=list)
-
-    @property
-    def batch_size(self) -> int:
-        return _batch_size_from_multiscale_trace(self.g_gen)
-
-    def get_item(self, idx: int) -> TEMGenerative:
-        return TEMGenerative(self.g_gen[idx], self.p_gen_gg[idx], self.p_gen_gi[idx])
-
-    def _append(self, step: TEMGenerative) -> None:
-        self.g_gen.append(step.g_gen)
-        self.p_gen_gg.append(step.p_gen_gg)
-        self.p_gen_gi.append(step.p_gen_gi)
+    strict: bool = True
+    allow_events: bool = True
+    allow_meta_sparse: bool = True
+    global_paths: set[str] = field(default_factory=set)
+    rebase_time_on_slice: bool = True
 
 
 @dataclass
-class PredictionTrace(TraceBase[Prediction]):
-    prediction: List[Observation] = field(default_factory=list)
-    logits: List[Tensor] = field(default_factory=list)
+class TraceNode:
+    """Node in a trace tree with dense data, metadata, and events."""
 
-    @property
-    def batch_size(self) -> int:
-        return int(self.logits[0].shape[0]) if self.logits else 0
+    data: dict[str, np.ndarray] = field(default_factory=dict)
+    meta_static: dict[str, Any] = field(default_factory=dict)
+    meta_sparse: dict[str, list[MetaUpdate]] = field(default_factory=dict)
+    events: dict[str, list[Event]] = field(default_factory=dict)
+    children: dict[str, "TraceNode"] = field(default_factory=dict)
+    _buffers: dict[str, list[np.ndarray]] = field(default_factory=dict, repr=False)
 
-    def get_item(self, idx: int) -> Prediction:
-        return Prediction(self.prediction[idx], self.logits[idx])
+    def child(self, name: str) -> "TraceNode":
+        """Return (or create) a child node by name."""
 
-    def _append(self, step: Prediction) -> None:
-        self.prediction.append(step.prediction)
-        self.logits.append(step.logits)
+        if name not in self.children:
+            self.children[name] = TraceNode()
+        return self.children[name]
 
+    def record_event(self, key: str, t: int, payload: Any) -> None:
+        """Record a time-stamped event payload."""
 
-@dataclass
-class TEMReconstructionTrace(TraceBase[TEMReconstruction]):
-    y_p_inf: PredictionTrace = field(default_factory=PredictionTrace)
-    y_gen_gi: PredictionTrace = field(default_factory=PredictionTrace)
-    y_gen_gg: PredictionTrace = field(default_factory=PredictionTrace)
+        self.events.setdefault(key, []).append(Event(t=t, payload=payload))
 
-    @property
-    def batch_size(self) -> int:
-        return self.y_p_inf.batch_size
+    def record_meta(self, key: str, t: int, value: Any, *, allow_sparse: bool) -> None:
+        """Record metadata, promoting to sparse updates if the value changes."""
 
-    def get_item(self, idx: int) -> TEMReconstruction:
-        return TEMReconstruction(self.y_p_inf[idx], self.y_gen_gi[idx], self.y_gen_gg[idx])
+        if key in self.meta_sparse:
+            updates = self.meta_sparse[key]
+            if updates[-1].value != value:
+                updates.append(MetaUpdate(t=t, value=value))
+            return
 
-    def _append(self, step: TEMReconstruction) -> None:
-        self.y_p_inf.append(step.y_p_inf)
-        self.y_gen_gi.append(step.y_gen_gi)
-        self.y_gen_gg.append(step.y_gen_gg)
+        if key in self.meta_static:
+            if self.meta_static[key] != value:
+                if allow_sparse:
+                    old = self.meta_static.pop(key)
+                    self.meta_sparse[key] = [MetaUpdate(t=0, value=old), MetaUpdate(t=t, value=value)]
+                else:
+                    self.record_event(key, t, value)
+            return
 
+        self.meta_static[key] = value
 
-@dataclass
-class TEMOutputTrace(TraceBase[TEMOutput]):
-    inference: TEMInferenceTrace = field(default_factory=TEMInferenceTrace)
-    generative: TEMGenerativeTrace = field(default_factory=TEMGenerativeTrace)
-    reconstruction: TEMReconstructionTrace = field(default_factory=TEMReconstructionTrace)
+    def append_data(self, key: str, value: np.ndarray) -> None:
+        """Append a dense value to the buffer for a given key."""
 
-    @property
-    def batch_size(self) -> int:
-        return self.inference.batch_size
+        self._buffers.setdefault(key, []).append(value)
 
-    def get_item(self, idx: int) -> TEMOutput:
-        return TEMOutput(self.inference[idx], self.generative[idx], self.reconstruction[idx])
+    def finalize(self, *, length: int, strict: bool) -> None:
+        """Stack buffered data into dense arrays and recurse into children."""
 
-    def _append(self, step: TEMOutput) -> None:
-        self.inference.append(step.inference)
-        self.generative.append(step.generative)
-        self.reconstruction.append(step.reconstruction)
+        for key, values in self._buffers.items():
+            if strict and len(values) != length:
+                raise ValueError("Incomplete data buffer for key " f"{key!r}: expected {length}, got {len(values)}")
+            self.data[key] = np.stack(values, axis=0)
+        self._buffers.clear()
 
+        for child in self.children.values():
+            child.finalize(length=length, strict=strict)
 
-@dataclass
-class LECStateTrace(TraceBase[LECState]):
-    cells: List[MultiScaleCode] = field(default_factory=list)
-    filtered: List[MultiScaleCode] = field(default_factory=list)
+    def slice_time(self, t0: int, t1: int, *, rebase: bool) -> "TraceNode":
+        """Return a time-sliced copy of this node."""
 
-    @property
-    def batch_size(self) -> int:
-        return _batch_size_from_multiscale_trace(self.cells)
+        sliced = TraceNode()
 
-    def get_item(self, idx: int) -> LECState:
-        return LECState(self.cells[idx], self.filtered[idx])
+        for key, arr in self.data.items():
+            sliced.data[key] = arr[t0:t1]
 
-    def _append(self, step: LECState) -> None:
-        self.cells.append(step.cells)
-        self.filtered.append(step.filtered)
+        sliced.meta_static = dict(self.meta_static)
+        sliced.meta_sparse = _filter_meta_sparse(self.meta_sparse, t0, t1, rebase)
+        sliced.events = _filter_events(self.events, t0, t1, rebase)
 
+        for name, child in self.children.items():
+            sliced.children[name] = child.slice_time(t0, t1, rebase=rebase)
 
-@dataclass
-class MECStateTrace(TraceBase[MECState]):
-    cells: List[AbstractLocation] = field(default_factory=list)
-    uncertainty: List[Optional[MultiScaleCode]] = field(default_factory=list)
-
-    @property
-    def batch_size(self) -> int:
-        return _batch_size_from_multiscale_trace(self.cells)
-
-    def get_item(self, idx: int) -> MECState:
-        location = LocationBelief(mean=self.cells[idx], uncertainty=self.uncertainty[idx])
-        return MECState(location)
-
-    def _append(self, step: MECState) -> None:
-        self.cells.append(step.cells)
-        self.uncertainty.append(step.uncertainty)
+        return sliced
 
 
 @dataclass
-class HPCStateTrace(TraceBase[HPCState]):
-    cells: List[GroundedLocation] = field(default_factory=list)
-    uncertainty: List[Optional[MultiScaleCode]] = field(default_factory=list)
-    memory: List[MemoryState] = field(default_factory=list)
+class TraceTree:
+    """Trace tree builder and container for a rollout."""
 
-    @property
-    def batch_size(self) -> int:
-        return _batch_size_from_multiscale_trace(self.cells)
+    config: TraceConfig = field(default_factory=TraceConfig)
+    root: TraceNode = field(default_factory=TraceNode)
+    batch_size: Optional[int] = None
+    length: int = 0
 
-    def get_item(self, idx: int) -> HPCState:
-        location = LocationBelief(mean=self.cells[idx], uncertainty=self.uncertainty[idx])
-        return HPCState(location, self.memory[idx])
+    def append(self, state: Any) -> None:
+        """Append a state snapshot into the trace tree."""
 
-    def _append(self, step: HPCState) -> None:
-        self.cells.append(step.cells)
-        self.uncertainty.append(step.uncertainty)
-        self.memory.append(step.memory)
+        t = self.length
+        _append_state(node=self.root, state=state, t=t, path=(), tree=self)
+        self.length += 1
 
+    def finalize(self) -> None:
+        """Finalize the trace by stacking buffered data into arrays."""
 
-@dataclass
-class TEMStateTrace(TraceBase[TEMState]):
-    lec: LECStateTrace = field(default_factory=LECStateTrace)
-    mec: MECStateTrace = field(default_factory=MECStateTrace)
-    hpc: HPCStateTrace = field(default_factory=HPCStateTrace)
+        self.root.finalize(length=self.length, strict=self.config.strict)
 
-    @property
-    def batch_size(self) -> int:
-        return self.lec.batch_size
+    def slice_time(self, t0: int, t1: int) -> "TraceTree":
+        """Return a time-sliced copy of the trace."""
 
-    def get_item(self, idx: int) -> TEMState:
-        return TEMState(self.lec[idx], self.mec[idx], self.hpc[idx])
-
-    def _append(self, step: TEMState) -> None:
-        self.lec.append(step.lec)
-        self.mec.append(step.mec)
-        self.hpc.append(step.hpc)
+        t0 = max(0, t0)
+        t1 = min(self.length, t1)
+        sliced = TraceTree(config=self.config)
+        sliced.root = self.root.slice_time(t0, t1, rebase=self.config.rebase_time_on_slice)
+        sliced.length = max(0, t1 - t0)
+        sliced.batch_size = self.batch_size
+        return sliced
 
 
-@dataclass
-class WorldTrace(TraceBase[WorldStep]):
-    environments: List[World] = field(default_factory=list)  # (B, )
-    visited: Optional[List[List[bool]]] = None  # (B, )
+def _append_state(*, node: TraceNode, state: Any, t: int, path: tuple[str, ...], tree: TraceTree) -> None:
+    """Append a state tree into the trace tree (recursive)."""
 
-    locations: List[List[LocationLabel]] = field(default_factory=list)  # (T, B)
-    observations: List[Observation] = field(default_factory=list)  # (T, B)
-    actions: List[List[Action]] = field(default_factory=list)  # (T, B)
+    if _is_dataclass_instance(state):
+        for field_info in fields(state):
+            name = field_info.name
+            value = getattr(state, name)
+            _append_value(node=node, name=name, value=value, t=t, path=path, tree=tree)
+        return
 
-    @property
-    def batch_size(self) -> int:
-        return int(self.observations[0].shape[0]) if self.observations else 0
-
-    def get_item(self, idx: int) -> WorldStep:
-        return WorldStep(self.locations[idx], self.observations[idx], self.actions[idx])
-
-    def _append(self, step: WorldStep) -> None:
-        self.locations.append(step.locations)
-        self.observations.append(step.observation)
-        self.actions.append(step.action)
-
-    @property
-    def location_ids(self) -> list[list[int]]:
-        ids_t = [[int(loc["id"]) for loc in locs_t] for locs_t in self.locations]  # (T, B)
-        return [list(env_series) for env_series in zip(*ids_t)] if ids_t else []
-
-    @classmethod
-    def from_batch(cls, batch: Batch, environments: list[World], **kwargs) -> WorldTrace:
-        iterable = (WorldStep(locations=step[0], observation=step[1], action=step[2]) for step in batch[0])
-        trace: WorldTrace = cls.from_iter(iterable, **kwargs)
-        trace.environments, trace.visited = environments, batch[1]
-        return trace
+    raise TypeError("State must be a dataclass instance. " f"Got {type(state)!r} at path {"/".join(path) or "<root>"}.")
 
 
-@dataclass
-class RolloutTrace(TraceBase[RolloutStep]):
-    world_step: WorldTrace = field(default_factory=WorldTrace)  # (T, B)
-    output: TEMOutputTrace = field(default_factory=TEMOutputTrace)  # (T, B)
-    state: TEMStateTrace = field(default_factory=TEMStateTrace)  # (T, B)
+def _append_value(*, node: TraceNode, name: str, value: Any, t: int, path: tuple[str, ...], tree: TraceTree) -> None:
+    """Append a single field value into the trace tree."""
 
-    @property
-    def batch_size(self) -> int:
-        return self.world_step.batch_size
+    current_path = path + (name,)
 
-    def get_item(self, idx: int) -> RolloutStep:
-        return RolloutStep(self.world_step[idx], self.output[idx], self.state[idx])
+    if _is_dataclass_instance(value):
+        child = node.child(name)
+        _append_state(node=child, state=value, t=t, path=current_path, tree=tree)
+        return
 
-    def _append(self, step: RolloutStep) -> None:
-        self.world_step.append(step.world_step)
-        self.output.append(step.output)
-        self.state.append(step.state)
+    if _is_list_of_numeric_arrays(value):
+        container = node.child(name)
+        container.meta_static.setdefault("length", len(value))
+        for idx, elem in enumerate(value):
+            idx_node = container.child(str(idx))
+            arr = _to_numeric_array(elem)
+            _append_dense(node=idx_node, key="value", arr=arr, t=t, path=current_path + (str(idx), "value"), tree=tree)
+        return
 
-    @classmethod
-    def from_batch(cls, batch: Batch, environments: list[World], model: Model, *, initial: TEMState | None = None, **kwargs) -> "RolloutTrace":
-        trace: RolloutTrace = cls.from_iter(RolloutStream(model, batch[0], initial), **kwargs)
-        trace.world_step.environments, trace.world_step.visited = environments, batch[1]
-        return trace
+    arr = _to_numeric_array(value)
+    if arr is not None:
+        _append_dense(node=node, key=name, arr=arr, t=t, path=current_path + (name,), tree=tree)
+        return
 
-
-def _batch_size_from_multiscale(code: MultiScaleCode | None) -> int:
-    if not code:
-        return 0
-    return int(code[0].shape[0]) if len(code) > 0 else 0
+    node.record_meta(key=name, t=t, value=value, allow_sparse=tree.config.allow_meta_sparse)
 
 
-def _batch_size_from_multiscale_trace(trace: Sequence[MultiScaleCode]) -> int:
-    if not trace:
-        return 0
-    return _batch_size_from_multiscale(trace[0])
+def _append_dense(*, node: TraceNode, key: str, arr: np.ndarray, t: int, path: tuple[str, ...], tree: TraceTree) -> None:
+    """Append a dense numeric array with validation."""
+
+    if arr.dtype == object:
+        _handle_irregular(node=node, key=key, t=t, value=arr, tree=tree)
+        return
+
+    _validate_batch(arr, path=path, tree=tree)
+    _validate_shape(node, key, arr, path=path, tree=tree)
+    node.append_data(key, arr)
+
+
+def _validate_batch(arr: np.ndarray, *, path: tuple[str, ...], tree: TraceTree) -> None:
+    """Validate or set the batch size for batched arrays."""
+
+    if arr.ndim == 0:
+        return
+
+    full_path = "/".join(path)
+    if full_path in tree.config.global_paths:
+        return
+
+    if tree.batch_size is None:
+        tree.batch_size = int(arr.shape[0])
+        return
+
+    if int(arr.shape[0]) != tree.batch_size:
+        _raise_or_event(tree, ValueError("Batch size mismatch at " f"{full_path}: expected {tree.batch_size}, got {arr.shape[0]}"))
+
+
+def _validate_shape(node: TraceNode, key: str, arr: np.ndarray, *, path: tuple[str, ...], tree: TraceTree) -> None:
+    """Validate shape and dtype stability for a dense key."""
+
+    if key not in node._buffers or not node._buffers[key]:
+        return
+
+    prev = node._buffers[key][-1]
+    if prev.shape != arr.shape or prev.dtype != arr.dtype:
+        full_path = "/".join(path)
+        _raise_or_event(tree, ValueError("Shape/dtype mismatch at " f"{full_path}: expected {prev.shape}/{prev.dtype}, " f"got {arr.shape}/{arr.dtype}"))
+
+
+def _handle_irregular(*, node: TraceNode, key: str, t: int, value: Any, tree: TraceTree) -> None:
+    """Handle irregular data by recording events or raising errors."""
+
+    if tree.config.allow_events:
+        node.record_event(key, t, value)
+        return
+
+    raise ValueError(f"Irregular value for key {key!r} at t={t}")
+
+
+def _raise_or_event(tree: TraceTree, exc: Exception) -> None:
+    """Raise in strict mode or swallow in lenient mode."""
+
+    if tree.config.strict:
+        raise exc
+
+
+def _to_numeric_array(value: Any) -> Optional[np.ndarray]:
+    """Convert a value to a numeric NumPy array if possible."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, Number):
+        return np.asarray(value)
+
+    if isinstance(value, np.ndarray):
+        return value
+
+    if hasattr(value, "detach") and callable(value.detach):
+        try:
+            return value.detach().cpu().numpy()
+        except Exception:
+            return None
+
+    try:
+        arr = np.asarray(value)
+    except Exception:
+        return None
+
+    if arr.dtype == object or not np.issubdtype(arr.dtype, np.number):
+        return None
+
+    return arr
+
+
+def _is_list_of_numeric_arrays(value: Any) -> bool:
+    """Return True if value is a non-empty list/tuple of numeric arrays."""
+
+    if not isinstance(value, (list, tuple)):
+        return False
+    if not value:
+        return False
+    return all(_to_numeric_array(item) is not None for item in value)
+
+
+def _is_dataclass_instance(value: Any) -> bool:
+    """Return True for dataclass instances (not classes)."""
+
+    return is_dataclass(value) and not isinstance(value, type)
+
+
+def _filter_events(events: dict[str, list[Event]], t0: int, t1: int, rebase: bool) -> dict[str, list[Event]]:
+    """Filter events by time range and optionally rebase timestamps."""
+
+    filtered: dict[str, list[Event]] = {}
+    for key, entries in events.items():
+        subset = [e for e in entries if t0 <= e.t < t1]
+        if rebase:
+            subset = [Event(t=e.t - t0, payload=e.payload) for e in subset]
+        if subset:
+            filtered[key] = subset
+    return filtered
+
+
+def _filter_meta_sparse(updates: dict[str, list[MetaUpdate]], t0: int, t1: int, rebase: bool) -> dict[str, list[MetaUpdate]]:
+    """Filter sparse metadata updates by time range."""
+
+    filtered: dict[str, list[MetaUpdate]] = {}
+    for key, entries in updates.items():
+        subset = [u for u in entries if t0 <= u.t < t1]
+        if rebase:
+            subset = [MetaUpdate(t=u.t - t0, value=u.value) for u in subset]
+        if subset:
+            filtered[key] = subset
+    return filtered
+
+
+def iter_nodes(root: TraceNode) -> Iterator[TraceNode]:
+    """Depth-first iteration over trace nodes."""
+
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(reversed(list(node.children.values())))

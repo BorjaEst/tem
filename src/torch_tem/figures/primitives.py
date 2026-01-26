@@ -19,17 +19,27 @@ from matplotlib import cm
 from numpy.typing import NDArray
 
 
-def initialise_axes(ax: Optional[plt.Axes] = None) -> plt.Axes:
+def initialise_axes(
+    ax: Optional[plt.Axes] = None,
+    *,
+    environment: Optional[object] = None,
+    radius: Optional[float] = None,
+    padding_scale: float = 2.0,
+) -> plt.Axes:
     """Initialize or configure axes for environment map plotting.
 
     Sets up axes with:
-        - Limits [0, 1] x [0, 1] (normalized environment coordinates)
+        - Limits derived from environment coordinates when provided
         - Equal aspect ratio (square axes)
         - Inverted y-axis (graphics convention: y increases downward)
         - Hidden axis labels and ticks
 
     Args:
         ax: Existing axes to configure. If None, creates new figure and axes.
+        environment: Optional environment with a .locations list of dicts
+            containing "o" (x) and "y" (y) coordinates.
+        radius: Optional marker radius used to pad axis limits.
+        padding_scale: Multiplier applied to radius for axis padding.
 
     Returns:
         Configured matplotlib Axes object.
@@ -38,13 +48,41 @@ def initialise_axes(ax: Optional[plt.Axes] = None) -> plt.Axes:
         plt.figure()
         ax = plt.axes()
 
-    ax.set_xlim([0, 1])
-    ax.set_ylim([0, 1])
+    if environment is not None and getattr(environment, "locations", None):
+        coords = np.array([[loc.get("o"), loc.get("y")] for loc in environment.locations], dtype=float)
+        valid = np.isfinite(coords).all(axis=1)
+        coords = coords[valid]
+        if coords.size > 0:
+            x_min, y_min = coords.min(axis=0)
+            x_max, y_max = coords.max(axis=0)
+            if radius is None:
+                radius = _default_radius(getattr(environment, "n_locations", 0))
+            pad = (radius or 0.02) * padding_scale
+            if x_min == x_max:
+                x_min -= 1.0
+                x_max += 1.0
+            if y_min == y_max:
+                y_min -= 1.0
+                y_max += 1.0
+            ax.set_xlim([x_min - pad, x_max + pad])
+            ax.set_ylim([y_min - pad, y_max + pad])
+        else:
+            ax.set_xlim([0, 1])
+            ax.set_ylim([0, 1])
+    else:
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1])
     ax.set_aspect(1)
     ax.invert_yaxis()  # Y increases downward (standard graphics convention)
     ax.axis("off")
 
     return ax
+
+
+def _default_radius(n_locations: int) -> float:
+    if n_locations <= 0:
+        return 0.05
+    return 2 * (0.01 + 1 / (10 * np.sqrt(n_locations)))
 
 
 def action_patch(location_from: dict, location_to: dict, radius: float, colour) -> plt.Polygon:
@@ -110,42 +148,70 @@ def plot_map(
     Returns:
         The axes object with the environment map rendered.
     """
-    # Handle NaN values by using nanmin/nanmax
-    min_val = np.nanmin(values) if min_val is None else min_val
-    max_val = np.nanmax(values) if max_val is None else max_val
+    values = np.asarray(values, dtype=float)
+    has_finite = values.size > 0 and np.isfinite(values).any()
+
+    # Handle NaN values by using nanmin/nanmax when possible
+    min_val = (np.nanmin(values) if has_finite else 0.0) if min_val is None else min_val
+    max_val = (np.nanmax(values) if has_finite else 1.0) if max_val is None else max_val
 
     location_cm = cm.get_cmap(location_cm, num_cols)
-    action_cm = cm.get_cmap(action_cm, environment.n_actions)
+    action_cm = cm.get_cmap(action_cm, max(getattr(environment, "n_actions", 0), 1))
 
     # Normalize values to colormap indices, handling NaN
-    if max_val != min_val:
-        plotvals = np.floor((values - min_val) / (max_val - min_val) * num_cols)
+    if values.size == 0:
+        plotvals = np.zeros(values.shape)
+        nan_mask = np.zeros(values.shape, dtype=bool)
     else:
-        plotvals = np.ones(values.shape)
+        if max_val != min_val:
+            plotvals = np.floor((values - min_val) / (max_val - min_val) * num_cols)
+        else:
+            plotvals = np.zeros(values.shape)
 
-    # Replace NaN with a sentinel for visualization (use 0 for blank/first color)
-    nan_mask = np.isnan(plotvals)
-    plotvals = np.where(nan_mask, 0, plotvals)
+        # Replace NaN with a sentinel for visualization (use 0 for blank/first color)
+        nan_mask = np.isnan(values)
+        plotvals = np.where(nan_mask, 0, plotvals)
 
     # Auto-scale radius based on environment density
     if radius is None:
-        radius = 2 * (0.01 + 1 / (10 * np.sqrt(environment.n_locations)))
+        radius = _default_radius(getattr(environment, "n_locations", 0))
 
-    ax = initialise_axes(ax)
+    ax = initialise_axes(ax, environment=environment, radius=radius)
 
     location_patches: List = []
     action_patches: List = []
 
     # Draw locations
     for i, location in enumerate(environment.locations):
-        # Use alpha channel to indicate NaN values (make them semi-transparent)
-        alpha = 0.2 if nan_mask[i] else 1.0
-        color = location_cm(int(plotvals[i]))
+        is_nan = nan_mask[i] if nan_mask.size else False
+        if is_nan:
+            color = "#d9d9d9"
+            edgecolor = "#444444"
+            alpha = 1.0
+        else:
+            color = location_cm(int(plotvals[i]))
+            edgecolor = None
+            alpha = 1.0
 
         if shape == "square":
-            patch = plt.Rectangle((location["o"] - radius / 2, location["y"] - radius / 2), radius, radius, color=color, alpha=alpha)
+            patch = plt.Rectangle(
+                (location["o"] - radius / 2, location["y"] - radius / 2),
+                radius,
+                radius,
+                color=color,
+                alpha=alpha,
+                edgecolor=edgecolor,
+                linewidth=0.6 if edgecolor else 0.0,
+            )
         else:  # circle
-            patch = plt.Circle((location["o"], location["y"]), radius, color=color, alpha=alpha)
+            patch = plt.Circle(
+                (location["o"], location["y"]),
+                radius,
+                color=color,
+                alpha=alpha,
+                edgecolor=edgecolor,
+                linewidth=0.6 if edgecolor else 0.0,
+            )
         location_patches.append(patch)
 
         # Draw action arrows if requested
@@ -197,7 +263,7 @@ def plot_walk(
     max_steps = len(walk) if max_steps is None else min(max_steps, len(walk))
 
     if ax is None:
-        ax = initialise_axes(ax)
+        ax = initialise_axes(ax, environment=environment)
 
     # Find circle patches on current axis to infer radius
     location_patches = [patch_i for patch_i, patch in enumerate(ax.patches) if isinstance(patch, (plt.Circle, plt.Rectangle))]
@@ -256,6 +322,10 @@ def plot_actions(
     Returns:
         The axes object with action visualization rendered.
     """
+    if not getattr(environment, "locations", None):
+        ax = initialise_axes(ax, environment=environment)
+        return ax
+
     # Auto-scale min/max from field values
     if min_val is None:
         min_val = min(action[field] for location in environment.locations for action in location["actions"])
@@ -263,9 +333,9 @@ def plot_actions(
         max_val = max(action[field] for location in environment.locations for action in location["actions"])
 
     action_cm = cm.get_cmap(action_cm, num_cols)
-    radius = 2 * (0.01 + 1 / (10 * np.sqrt(environment.n_locations)))
+    radius = _default_radius(getattr(environment, "n_locations", 0))
 
-    ax = initialise_axes(ax)
+    ax = initialise_axes(ax, environment=environment, radius=radius)
 
     location_patches: List = []
     action_patches: List = []

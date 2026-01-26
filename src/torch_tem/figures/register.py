@@ -5,7 +5,7 @@ import issues by separating registration from core infrastructure.
 """
 
 from torch_tem.diagnostics.traces import RolloutTrace, WorldTrace
-from torch_tem.figures.modules import environment, overview, split, walk
+from torch_tem.figures.modules import cells, coverage, decoding, dynamics, environment, memory, overview, representation, split, uncertainty, walk
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 
@@ -77,5 +77,152 @@ def register_builtin_figures() -> None:
             plot=split.statistics.plot,
             accepts=WorldTrace,
             tags={"data", "split", "statistics"},
+        )
+    )
+
+    # Cell figures
+    REGISTRY.register(
+        FigureSpec(
+            name="cells.place_rate_maps",
+            description="Place-cell rate maps with occupancy overview",
+            plot=cells.place_rate_maps.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "spatial", "cells"},
+        )
+    )
+
+    REGISTRY.register(
+        FigureSpec(
+            name="cells.place_rate_maps.frequencies",
+            description="Place-cell rate maps across frequency modules",
+            plot=cells.place_rate_maps.plot_frequencies,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "spatial", "cells"},
+        )
+    )
+
+    REGISTRY.register(
+        FigureSpec(
+            name="cells.place_rate_maps.pathways",
+            description="Place-cell rate maps across inference/generative pathways",
+            plot=cells.place_rate_maps.plot_pathways,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "spatial", "cells"},
+        )
+    )
+
+    REGISTRY.register(
+        FigureSpec(
+            name="cells.place_field_summary",
+            description="Summary statistics of place fields (sparsity, peaks, size)",
+            plot=cells.place_field_summary.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "cells", "statistics"},
+        )
+    )
+
+    REGISTRY.register(
+        FigureSpec(
+            name="cells.remapping_correlation",
+            description="Correlation of rate maps across environments",
+            plot=cells.remapping_correlation.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "cells", "spatial"},
+        )
+    )
+
+    REGISTRY.register(
+        FigureSpec(
+            name="cells.spatial_autocorrelogram",
+            description="Radial spatial autocorrelogram for place-like activity",
+            plot=cells.spatial_autocorrelogram.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "cells", "spatial"},
+        )
+    )
+
+    # Coverage figures
+    REGISTRY.register(
+        FigureSpec(
+            name="coverage.occupancy_map",
+            description="Occupancy map showing visited locations",
+            plot=coverage.occupancy_map.plot,
+            accepts=WorldTrace,
+            tags={"data", "coverage", "spatial"},
+        )
+    )
+
+    REGISTRY.register(
+        FigureSpec(
+            name="coverage.action_bias_map",
+            description="Action bias map based on per-location action entropy",
+            plot=coverage.action_bias_map.plot,
+            accepts=WorldTrace,
+            tags={"data", "coverage", "spatial"},
+        )
+    )
+
+    # Decoding figures
+    REGISTRY.register(
+        FigureSpec(
+            name="decoding.location_error_map",
+            description="Decoding error aggregated by location",
+            plot=decoding.location_error_map.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "spatial", "decoding"},
+        )
+    )
+
+    # Dynamics figures
+    REGISTRY.register(
+        FigureSpec(
+            name="dynamics.path_integration_drift",
+            description="Path integration drift over time",
+            plot=dynamics.path_integration_drift.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "dynamics"},
+        )
+    )
+
+    REGISTRY.register(
+        FigureSpec(
+            name="dynamics.sequence_consistency",
+            description="Consistency between generated and inferred sequences",
+            plot=dynamics.sequence_consistency.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "dynamics"},
+        )
+    )
+
+    # Representation figures
+    REGISTRY.register(
+        FigureSpec(
+            name="representation.freq_similarity",
+            description="Representational similarity across frequencies",
+            plot=representation.freq_similarity.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "representation"},
+        )
+    )
+
+    # Memory figures
+    REGISTRY.register(
+        FigureSpec(
+            name="memory.retrieval_error_by_location",
+            description="Retrieval error aggregated by location",
+            plot=memory.retrieval_error_by_location.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "memory", "spatial"},
+        )
+    )
+
+    # Uncertainty figures
+    REGISTRY.register(
+        FigureSpec(
+            name="uncertainty.calibration",
+            description="Uncertainty calibration curve",
+            plot=uncertainty.calibration.plot,
+            accepts=RolloutTrace,
+            tags={"model", "rollout", "uncertainty"},
         )
     )

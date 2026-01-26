@@ -21,7 +21,7 @@ import numpy as np
 from matplotlib.figure import Figure
 
 
-def save_pdf(fig: Figure, path: Path, *, bbox_inches: str = "tight", dpi: Optional[int] = None) -> None:
+def save_pdf(fig: Figure, path: Path | str, *, bbox_inches: str = "tight", dpi: Optional[int] = None) -> None:
     """Save a matplotlib Figure as a PDF file.
 
     Args:
@@ -40,13 +40,14 @@ def save_pdf(fig: Figure, path: Path, *, bbox_inches: str = "tight", dpi: Option
         >>> save_pdf(fig, Path("output/my_figure.pdf"))
     """
     # Ensure output directory exists
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Save as PDF (vector format)
     fig.savefig(path, format="pdf", bbox_inches=bbox_inches, dpi=dpi)
 
 
-def save_png(fig: Figure, path: Path, *, bbox_inches: str = "tight", dpi: int = 150) -> None:
+def save_png(fig: Figure, path: Path | str, *, bbox_inches: str = "tight", dpi: int = 150) -> None:
     """Save a matplotlib Figure as a PNG file.
 
     Args:
@@ -58,6 +59,7 @@ def save_png(fig: Figure, path: Path, *, bbox_inches: str = "tight", dpi: int = 
     Raises:
         OSError: If the output directory cannot be created or the file cannot be written.
     """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, format="png", bbox_inches=bbox_inches, dpi=dpi)
 

@@ -196,6 +196,10 @@ class RunArguments(BaseSettings):
         default=20000,
         description="Maximum training steps.",
     )
+    val_check_interval: int = Field(
+        default=100,
+        description="Validation check interval (in training steps).",
+    )
     log_every_n_steps: int = Field(
         default=10,
         description="Log metrics every N steps.",
@@ -299,6 +303,7 @@ if __name__ == "__main__":
         callbacks=callbacks_list,
         # Lightning Trainer kwargs (extracted from config)
         max_steps=args.max_steps,
+        val_check_interval=args.val_check_interval,
         log_every_n_steps=args.log_every_n_steps,
         enable_progress_bar=args.enable_progress_bar,
     )

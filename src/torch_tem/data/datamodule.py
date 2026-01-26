@@ -180,6 +180,27 @@ class DataModule(pl.LightningDataModule):
             return next(iter(self.test_dataset))
         raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
 
+    def reset_split(self, split: str) -> None:
+        """Reset a deterministic dataset split to its initial state.
+
+        Args:
+            split: One of "validate" or "test". "train" is ignored.
+
+        Raises:
+            ValueError: If the split name is invalid.
+        """
+        if split == "train":
+            return
+        if split == "validate":
+            if self.val_dataset is not None:
+                self.val_dataset.reset()
+            return
+        if split == "test":
+            if self.test_dataset is not None:
+                self.test_dataset.reset()
+            return
+        raise ValueError(f"Invalid split '{split}'; must be one of 'train', 'validate', or 'test'.")
+
 
 @dataclass
 class DataStep:
@@ -236,13 +257,26 @@ class TEMDataset(IterableDataset):
         # Initialize environments and walks
         self.environments, self.walks, self.visited = self._setup_environments()
 
+    def reset(self) -> None:
+        """Reset deterministic datasets to their initial seeded state.
+
+        For training datasets (unseeded), this is a no-op to avoid disrupting
+        training dynamics.
+        """
+        if self.seed is None:
+            return
+
+        self.np_rng = np.random.default_rng(self.seed)
+        self.torch_generator = torch.Generator().manual_seed(self.seed)
+        self.environments, self.walks, self.visited = self._setup_environments()
+
     def _setup_environments(self):
         """Initialize training environments, walks, and visit tracking."""
         # Use local RNG for deterministic val/test, global for training
         rng = self.np_rng
 
         environments = [
-            World(graph, randomise_observations=self.data_settings.env.randomise_observations, shiny=self._maybe_build_shiny_config(rng))
+            World(graph, randomise_observations=self.data_settings.env.randomise_observations, shiny=self._maybe_build_shiny_config(rng), rng=rng)
             for graph in rng.choice(self.env_paths, self.data_settings.iterator.rollout.batch_size)
         ]
         walks = [env.generate_walks(self.data_settings.iterator.rollout.n_rollout * rng.integers(self.walk_it_min, self.walk_it_max), 1)[0] for env in environments]
@@ -289,6 +323,7 @@ class TEMDataset(IterableDataset):
                     self.env_paths[rng.integers(len(self.env_paths))],
                     randomise_observations=self.data_settings.env.randomise_observations,
                     shiny=self._maybe_build_shiny_config(rng),
+                    rng=rng,
                 )
                 self.visited[env_i] = [False for _ in range(self.environments[env_i].n_locations)]
                 walk = self.environments[env_i].generate_walks(

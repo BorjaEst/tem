@@ -8,7 +8,7 @@ Created on Tue Feb 11 14:33:06 2020
 import copy
 import json
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -33,7 +33,8 @@ class WorldStep:
 
 
 class World:
-    def __init__(self, env, randomise_observations=False, randomise_policy=False, shiny=None):
+    def __init__(self, env, randomise_observations=False, randomise_policy=False, shiny=None, rng: Optional[np.random.Generator] = None):
+        self.rng = rng or np.random.default_rng()
         # If the environment is provided as a filename: load the corresponding file. If it's no filename, it's assumed to be an environment dictionary
         if type(env) == str or type(env) == np.str_:
             # Filename provided, load graph from json file
@@ -86,7 +87,7 @@ class World:
             self.shiny["locations"] = []
             # Then select shiny locations by adding them one-by-one, with the constraint that they can't be too close to each other
             while len(self.shiny["locations"]) < self.shiny["n"]:
-                new = np.random.randint(self.n_locations)
+                new = self.rng.integers(self.n_locations)
                 too_close = [dist_matrix[new, existing] < np.max(dist_matrix) / self.shiny["n"] for existing in self.shiny["locations"]]
                 if not any(too_close):
                     self.shiny["locations"].append(new)
@@ -102,7 +103,7 @@ class World:
                 # Update a non-shiny location if it has a shiny object observation
                 if location["id"] not in self.shiny["locations"] and location["observation"] in self.shiny["objects"]:
                     # Pick new observation from non-shiny objects
-                    location["observation"] = np.random.choice(not_shiny)
+                    location["observation"] = self.rng.choice(not_shiny)
             # Generate a policy towards each of the shiny objects
             self.shiny["policies"] = [self.policy_distance(shiny_location) for shiny_location in self.shiny["locations"]]
 
@@ -110,7 +111,7 @@ class World:
         # Run through every abstract location
         for location in self.locations:
             # Pick random observation from any of the observations
-            location["observation"] = np.random.randint(self.n_observations)
+            location["observation"] = self.rng.integers(self.n_observations)
         return self
 
     def policy_random(self):
@@ -213,7 +214,7 @@ class World:
 
     def walk_shiny(self, walk, walk_length, repeat_bias_factor=2):
         # Pick current shiny object to approach
-        shiny_current = np.random.randint(self.shiny["n"])
+        shiny_current = self.rng.integers(self.shiny["n"])
         # Reset number of iterations to hang around an object once found
         shiny_returns = self.shiny["returns"]
         # Finish the provided walk until it contains walk_length steps
@@ -227,7 +228,7 @@ class World:
             # Check if it's time to select new object to approach
             if shiny_returns < 0:
                 # Pick new current shiny object to approach
-                shiny_current = np.random.randint(self.shiny["n"])
+                shiny_current = self.rng.integers(self.shiny["n"])
                 # Reset number of iterations to hang around an object once found
                 shiny_returns = self.shiny["returns"]
             # Get new observation at new location
@@ -242,10 +243,10 @@ class World:
     def get_location(self, walk):
         # First step: start at random location
         if len(walk) == 0:
-            new_location = np.random.randint(self.n_locations)
+            new_location = self.rng.integers(self.n_locations)
         # Any other step: get new location from previous location and action
         else:
-            new_location = int(np.flatnonzero(np.cumsum(walk[-1][0]["actions"][walk[-1][2]]["transition"]) > np.random.rand())[0])
+            new_location = int(np.flatnonzero(np.cumsum(walk[-1][0]["actions"][walk[-1][2]]["transition"]) > self.rng.random())[0])
         # Return the location dictionary of the new location
         return self.locations[new_location]
 
@@ -265,7 +266,7 @@ class World:
         # And renormalise policy (note that for unavailable actions, the policy was 0 and remains 0, so in that case no renormalisation needed)
         policy = policy / sum(policy) if sum(policy) > 0 else policy
         # Select action in new state
-        new_action = int(np.flatnonzero(np.cumsum(policy) > np.random.rand())[0])
+        new_action = int(np.flatnonzero(np.cumsum(policy) > self.rng.random())[0])
         # Return the new action
         return new_action
 

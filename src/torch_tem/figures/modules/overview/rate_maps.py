@@ -75,15 +75,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
         occupancy_values = occupancy.astype(float)
         occupancy_values[occupancy == 0] = np.nan
         occupancy_max = float(np.nanmax(occupancy_values)) if np.isfinite(occupancy_values).any() else 1.0
-        plot_map(
-            world,
-            occupancy_values,
-            ax=ax_occ,
-            min_val=0.0,
-            max_val=occupancy_max,
-            shape="square",
-            location_cm="Greys",
-        )
+        plot_map(world, occupancy_values, ax=ax_occ, min_val=0.0, max_val=occupancy_max, shape="square", location_cm="Greys")
         coverage = np.isfinite(occupancy_values).sum() / max(n_locations, 1)
         ax_occ.set_title(_append_context(f"Occupancy (coverage={coverage:.0%})", ctx))
 
@@ -93,26 +85,10 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
         g_inf_values = _clip_unit_interval(g_inf_rate_map[:, inf_feature_idx])
         g_gen_values = _clip_unit_interval(g_gen_rate_map[:, gen_feature_idx])
 
-        plot_map(
-            world,
-            g_inf_values,
-            ax=ax_inf_map,
-            min_val=0.0,
-            max_val=1.0,
-            shape="square",
-            location_cm="viridis",
-        )
+        plot_map(world, g_inf_values, ax=ax_inf_map, min_val=0.0, max_val=0.2, shape="square", location_cm="viridis")
         ax_inf_map.set_title(_append_context(f"g_inf[{inf_feature_idx}] Rate Map", ctx))
 
-        plot_map(
-            world,
-            g_gen_values,
-            ax=ax_gen_map,
-            min_val=0.0,
-            max_val=1.0,
-            shape="square",
-            location_cm="viridis",
-        )
+        plot_map(world, g_gen_values, ax=ax_gen_map, min_val=0.0, max_val=0.2, shape="square", location_cm="viridis")
         ax_gen_map.set_title(_append_context(f"g_gen[{gen_feature_idx}] Rate Map", ctx))
 
         _plot_autocorr_2d(ax_inf_auto, world, g_inf_values, f"g_inf[{inf_feature_idx}] 2D Autocorr", ctx)

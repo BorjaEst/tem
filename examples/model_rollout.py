@@ -85,7 +85,7 @@ class ExampleArguments(BaseSettings):
         description="Walk length curriculum settings.",
     )
     max_rollout_steps: int = Field(
-        default=400,
+        default=100,
         ge=10,
         description="Maximum rollout steps to collect.",
     )
@@ -215,12 +215,12 @@ def main() -> None:
         print("Using random initialization (no checkpoint provided).")
 
     model.eval()  # Set to evaluation mode
+    print("Step 2: TEM model initialized.")
     print()
 
     # ------------------------------------------------------------------
     # Step 3: Collect rollout trace with spatial alignment.
     # ------------------------------------------------------------------
-    print("Step 3: Collecting rollout trace...")
     dataset = datamodule.get_dataset("test")
     trace = collect_rollout_trace_tree(
         batch=datamodule.sample_batch(split="test"),
@@ -230,6 +230,7 @@ def main() -> None:
         meta={"split": "test"},
     )
 
+    print("Step 3: Collecting rollout trace complete.")
     print(f" - Batch size: {get_batch_size(trace)}")
     print(f" - Time steps: {get_length(trace)}")
     print(f" - Environments: {len(get_environments(trace))}")

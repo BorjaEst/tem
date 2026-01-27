@@ -1,5 +1,5 @@
 """Overview figure modules."""
 
-from torch_tem.figures.modules.overview import observations, rate_maps
+from torch_tem.figures.modules.overview import observations, spatial_structure
 
-__all__ = ["observations", "rate_maps"]
+__all__ = ["observations", "spatial_structure"]

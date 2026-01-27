@@ -27,9 +27,9 @@ def register_builtin_figures() -> None:
     # Combined model + spatial figures
     REGISTRY.register(
         FigureSpec(
-            name="overview.rate_maps",
-            description="Multi-panel overview with spatial rate maps (g_inf, g_gen)",
-            plot=overview.rate_maps.plot,
+            name="overview.spatial_structure",
+            description="Multi-panel overview with occupancy, abstract rate maps, autocorrelograms, and trajectory",
+            plot=overview.spatial_structure.plot,
             tags={"model", "rollout", "spatial", "overview"},
         )
     )

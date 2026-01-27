@@ -245,8 +245,8 @@ def main() -> None:
         print(f"Generating figures for frequency index: {freq_idx}")
         ctx = FigureContext(env_idx=0, freq_idx=freq_idx, figsize=(14, 10), split_name="validate")
         figs += [
-            (f"01.{freq_idx}_overview_rate_maps.png", figures.overview.rate_maps.plot(trace, ctx)),
-            (f"02.{freq_idx}_overview_observations.png", figures.overview.observations.plot(trace, ctx)),
+            (f"01.{freq_idx}_spatial_structure.png", figures.overview.spatial_structure.plot(trace, ctx)),
+            (f"02.{freq_idx}_todo.png", figures.overview.observations.plot(trace, ctx)),
         ]
 
     print(f"Step 4: Generated {len(figs)} figure(s).")

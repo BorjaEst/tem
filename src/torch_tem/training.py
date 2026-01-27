@@ -244,6 +244,15 @@ class TrainingLoop(pl.LightningModule):
         self._log_accuracy_metrics(prefix="", accuracies=accuracies)
         return loss_output.total
 
+    def on_validation_epoch_start(self) -> None:
+        """Reset deterministic validation streams at epoch start."""
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None:
+            return
+        reset = getattr(datamodule, "reset_split", None)
+        if callable(reset):
+            reset("validate")
+
     def validation_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Execute one validation step.
 
@@ -263,6 +272,15 @@ class TrainingLoop(pl.LightningModule):
         self._log_step_metrics(prefix="val/", loss_output=loss_output)
         self._log_accuracy_metrics(prefix="val/", accuracies=accuracies)
         return loss_output.total
+
+    def on_test_epoch_start(self) -> None:
+        """Reset deterministic test streams at epoch start."""
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None:
+            return
+        reset = getattr(datamodule, "reset_split", None)
+        if callable(reset):
+            reset("test")
 
     def test_step(self, batch: Any, batch_idx: int) -> Tensor:
         """Execute one test step.

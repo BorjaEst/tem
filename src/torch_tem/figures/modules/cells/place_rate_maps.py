@@ -13,6 +13,7 @@ from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
 from torch_tem.figures.trace_access import get_length, get_location_ids_for_env, get_multiscale, get_n_freq, get_world, validate_env_idx, validate_freq_idx
+from torch_tem.figures.utils.spatial import aggregate_rate_map, robust_min_max
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
         coverage = np.isfinite(occupancy_values).sum() / max(len(occupancy_values), 1)
         occ_ax.set_title(f"Occupancy (coverage={coverage:.0%})")
 
-        vmin, vmax = _robust_min_max(selection.rate_maps)
+        vmin, vmax = robust_min_max(selection.rate_maps)
 
         for idx, cell_id in enumerate(selection.cell_indices):
             row = idx // n_cols
@@ -138,7 +139,7 @@ def plot_frequencies(trace: TraceTree, ctx: FigureContext) -> Figure:
             rate_maps_by_freq.append(selected)
             all_maps.append(selected)
 
-        vmin, vmax = _robust_min_max(np.concatenate(all_maps, axis=1))
+        vmin, vmax = robust_min_max(np.concatenate(all_maps, axis=1))
 
         for freq_idx, freq_maps in enumerate(rate_maps_by_freq):
             for col, cell_id in enumerate(selection.cell_indices):
@@ -205,7 +206,7 @@ def plot_pathways(trace: TraceTree, ctx: FigureContext) -> Figure:
             pathway_maps.append(selected)
             all_maps.append(selected)
 
-        vmin, vmax = _robust_min_max(np.concatenate(all_maps, axis=1))
+        vmin, vmax = robust_min_max(np.concatenate(all_maps, axis=1))
 
         for row, (pathway_name, freq_maps) in enumerate(zip([p[0] for p in pathways], pathway_maps)):
             for col, cell_id in enumerate(selection.cell_indices):
@@ -244,28 +245,7 @@ def _aggregate_rate_maps(trace: TraceTree, env_idx: int, freq_idx: int) -> tuple
     activity_steps = get_multiscale(trace, "output/inference/p_inf", freq_idx)
     location_ids = get_location_ids_for_env(trace, env_idx)
     n_locations = len(get_world(trace, env_idx).locations)
-    return _aggregate_rate_maps_from_steps(activity_steps[:, env_idx, :], location_ids, n_locations)
-
-
-def _aggregate_rate_maps_from_steps(
-    activity_env: np.ndarray,
-    location_ids: list[int],
-    n_locations: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    if activity_env.ndim == 1:
-        activity_env = activity_env[:, None]
-
-    rate_map = np.full((n_locations, activity_env.shape[1]), np.nan, dtype=np.float32)
-    occupancy = np.zeros(n_locations, dtype=int)
-    loc_ids = np.asarray(location_ids, dtype=int)
-
-    for loc_id in range(n_locations):
-        mask = loc_ids == loc_id
-        if mask.any():
-            occupancy[loc_id] = int(mask.sum())
-            rate_map[loc_id] = activity_env[mask].mean(axis=0)
-
-    return rate_map, occupancy
+    return aggregate_rate_map(activity_steps[:, env_idx, :], location_ids, n_locations)
 
 
 def _select_top_k(activity_env: np.ndarray, k: int) -> np.ndarray:
@@ -276,13 +256,7 @@ def _select_top_k(activity_env: np.ndarray, k: int) -> np.ndarray:
 
 
 def _robust_min_max(values: np.ndarray, lower: float = 5.0, upper: float = 95.0) -> tuple[float, float]:
-    flat = values[np.isfinite(values)]
-    if flat.size == 0:
-        return 0.0, 1.0
-    vmin, vmax = np.percentile(flat, [lower, upper])
-    if vmin == vmax:
-        vmax = vmin + 1.0
-    return float(vmin), float(vmax)
+    return robust_min_max(values, lower=lower, upper=upper)
 
 
 def _get_default_style():

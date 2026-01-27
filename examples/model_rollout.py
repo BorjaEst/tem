@@ -118,7 +118,7 @@ class ExampleArguments(BaseSettings):
 
     # Checkpoint
     checkpoint: Path | None = Field(
-        default=None,
+        default=Path("models/tem_model_20260127-step=1000.ckpt"),
         description="Path to model checkpoint (optional). If None, uses random init.",
     )
 
@@ -128,7 +128,7 @@ class ExampleArguments(BaseSettings):
         description="Directory for saving plots",
     )
     show_plots: bool = Field(
-        default=True,
+        default=False,
         description="Display plots interactively",
     )
     save_plots: bool = Field(

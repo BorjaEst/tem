@@ -85,7 +85,7 @@ class ExampleArguments(BaseSettings):
         description="Walk length curriculum settings.",
     )
     max_rollout_steps: int = Field(
-        default=100,
+        default=400,
         ge=10,
         description="Maximum rollout steps to collect.",
     )
@@ -207,8 +207,9 @@ def main() -> None:
     # Load checkpoint if provided
     if args.checkpoint:
         print(f"Loading checkpoint: {args.checkpoint}")
-        state_dict = torch.load(args.checkpoint, map_location="cpu")
-        model.load_state_dict(state_dict)
+        state_dict = torch.load(args.checkpoint, map_location="cpu", weights_only=False)["state_dict"]
+        tem_sd = {k.removeprefix("tem."): v for k, v in state_dict.items() if k.startswith("tem.")}
+        model.load_state_dict(tem_sd, strict=False)
         print("Checkpoint loaded.")
     else:
         print("Using random initialization (no checkpoint provided).")

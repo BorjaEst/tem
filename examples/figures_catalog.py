@@ -243,8 +243,9 @@ def _build_rollout_trace(args: ExampleArguments):
     model = TEMModel(args.model)
     if args.checkpoint:
         logger.info("Loading checkpoint: %s", args.checkpoint)
-        state_dict = torch.load(args.checkpoint, map_location="cpu")
-        model.load_state_dict(state_dict)
+        state_dict = torch.load(args.checkpoint, map_location="cpu", weights_only=False)["state_dict"]
+        tem_sd = {k.removeprefix("tem."): v for k, v in state_dict.items() if k.startswith("tem.")}
+        model.load_state_dict(tem_sd, strict=False)
     model.eval()
 
     dataset = datamodule.get_dataset("validate")

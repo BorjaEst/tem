@@ -85,7 +85,7 @@ class ExampleArguments(BaseSettings):
         description="Walk length curriculum settings.",
     )
     max_rollout_steps: int = Field(
-        default=100,
+        default=400,
         ge=10,
         description="Maximum rollout steps to collect.",
     )

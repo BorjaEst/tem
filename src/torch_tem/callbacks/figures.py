@@ -265,10 +265,7 @@ class FiguresCallback(pl.Callback):
     def _dispatch_figures(self, trainer: Trainer, figure_names: Iterable[str], context: FigureContext, trace: TraceTree) -> None:
         for figure_name in figure_names:
             spec = REGISTRY.get(figure_name)
-            if isinstance(trace, spec.accepts):
-                self.generate_figure(trainer, trace, context, spec)
-            else:
-                print("Warning: Skipping " f"{figure_name} (no compatible trace)")
+            self.generate_figure(trainer, trace, context, spec)
 
     def figure_context(self, trainer: Trainer, split_name: Optional[str]) -> FigureContext:
         """Build FigureContext from settings and trainer state."""

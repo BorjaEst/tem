@@ -45,15 +45,13 @@ class FigureSpec:
         name: Unique stable identifier (e.g., "overview").
         description: Human-readable description of the figure.
         plot: Plotting function (trace, ctx) -> Figure.
-        accepts: Type hint for accepted trace type.
         default_filename: Default filename stem for saved figures (without extension).
         tags: Optional set of tags for grouping/filtering figures.
     """
 
     name: str
     description: str
-    plot: Callable[[Any, FigureContext], Figure]
-    accepts: type[Any]
+    plot: Callable[[TraceTree, FigureContext], Figure]
     default_filename: Optional[str] = None
     tags: frozenset[str] = frozenset()
 
@@ -65,9 +63,6 @@ class FigureSpec:
         # Normalize tags to an immutable set for deterministic behavior.
         if not isinstance(self.tags, frozenset):
             self.tags = frozenset(self.tags)
-        # Enforce nominal typing for dispatch.
-        if not isinstance(self.accepts, type) or not issubclass(self.accepts, TraceTree):
-            raise TypeError(f"FigureSpec.accepts must be TraceTree; got {self.accepts!r}")
 
 
 class FigureRegistry:

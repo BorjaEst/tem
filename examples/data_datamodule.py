@@ -31,7 +31,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics.traces import WorldTrace
+from torch_tem.diagnostics.trace_collectors import collect_world_trace_tree
 from torch_tem.figures.registry import FigureContext
 from torch_tem.settings import CurriculumSettings, EnvironmentSettings, EnvSamplingSettings, RolloutStreamSettings, SpaceContractSettings
 
@@ -170,7 +170,12 @@ def main() -> None:
     # ------------------------------------------------------------------
     dataset = datamodule.get_dataset("validate")
     environments = dataset.environments
-    trace = WorldTrace.from_batch(batch, environments, meta={"split": "validate"})
+    trace = collect_world_trace_tree(
+        walk=walk,
+        environments=environments,
+        visited=visited,
+        meta={"split": "validate"},
+    )
     ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
 
     figs: list[tuple[str, plt.Figure]] = [

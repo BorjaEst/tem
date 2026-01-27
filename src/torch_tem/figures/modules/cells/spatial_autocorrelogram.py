@@ -6,18 +6,18 @@ from typing import Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import RolloutTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_length, get_location_ids_for_env, get_multiscale, get_world, validate_env_idx, validate_freq_idx
 
 
-def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render a radial spatial autocorrelogram for place-like activity.
 
     Args:
-        trace: RolloutTrace containing inference codes.
+        trace: TraceTree containing inference codes.
         ctx: Figure context with env and frequency selection.
 
     Returns:
@@ -27,18 +27,18 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     with style_ctx:
         fig, ax = plt.subplots(figsize=ctx.figsize)
 
-        if trace.batch_size == 0 or len(trace) == 0:
+        if get_length(trace) == 0:
             ax.set_title("No trace data (empty rollout)")
             ax.axis("off")
             return fig
 
-        env_idx = _validate_env_idx(trace, int(ctx.env_idx))
-        freq_idx = _validate_freq_idx(trace, int(ctx.freq_idx))
+        env_idx = validate_env_idx(trace, int(ctx.env_idx))
+        freq_idx = validate_freq_idx(trace, "output/inference/p_inf", int(ctx.freq_idx))
 
-        world = _get_world(trace, env_idx)
-        location_ids = _get_location_ids(trace, env_idx)
-        activity_steps = _get_multiscale_steps(trace.output.inference.p_inf, freq_idx)
-        activity_env = activity_steps[:, env_idx, :].numpy()
+        world = get_world(trace, env_idx)
+        location_ids = get_location_ids_for_env(trace, env_idx)
+        activity_steps = get_multiscale(trace, "output/inference/p_inf", freq_idx)
+        activity_env = activity_steps[:, env_idx, :]
         rate_map = _aggregate_rate_maps(activity_env, location_ids, len(world.locations))
 
         coords = _location_coords(world)
@@ -147,48 +147,6 @@ def _bin_autocorr(values: np.ndarray, distances: np.ndarray, bins: np.ndarray) -
         if mask.any():
             out[bin_idx] = float(np.mean(products[mask]))
     return out
-
-
-def _get_multiscale_steps(steps, freq_idx: int) -> torch.Tensor:
-    """Stack multiscale steps for a single frequency."""
-    if not steps:
-        raise ValueError("RolloutTrace has no inference steps")
-    if not (0 <= freq_idx < len(steps[0])):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(steps[0])})")
-    return torch.stack([step[freq_idx].detach().cpu() for step in steps], dim=0)
-
-
-def _get_world(trace: RolloutTrace, env_idx: int):
-    """Get the World for the selected environment index."""
-    if not trace.world_step.environments:
-        raise ValueError("RolloutTrace has no environments")
-    return trace.world_step.environments[env_idx]
-
-
-def _get_location_ids(trace: RolloutTrace, env_idx: int) -> list[int]:
-    """Get per-step location ids for the selected environment."""
-    location_ids = trace.world_step.location_ids
-    if not location_ids:
-        raise ValueError("RolloutTrace has no location ids")
-    return location_ids[env_idx]
-
-
-def _validate_env_idx(trace: RolloutTrace, env_idx: int) -> int:
-    """Validate the selected environment index."""
-    if not (0 <= env_idx < trace.batch_size):
-        raise IndexError(f"env_idx {env_idx} out of range [0, {trace.batch_size})")
-    return env_idx
-
-
-def _validate_freq_idx(trace: RolloutTrace, freq_idx: int) -> int:
-    """Validate the selected frequency index."""
-    steps = trace.output.inference.p_inf
-    if not steps:
-        raise ValueError("RolloutTrace has no inference steps")
-    n_freq = len(steps[0])
-    if not (0 <= freq_idx < n_freq):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {n_freq})")
-    return freq_idx
 
 
 def _append_context(title: str, ctx: FigureContext) -> str:

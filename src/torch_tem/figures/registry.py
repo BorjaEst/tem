@@ -67,7 +67,7 @@ class FigureSpec:
             self.tags = frozenset(self.tags)
         # Enforce nominal typing for dispatch.
         if not isinstance(self.accepts, type) or not issubclass(self.accepts, TraceTree):
-            raise TypeError("FigureSpec.accepts must be TraceTree; " f"got {self.accepts!r}")
+            raise TypeError(f"FigureSpec.accepts must be TraceTree; got {self.accepts!r}")
 
 
 class FigureRegistry:

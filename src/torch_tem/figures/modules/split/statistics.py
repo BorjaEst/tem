@@ -24,7 +24,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     - Split metadata
 
     Args:
-        trace: WorldTrace with environment(s) and walk(s).
+        trace: TraceTree with environment(s) and walk data.
         ctx: Figure context (env_idx, figsize, style, etc.).
 
     Returns:

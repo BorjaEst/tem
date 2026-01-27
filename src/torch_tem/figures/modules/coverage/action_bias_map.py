@@ -18,7 +18,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render an action bias map summarizing action entropy per location.
 
     Args:
-        trace: WorldTrace or RolloutTrace providing actions and locations.
+        trace: TraceTree providing actions and locations.
         ctx: Figure context with env selection and styling.
 
     Returns:

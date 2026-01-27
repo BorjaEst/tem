@@ -27,7 +27,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     - Bottom-right: Spatial rate map for a single g_gen feature
 
     Args:
-        trace: RolloutTrace with model outputs + world geometry + location IDs.
+        trace: TraceTree with model outputs + world geometry + location IDs.
         ctx: Figure context (env_idx, freq_idx, figsize, style, etc.).
 
     Returns:

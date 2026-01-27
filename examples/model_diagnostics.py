@@ -22,9 +22,10 @@ import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import data, figures
+from torch_tem import data
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics.traces import RolloutTrace
+from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree, downsample_trace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.register import register_builtin_figures
 from torch_tem.figures.registry import REGISTRY, FigureContext
 from torch_tem.model import Model as TEMModel
@@ -170,7 +171,7 @@ class ExampleArguments(BaseSettings):
         return TEMConfig.model_validate(self, from_attributes=True)
 
 
-def _build_rollout_trace(args: ExampleArguments) -> RolloutTrace:
+def _build_rollout_trace(args: ExampleArguments) -> TraceTree:
     """Create a rollout trace from a DataModule and TEM model."""
     # Build the datamodule and model to generate a rollout trace.
     datamodule = data.DataModule(args.data)
@@ -184,13 +185,15 @@ def _build_rollout_trace(args: ExampleArguments) -> RolloutTrace:
     model.eval()
 
     dataset = datamodule.get_dataset("validate")
-    trace = RolloutTrace.from_batch(
+    trace = collect_rollout_trace_tree(
         batch=datamodule.sample_batch(split="validate"),
         environments=dataset.environments,
         model=model,
         stop=args.max_rollout_steps,
         meta={"split": "validate"},
-    ).downsample_time(args.downsample_stride)
+    )
+    if args.downsample_stride > 1:
+        trace = downsample_trace(trace, args.downsample_stride)
     return trace
 
 

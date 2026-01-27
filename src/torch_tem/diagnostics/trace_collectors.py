@@ -46,6 +46,13 @@ class TraceStep:
     state: TEMState
 
 
+@dataclass(frozen=True)
+class TraceWorldOnlyStep:
+    """TraceTree-friendly step container for world-only traces."""
+
+    world_step: TraceWorldStep
+
+
 def collect_rollout_trace_tree(
     batch: Any,
     environments: Sequence[Any],
@@ -80,6 +87,43 @@ def collect_rollout_trace_tree(
         if stop is not None and idx >= stop:
             break
         trace.append(_to_trace_step(step))
+
+    trace.finalize()
+    trace.root.meta_static["environments"] = list(environments)
+    trace.root.meta_static["visited"] = visited
+    if meta is not None:
+        trace.root.meta_static["meta"] = dict(meta)
+    return trace
+
+
+def collect_world_trace_tree(
+    walk: Iterable[Any],
+    environments: Sequence[Any],
+    visited: Any,
+    *,
+    meta: Optional[dict[str, Any]] = None,
+    config: Optional[TraceConfig] = None,
+) -> TraceTree:
+    """Collect a TraceTree from a world-only walk.
+
+    Args:
+        walk: Iterable of (locations, observation, action) steps.
+        environments: Environments aligned to the walk batch.
+        visited: Per-environment visited masks.
+        meta: Optional metadata dictionary to store at the trace root.
+        config: Optional TraceConfig for strictness and behavior.
+
+    Returns:
+        TraceTree containing world-step data only.
+    """
+    trace = TraceTree(config=config or TraceConfig())
+    for locations, observation, actions in walk:
+        world_step = TraceWorldStep(
+            observation=observation,
+            action_ids=_coerce_action_ids(actions),
+            location_ids=_coerce_location_ids(locations),
+        )
+        trace.append(TraceWorldOnlyStep(world_step=world_step))
 
     trace.finalize()
     trace.root.meta_static["environments"] = list(environments)

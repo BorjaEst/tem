@@ -23,7 +23,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     - Actions taken over time
 
     Args:
-        trace: RolloutTrace with model outputs and world steps.
+        trace: TraceTree with model outputs and world steps.
         ctx: Figure context (env_idx, freq_idx, figsize, style, etc.).
 
     Returns:

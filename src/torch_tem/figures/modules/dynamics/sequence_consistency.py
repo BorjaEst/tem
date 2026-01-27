@@ -18,7 +18,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     and g_inf at time t+1 for each frequency module.
 
     Args:
-        trace: RolloutTrace containing inference and generative codes.
+        trace: TraceTree containing inference and generative codes.
         ctx: Figure context with env selection.
 
     Returns:

@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import RolloutTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_batch_size, get_length, get_location_ids_for_env, get_multiscale, get_world, validate_freq_idx
 
 
-def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render remapping correlations across environments.
 
     Args:
-        trace: RolloutTrace containing inference codes for multiple envs.
+        trace: TraceTree containing inference codes for multiple envs.
         ctx: Figure context with frequency selection.
 
     Returns:
@@ -25,14 +25,14 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     with style_ctx:
         fig, ax = plt.subplots(figsize=ctx.figsize)
 
-        if trace.batch_size == 0 or len(trace) == 0:
+        if get_length(trace) == 0:
             ax.set_title("No trace data (empty rollout)")
             ax.axis("off")
             return fig
 
-        freq_idx = _validate_freq_idx(trace, int(ctx.freq_idx))
-        activity_steps = _get_multiscale_steps(trace.output.inference.p_inf, freq_idx)
-        n_env = trace.batch_size
+        freq_idx = validate_freq_idx(trace, "output/inference/p_inf", int(ctx.freq_idx))
+        activity_steps = get_multiscale(trace, "output/inference/p_inf", freq_idx)
+        n_env = get_batch_size(trace)
 
         if n_env < 2:
             ax.set_title("Need multiple environments for remapping")
@@ -40,7 +40,7 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
             return fig
 
         rate_maps, n_locations = _collect_rate_maps(trace, activity_steps)
-        selection = _select_cells(activity_steps[:, 0, :].numpy(), max_cells=12)
+        selection = _select_cells(activity_steps[:, 0, :], max_cells=12)
 
         corr_matrix = np.full((n_env, n_env), np.nan, dtype=float)
         for i in range(n_env):
@@ -66,14 +66,14 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
         return fig
 
 
-def _collect_rate_maps(trace: RolloutTrace, activity_steps: torch.Tensor):
+def _collect_rate_maps(trace: TraceTree, activity_steps: np.ndarray):
     """Collect per-environment rate maps and location counts."""
     rate_maps = []
     n_locations = []
-    for env_idx in range(trace.batch_size):
-        world = _get_world(trace, env_idx)
-        location_ids = _get_location_ids(trace, env_idx)
-        activity_env = activity_steps[:, env_idx, :].numpy()
+    for env_idx in range(get_batch_size(trace)):
+        world = get_world(trace, env_idx)
+        location_ids = get_location_ids_for_env(trace, env_idx)
+        activity_env = activity_steps[:, env_idx, :]
         rate_map = _aggregate_rate_maps(activity_env, location_ids, len(world.locations))
         rate_maps.append(rate_map)
         n_locations.append(len(world.locations))
@@ -120,41 +120,6 @@ def _mean_cell_correlation(left: np.ndarray, right: np.ndarray) -> float:
             continue
         corrs.append(np.corrcoef(lvals[mask], rvals[mask])[0, 1])
     return float(np.nanmean(corrs)) if corrs else float("nan")
-
-
-def _get_multiscale_steps(steps, freq_idx: int) -> torch.Tensor:
-    """Stack multiscale steps for a single frequency."""
-    if not steps:
-        raise ValueError("RolloutTrace has no inference steps")
-    if not (0 <= freq_idx < len(steps[0])):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(steps[0])})")
-    return torch.stack([step[freq_idx].detach().cpu() for step in steps], dim=0)
-
-
-def _get_world(trace: RolloutTrace, env_idx: int):
-    """Get the World for the selected environment index."""
-    if not trace.world_step.environments:
-        raise ValueError("RolloutTrace has no environments")
-    return trace.world_step.environments[env_idx]
-
-
-def _get_location_ids(trace: RolloutTrace, env_idx: int) -> list[int]:
-    """Get per-step location ids for the selected environment."""
-    location_ids = trace.world_step.location_ids
-    if not location_ids:
-        raise ValueError("RolloutTrace has no location ids")
-    return location_ids[env_idx]
-
-
-def _validate_freq_idx(trace: RolloutTrace, freq_idx: int) -> int:
-    """Validate the selected frequency index."""
-    steps = trace.output.inference.p_inf
-    if not steps:
-        raise ValueError("RolloutTrace has no inference steps")
-    n_freq = len(steps[0])
-    if not (0 <= freq_idx < n_freq):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {n_freq})")
-    return freq_idx
 
 
 def _append_context(title: str, ctx: FigureContext) -> str:

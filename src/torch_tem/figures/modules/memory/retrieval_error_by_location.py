@@ -16,7 +16,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render retrieval error aggregated by location.
 
     Args:
-        trace: RolloutTrace containing reconstruction predictions.
+        trace: TraceTree containing reconstruction predictions.
         ctx: Figure context with env selection.
 
     Returns:

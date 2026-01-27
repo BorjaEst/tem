@@ -17,7 +17,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     Drift is computed as the L2 distance between g_inf and g_gen per step.
 
     Args:
-        trace: RolloutTrace containing inference and generative codes.
+        trace: TraceTree containing inference and generative codes.
         ctx: Figure context with env selection.
 
     Returns:

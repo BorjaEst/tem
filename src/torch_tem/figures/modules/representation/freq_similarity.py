@@ -15,7 +15,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render representational similarity across frequency modules.
 
     Args:
-        trace: RolloutTrace containing inference codes.
+        trace: TraceTree containing inference codes.
         ctx: Figure context with env selection.
 
     Returns:

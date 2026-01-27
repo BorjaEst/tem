@@ -25,7 +25,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     - Optionally: per-location values or policy arrows
 
     Args:
-        trace: WorldTrace with environment(s) and walk(s).
+        trace: TraceTree with environment(s) and walk data.
         ctx: Figure context (env_idx, figsize, style, etc.).
 
     Returns:

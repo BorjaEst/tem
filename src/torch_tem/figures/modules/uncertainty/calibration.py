@@ -18,7 +18,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     g_inf and g_gen as a proxy error signal.
 
     Args:
-        trace: RolloutTrace containing state uncertainty and codes.
+        trace: TraceTree containing state uncertainty and codes.
         ctx: Figure context with env and frequency selection.
 
     Returns:

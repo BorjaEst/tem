@@ -26,8 +26,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics.traces import RolloutTrace
+from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree, downsample_trace
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_batch_size, get_environments, get_length
 from torch_tem.model import Model as TEMModel
 from torch_tem.model import TEMConfig
 from torch_tem.settings import (
@@ -230,16 +231,19 @@ def main() -> None:
     # ------------------------------------------------------------------
     print("Step 3: Collecting rollout trace...")
     dataset = datamodule.get_dataset("test")
-    trace = RolloutTrace.from_batch(
+    trace = collect_rollout_trace_tree(
         batch=datamodule.sample_batch(split="test"),
         environments=dataset.environments,
         model=model,
         stop=args.max_rollout_steps,
         meta={"split": "test"},
-    ).downsample_time(args.downsample_stride)
-    print(f" - Batch size: {trace.batch_size}")
-    print(f" - Time steps: {len(trace)}")
-    print(f" - Environments: {len(trace.world_step.environments)}")
+    )
+    if args.downsample_stride > 1:
+        trace = downsample_trace(trace, args.downsample_stride)
+
+    print(f" - Batch size: {get_batch_size(trace)}")
+    print(f" - Time steps: {get_length(trace)}")
+    print(f" - Environments: {len(get_environments(trace))}")
     print()
 
     # ------------------------------------------------------------------

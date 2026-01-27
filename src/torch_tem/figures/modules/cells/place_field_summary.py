@@ -17,7 +17,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render summary statistics for place fields.
 
     Args:
-        trace: RolloutTrace containing inference codes.
+        trace: TraceTree containing inference codes.
         ctx: Figure context with env and frequency selection.
 
     Returns:

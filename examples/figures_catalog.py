@@ -25,9 +25,9 @@ import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from torch_tem import data, figures
+from torch_tem import data
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics.traces import RolloutTrace, WorldTrace
+from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree, downsample_trace
 from torch_tem.figures.register import register_builtin_figures
 from torch_tem.figures.registry import REGISTRY, FigureContext
 from torch_tem.model import Model as TEMModel
@@ -234,7 +234,7 @@ class ExampleArguments(BaseSettings):
         return profiles[self.figure_profile]
 
 
-def _build_rollout_trace(args: ExampleArguments) -> RolloutTrace:
+def _build_rollout_trace(args: ExampleArguments):
     """Create a rollout trace from a DataModule and TEM model."""
     # Build the datamodule and model to generate a rollout trace.
     datamodule = data.DataModule(args.data)
@@ -248,24 +248,16 @@ def _build_rollout_trace(args: ExampleArguments) -> RolloutTrace:
     model.eval()
 
     dataset = datamodule.get_dataset("validate")
-    trace = RolloutTrace.from_batch(
+    trace = collect_rollout_trace_tree(
         batch=datamodule.sample_batch(split="validate"),
         environments=dataset.environments,
         model=model,
         stop=args.max_rollout_steps,
         meta={"split": "validate"},
-    ).downsample_time(args.downsample_stride)
+    )
+    if args.downsample_stride > 1:
+        trace = downsample_trace(trace, args.downsample_stride)
     return trace
-
-
-def _resolve_trace(spec, rollout: RolloutTrace, world: WorldTrace):
-    """Pick the correct trace for a figure spec."""
-    # Match registry trace requirements to available traces.
-    if issubclass(spec.accepts, RolloutTrace):
-        return rollout
-    if issubclass(spec.accepts, WorldTrace):
-        return world
-    return None
 
 
 def main() -> None:
@@ -290,7 +282,6 @@ def main() -> None:
     REGISTRY.validate(names)
 
     rollout = _build_rollout_trace(args)
-    world_trace = rollout.world_step
     ctx = FigureContext(
         env_idx=args.env_idx,
         freq_idx=args.freq_idx,
@@ -301,12 +292,7 @@ def main() -> None:
     saved = 0
     for index, name in enumerate(names, start=1):
         spec = REGISTRY.get(name)
-        trace = _resolve_trace(spec, rollout, world_trace)
-        if trace is None:
-            logger.warning("Skipping %s (unsupported trace type)", name)
-            continue
-
-        fig = spec.plot(trace, ctx)
+        fig = spec.plot(rollout, ctx)
         if args.save_plots:
             filename = f"{index:02d}_{name.replace('.', '_')}.png"
             fig.savefig(args.output_dir / filename, dpi=150, bbox_inches="tight")

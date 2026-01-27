@@ -18,7 +18,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render an occupancy map for a selected environment.
 
     Args:
-        trace: WorldTrace or RolloutTrace providing locations and environments.
+        trace: TraceTree providing locations and environments.
         ctx: Figure context with env selection and styling.
 
     Returns:

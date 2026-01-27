@@ -16,7 +16,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render a per-location decoding error map with occupancy.
 
     Args:
-        trace: RolloutTrace containing inference codes and world data.
+        trace: TraceTree containing inference codes and world data.
         ctx: Figure context with env and frequency selection.
 
     Returns:

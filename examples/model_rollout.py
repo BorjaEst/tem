@@ -26,7 +26,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree, downsample_trace
+from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree
 from torch_tem.figures.registry import FigureContext
 from torch_tem.figures.trace_access import get_batch_size, get_environments, get_length
 from torch_tem.model import Model as TEMModel
@@ -36,11 +36,13 @@ from torch_tem.settings import (
     CurriculumSettings,
     EnvironmentSettings,
     EnvSamplingSettings,
+    EvalSettings,
     HPCSettings,
     LECProjectionSettings,
     LECSettings,
     MECProjectionSettings,
     MECSettings,
+    RolloutSettings,
     RolloutStreamSettings,
     SpaceContractSettings,
 )
@@ -62,6 +64,10 @@ class ExampleArguments(BaseSettings):
     )
 
     # Data configuration (leaves)
+    data_seed: int = Field(
+        default=42,
+        description="Random seed for data sampling.",
+    )
     space: SpaceContractSettings = Field(
         default_factory=SpaceContractSettings,
         description="Space contract: observation and action space dimensions.",
@@ -70,10 +76,6 @@ class ExampleArguments(BaseSettings):
         default_factory=EnvironmentSettings,
         description="Environment generation settings.",
     )
-    iterator: RolloutStreamSettings = Field(
-        default_factory=RolloutStreamSettings,
-        description="Iterator protocol settings (rollout chunking + eval protocol).",
-    )
     policy: EnvSamplingSettings = Field(
         default_factory=EnvSamplingSettings,
         description="Data generation policies (exploration + shiny).",
@@ -81,6 +83,11 @@ class ExampleArguments(BaseSettings):
     walk: CurriculumSettings = Field(
         default_factory=CurriculumSettings,
         description="Walk length curriculum settings.",
+    )
+    max_rollout_steps: int = Field(
+        default=100,
+        ge=10,
+        description="Maximum rollout steps to collect.",
     )
 
     # Model configuration
@@ -115,30 +122,6 @@ class ExampleArguments(BaseSettings):
         description="Path to model checkpoint (optional). If None, uses random init.",
     )
 
-    # Rollout settings
-    max_rollout_steps: int = Field(
-        default=100,
-        ge=10,
-        description="Maximum rollout steps to collect.",
-    )
-    downsample_stride: int = Field(
-        default=1,
-        ge=1,
-        description="Downsampling stride for trace (1 = keep all steps).",
-    )
-
-    # Figure selection
-    env_idx: int = Field(
-        default=0,
-        ge=0,
-        description="Environment index to visualize.",
-    )
-    freq_idx: int = Field(
-        default=0,
-        ge=0,
-        description="Frequency module index to visualize.",
-    )
-
     # Output
     output_dir: Path = Field(
         default=Path("outputs/model_rollout"),
@@ -159,6 +142,13 @@ class ExampleArguments(BaseSettings):
         """Create output_dir if it does not exist."""
         v.mkdir(parents=True, exist_ok=True)
         return v
+
+    @property
+    def iterator(self) -> RolloutStreamSettings:
+        """Create the aggregate RolloutStreamSettings consumed by the DataModule."""
+        eval_settings = EvalSettings(val_batches=1, val_seed=self.data_seed)
+        rollout_settings = RolloutSettings(batch_size=1, n_rollout=self.max_rollout_steps)
+        return RolloutStreamSettings(eval=eval_settings, rollout=rollout_settings)
 
     @property
     def data(self) -> DataConfig:
@@ -238,8 +228,6 @@ def main() -> None:
         stop=args.max_rollout_steps,
         meta={"split": "test"},
     )
-    if args.downsample_stride > 1:
-        trace = downsample_trace(trace, args.downsample_stride)
 
     print(f" - Batch size: {get_batch_size(trace)}")
     print(f" - Time steps: {get_length(trace)}")
@@ -249,11 +237,15 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step 4: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
-    ctx = FigureContext(env_idx=args.env_idx, freq_idx=args.freq_idx, figsize=(14, 10), split_name="validate")
-    figs: list[tuple[str, plt.Figure]] = [
-        ("01_overview_rate_maps.png", figures.overview.rate_maps.plot(trace, ctx)),
-        ("02_model_overview.png", figures.overview.observations.plot(trace, ctx)),
-    ]
+
+    figs: list[tuple[str, plt.Figure]] = []
+    for freq_idx in range(model.mec.n_freq):
+        print(f"Generating figures for frequency index: {freq_idx}")
+        ctx = FigureContext(env_idx=0, freq_idx=freq_idx, figsize=(14, 10), split_name="validate")
+        figs += [
+            (f"01.{freq_idx}_overview_rate_maps.png", figures.overview.rate_maps.plot(trace, ctx)),
+            (f"02.{freq_idx}_overview_observations.png", figures.overview.observations.plot(trace, ctx)),
+        ]
 
     print(f"Step 4: Generated {len(figs)} figure(s).")
     print()

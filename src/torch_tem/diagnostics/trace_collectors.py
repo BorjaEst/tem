@@ -75,12 +75,7 @@ def collect_rollout_trace_tree(
     Returns:
         TraceTree containing the collected rollout data.
     """
-    if type(batch) not in {tuple, list}:
-        raise ValueError(f"Expected batch=(walk, visited); got {type(batch).__name__}")
-    if len(batch) != 2:
-        raise ValueError(f"Expected batch of length 2; got {len(batch)}")
-
-    walk, visited = batch
+    walk, visited = validate_rollout_batch(batch)
     trace = TraceTree(config=config or TraceConfig())
 
     for idx, step in enumerate(RolloutStream(model, walk)):
@@ -94,6 +89,84 @@ def collect_rollout_trace_tree(
     if meta is not None:
         trace.root.meta_static["meta"] = dict(meta)
     return trace
+
+
+def collect_rollout_trace_tree_from_batches(
+    batches: Sequence[Any],
+    environments: Sequence[Any],
+    model: Model,
+    stop: Optional[int],
+    *,
+    meta: Optional[dict[str, Any]] = None,
+    config: Optional[TraceConfig] = None,
+) -> TraceTree:
+    """Collect a TraceTree from consecutive rollout batches.
+
+    Args:
+        batches: Sequence of (walk, visited) batches to stitch.
+        environments: Environments aligned to the rollout batches.
+        model: TEM model used to generate outputs and state.
+        stop: Optional maximum number of rollout steps to record.
+        meta: Optional metadata dictionary to store at the trace root.
+        config: Optional TraceConfig for strictness and behavior.
+
+    Returns:
+        TraceTree containing the collected rollout data.
+    """
+    stitched = stitch_rollout_batches(batches)
+    return collect_rollout_trace_tree(
+        batch=stitched,
+        environments=environments,
+        model=model,
+        stop=stop,
+        meta=meta,
+        config=config,
+    )
+
+
+def validate_rollout_batch(batch: Any) -> tuple[Any, Any]:
+    """Validate a rollout batch and return its components.
+
+    Args:
+        batch: Tuple of (walk, visited) produced by the dataloader.
+
+    Returns:
+        Tuple of (walk, visited).
+    """
+    if type(batch) not in {tuple, list}:
+        raise ValueError(f"Expected batch=(walk, visited); got {type(batch).__name__}")
+    if len(batch) != 2:
+        raise ValueError(f"Expected batch of length 2; got {len(batch)}")
+    walk, visited = batch
+    return walk, visited
+
+
+def snapshot_visited(visited: Any) -> Any:
+    """Snapshot a visited mask to prevent mutation during capture."""
+    if isinstance(visited, list):
+        return [list(env_visited) for env_visited in visited]
+    if isinstance(visited, tuple):
+        return [list(env_visited) for env_visited in visited]
+    return visited
+
+
+def stitch_rollout_batches(batches: Sequence[Any]) -> tuple[Any, Any]:
+    """Stitch consecutive rollout batches into a single episode batch.
+
+    Args:
+        batches: Sequence of (walk, visited) batches.
+
+    Returns:
+        Tuple of (stitched_walk, visited) for a continuous rollout.
+    """
+    if not batches:
+        raise ValueError("No batches provided for stitching")
+    stitched_walk: list[Any] = []
+    visited = None
+    for batch in batches:
+        walk, visited = validate_rollout_batch(batch)
+        stitched_walk.extend(walk)
+    return stitched_walk, visited
 
 
 def collect_world_trace_tree(

@@ -17,7 +17,7 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
-from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree, concat_traces, downsample_trace
+from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree, downsample_trace, snapshot_visited, stitch_rollout_batches, validate_rollout_batch
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures import register, sinks
 from torch_tem.figures.registry import REGISTRY, FigureContext
@@ -50,11 +50,20 @@ class FigureCallbackSettings(BaseModel):
     )
     aggregate_batches: Optional[int] = Field(
         default=None,
-        description="Number of batches to aggregate (None = all batches).",
+        description="Number of batches to stitch for aggregate traces (None = all batches).",
+    )
+    episode_batches: int = Field(
+        default=1,
+        ge=1,
+        description="Number of consecutive batches to stitch into a single episode trace.",
+    )
+    capture_policy: Literal["first_k", "last_k"] = Field(
+        default="first_k",
+        description="Policy for selecting consecutive batches for the episode trace.",
     )
     max_rollout_steps: int = Field(
         default=100,
-        description="Maximum rollout steps to extract for figures.",
+        description="Maximum rollout steps to extract for figures (after stitching).",
     )
     downsample_stride: int = Field(
         default=1,
@@ -107,7 +116,7 @@ class FiguresCallback(pl.Callback):
         """
         super().__init__()
         self.settings = settings
-        self._episode_batch: Optional[Any] = None
+        self._episode_batches: list[Any] = []
         self._aggregate_batches: list[Any] = []
         register.register_builtin_figures()  # Ensure built-in figures are registered
         REGISTRY.validate(settings.figures)  # Validate figure names at initialization
@@ -172,18 +181,15 @@ class FiguresCallback(pl.Callback):
             print("FiguresCallback: DataModule or dataset not available; skipping figure generation.")
             return
 
-        episode_batch = self._episode_batch
-        if episode_batch is None:
+        if not self._episode_batches:
             print("FiguresCallback: No captured batch available; skipping figure generation.")
             return
 
-        episode_trace = self._build_rollout_trace(trainer, datamodule, model, episode_batch, split_name)
+        episode_trace = self._build_rollout_trace_from_batches(trainer, datamodule, model, self._episode_batches, split_name)
         aggregate_names = self._aggregate_figure_names(self.settings.figures)
+        aggregate_trace = episode_trace
         if aggregate_names and self._aggregate_batches:
-            traces = [self._build_rollout_trace(trainer, datamodule, model, batch, split_name) for batch in self._aggregate_batches]
-            aggregate_trace = concat_traces(traces)
-        else:
-            aggregate_trace = episode_trace
+            aggregate_trace = self._build_rollout_trace_from_batches(trainer, datamodule, model, self._aggregate_batches, split_name)
 
         # Generate and persist each figure
         context = self.figure_context(trainer, split_name)
@@ -200,31 +206,33 @@ class FiguresCallback(pl.Callback):
         return self.settings.enabled and trainer.is_global_zero and self.settings.split == split_name
 
     def _reset_capture_state(self) -> None:
-        self._episode_batch = None
+        self._episode_batches = []
         self._aggregate_batches = []
 
     def _capture_batch(self, batch: Any) -> None:
-        if self._episode_batch is None:
-            self._episode_batch = batch
+        snapshot = self._snapshot_batch(batch)
+
+        if self.settings.capture_policy == "first_k":
+            if len(self._episode_batches) < self.settings.episode_batches:
+                self._episode_batches.append(snapshot)
+        else:
+            self._episode_batches.append(snapshot)
+            if len(self._episode_batches) > self.settings.episode_batches:
+                self._episode_batches.pop(0)
 
         aggregate_names = self._aggregate_figure_names(self.settings.figures)
         if not aggregate_names:
             return
 
         if self.settings.aggregate_batches is None:
-            self._aggregate_batches.append(batch)
+            self._aggregate_batches.append(snapshot)
             return
 
         if len(self._aggregate_batches) < self.settings.aggregate_batches:
-            self._aggregate_batches.append(batch)
+            self._aggregate_batches.append(snapshot)
 
     def _build_rollout_trace(self, trainer: Trainer, datamodule: Any, model: Any, batch: Any, split_name: str) -> TraceTree:
         """Create a TraceTree from a batch."""
-        if type(batch) not in {tuple, list}:
-            raise ValueError("FiguresCallback expected batch=(walk, visited); " f"got type={type(batch).__name__}")
-        if len(batch) != 2:
-            raise ValueError("FiguresCallback expected batch of length 2; " f"got length={len(batch)}")
-
         dataset = datamodule.get_dataset(split_name)
         if dataset is None:
             raise ValueError(f"Dataset for split '{split_name}' not available")
@@ -237,6 +245,27 @@ class FiguresCallback(pl.Callback):
             meta={"global_step": trainer.global_step, "split": split_name},
         )
         return downsample_trace(trace, self.settings.downsample_stride)
+
+    def _build_rollout_trace_from_batches(self, trainer: Trainer, datamodule: Any, model: Any, batches: list[Any], split_name: str) -> TraceTree:
+        """Create a TraceTree from multiple consecutive batches.
+
+        Args:
+            trainer: PyTorch Lightning trainer.
+            datamodule: DataModule with the requested dataset.
+            model: TEM model used for rollout inference.
+            batches: Consecutive (chunk, visited) batches to stitch.
+            split_name: Dataset split name used for metadata.
+
+        Returns:
+            TraceTree for the stitched episode.
+        """
+        stitched = stitch_rollout_batches(batches)
+        return self._build_rollout_trace(trainer, datamodule, model, stitched, split_name)
+
+    def _snapshot_batch(self, batch: Any) -> Any:
+        """Snapshot a batch to protect against mutable visited masks."""
+        chunk, visited = validate_rollout_batch(batch)
+        return (chunk, snapshot_visited(visited))
 
     def _infer_model_device(self, model: Any) -> torch.device:
         """Infer the device used by the model parameters.

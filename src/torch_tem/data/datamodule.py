@@ -252,6 +252,42 @@ class DataModule(pl.LightningDataModule):
         dataset = self._ensure_dataset(split)
         return next(iter(dataset))
 
+    def sample_episode(self, split: SplitName, n_batches: int, reset_before: bool = False) -> tuple[list[Any], list[list[bool]], list[World]]:
+        """Sample consecutive batches and stitch them into a continuous episode.
+
+        Args:
+            split: One of "train", "validate", or "test".
+            n_batches: Number of consecutive batches to stitch.
+            reset_before: Whether to reset deterministic splits before sampling.
+
+        Returns:
+            Tuple of (episode_walk, visited_snapshot, environments_snapshot).
+
+        Raises:
+            ValueError: If n_batches is invalid or the split is exhausted.
+        """
+        if n_batches <= 0:
+            raise ValueError("n_batches must be positive")
+
+        if reset_before:
+            self.reset_split(split)
+
+        dataset = self._ensure_dataset(split)
+        iterator = iter(dataset)
+
+        episode_walk: list[Any] = []
+        visited_snapshot = [list(mask) for mask in dataset.visited]
+        environments_snapshot = list(dataset.environments)
+
+        try:
+            for _ in range(n_batches):
+                chunk, _ = next(iterator)
+                episode_walk.extend(chunk)
+        except StopIteration as exc:
+            raise ValueError(f"Split '{split}' exhausted before collecting {n_batches} batches. " "Reduce n_batches or increase eval steps.") from exc
+
+        return episode_walk, visited_snapshot, environments_snapshot
+
     def reset_split(self, split: SplitName) -> None:
         """Reset a deterministic dataset split to its initial state.
 
@@ -326,6 +362,16 @@ class TEMDataset(IterableDataset):
         # Initialize environments and walks
         self.environments, self.walks, self.visited = self._setup_environments()
 
+    def _is_seeded_eval(self) -> bool:
+        """Return True when dataset is a finite, seeded evaluation stream."""
+        return self.seed is not None and self.max_batches is not None
+
+    def _eval_min_walk_length(self) -> int:
+        """Minimum walk length required for a seeded evaluation stream."""
+        if not self._is_seeded_eval():
+            return 0
+        return self.max_batches * self.data_settings.iterator.rollout.n_rollout
+
     def reset(self) -> None:
         """Reset deterministic datasets to their initial seeded state.
 
@@ -348,10 +394,16 @@ class TEMDataset(IterableDataset):
             World(graph, randomise_observations=self.data_settings.env.randomise_observations, shiny=self._maybe_build_shiny_config(rng), rng=rng)
             for graph in rng.choice(self.env_paths, self.data_settings.iterator.rollout.batch_size)
         ]
-        walks = [env.generate_walks(self.data_settings.iterator.rollout.n_rollout * rng.integers(self.walk_it_min, self.walk_it_max), 1)[0] for env in environments]
+        walks = [env.generate_walks(self._initial_walk_length(rng), 1)[0] for env in environments]
         visited = [[False for _ in range(env.n_locations)] for env in environments]
 
         return environments, walks, visited
+
+    def _initial_walk_length(self, rng: np.random.Generator) -> int:
+        """Compute initial walk length for a new environment slot."""
+        base_length = self.data_settings.iterator.rollout.n_rollout * rng.integers(self.walk_it_min, self.walk_it_max)
+        min_length = self._eval_min_walk_length()
+        return max(base_length, min_length)
 
     @property
     def walk_length_center(self) -> float:
@@ -387,7 +439,9 @@ class TEMDataset(IterableDataset):
         chunk: list[list[list[Any]]] = []
         for env_i, walk in enumerate(self.walks):
             if len(walk) < self.data_settings.iterator.rollout.n_rollout:
-                # Generate new environment and walk
+                if self._is_seeded_eval():
+                    self._raise_eval_depletion_error(env_i, len(walk))
+                # Generate new environment and walk (training only)
                 self.environments[env_i] = World(
                     self.env_paths[rng.integers(len(self.env_paths))],
                     randomise_observations=self.data_settings.env.randomise_observations,
@@ -413,6 +467,17 @@ class TEMDataset(IterableDataset):
             chunk[i_step][1] = torch.stack(step[1], dim=0)
 
         return chunk, self.visited
+
+    def _raise_eval_depletion_error(self, env_i: int, remaining: int) -> None:
+        """Raise a configuration error when a seeded eval walk is depleted."""
+        n_rollout = self.data_settings.iterator.rollout.n_rollout
+        min_length = self._eval_min_walk_length()
+        raise ValueError(
+            "Seeded evaluation stream depleted a walk before completing the finite stream. "
+            f"env_index={env_i}, remaining_steps={remaining}, n_rollout={n_rollout}, "
+            f"required_min_walk_length={min_length}. "
+            "Increase walk length (walk_it_min/walk_it_max) or reduce val_steps/test_steps or n_rollout."
+        )
 
     def _maybe_build_shiny_config(self, rng: np.random.Generator) -> Optional[dict[str, Any]]:
         """Build the shiny config dict consumed by `World`.

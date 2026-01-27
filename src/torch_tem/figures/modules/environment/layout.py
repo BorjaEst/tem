@@ -10,12 +10,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import WorldTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_world
 
 
-def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Generate environment layout figure.
 
     Renders the spatial layout of an environment, showing:
@@ -35,7 +36,7 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
 
     with style_ctx:
         # Select single environment if batch trace
-        env = trace.environments[ctx.env_idx]
+        env = get_world(trace, int(ctx.env_idx))
         n_locs = env.n_locations
 
         # Create figure

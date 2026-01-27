@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import ceil
-from typing import Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import RolloutTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_length, get_location_ids_for_env, get_multiscale, get_n_freq, get_world, validate_env_idx, validate_freq_idx
 
 
 @dataclass(frozen=True)
@@ -23,11 +22,11 @@ class _RateMapSelection:
     occupancy: np.ndarray
 
 
-def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render single-frequency place-cell rate maps.
 
     Args:
-        trace: RolloutTrace with world and inference outputs.
+        trace: TraceTree with world and inference outputs.
         ctx: Figure context (env_idx, freq_idx, figsize, style).
 
     Returns:
@@ -38,15 +37,14 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     with style_ctx:
         fig = plt.figure(figsize=ctx.figsize)
 
-        if trace.batch_size == 0 or len(trace) == 0:
+        if get_length(trace) == 0:
             fig.suptitle("No trace data (empty rollout)")
             return fig
 
-        env_idx = _validate_env_idx(trace, int(ctx.env_idx))
+        env_idx = validate_env_idx(trace, int(ctx.env_idx))
         freq_idx = int(ctx.freq_idx)
 
-        world = _get_world(trace, env_idx)
-        location_ids = _get_location_ids(trace, env_idx)
+        world = get_world(trace, env_idx)
         selection = _select_rate_maps(trace, env_idx, freq_idx, max_cells=40)
 
         n_cells = selection.cell_indices.size
@@ -86,27 +84,27 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
         return fig
 
 
-def plot_frequencies(trace: RolloutTrace, ctx: FigureContext) -> Figure:
+def plot_frequencies(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render multi-frequency place-cell rate maps for the same cell set."""
     style_ctx = (ctx.style or _get_default_style()).apply_context() if getattr(ctx, "style", None) else _noop_context()
 
     with style_ctx:
         fig = plt.figure(figsize=ctx.figsize)
 
-        if trace.batch_size == 0 or len(trace) == 0:
+        if get_length(trace) == 0:
             fig.suptitle("No trace data (empty rollout)")
             return fig
 
-        env_idx = _validate_env_idx(trace, int(ctx.env_idx))
-        base_freq = _validate_freq_idx(trace, int(ctx.freq_idx))
+        env_idx = validate_env_idx(trace, int(ctx.env_idx))
+        base_freq = validate_freq_idx(trace, "output/inference/p_inf", int(ctx.freq_idx))
 
-        world = _get_world(trace, env_idx)
-        n_freq = _get_n_freq(trace)
+        world = get_world(trace, env_idx)
+        n_freq = get_n_freq(trace, "output/inference/p_inf")
 
         n_cells_per_freq = []
         for freq_idx in range(n_freq):
-            activity_steps = _get_multiscale_steps(trace.output.inference.p_inf, freq_idx)
-            activity_env = activity_steps[:, env_idx, :].numpy()
+            activity_steps = get_multiscale(trace, "output/inference/p_inf", freq_idx)
+            activity_env = activity_steps[:, env_idx, :]
             n_cells_per_freq.append(activity_env.shape[1] if activity_env.ndim == 2 else 0)
 
         min_cells = min(n_cells_per_freq) if n_cells_per_freq else 0
@@ -115,8 +113,8 @@ def plot_frequencies(trace: RolloutTrace, ctx: FigureContext) -> Figure:
             return fig
 
         rate_map, occupancy = _aggregate_rate_maps(trace, env_idx, base_freq)
-        activity_steps = _get_multiscale_steps(trace.output.inference.p_inf, base_freq)
-        activity_env = activity_steps[:, env_idx, :].numpy()
+        activity_steps = get_multiscale(trace, "output/inference/p_inf", base_freq)
+        activity_env = activity_steps[:, env_idx, :]
         if activity_env.ndim == 1:
             activity_env = activity_env[:, None]
         if activity_env.shape[1] > min_cells:
@@ -161,21 +159,21 @@ def plot_frequencies(trace: RolloutTrace, ctx: FigureContext) -> Figure:
         return fig
 
 
-def plot_pathways(trace: RolloutTrace, ctx: FigureContext) -> Figure:
-    """Render place-cell rate maps for multiple pathways in a single frequency."""
+def plot_pathways(trace: TraceTree, ctx: FigureContext) -> Figure:
+    """Render place-cell rate maps for multiple pathways in a frequency."""
     style_ctx = (ctx.style or _get_default_style()).apply_context() if getattr(ctx, "style", None) else _noop_context()
 
     with style_ctx:
         fig = plt.figure(figsize=ctx.figsize)
 
-        if trace.batch_size == 0 or len(trace) == 0:
+        if get_length(trace) == 0:
             fig.suptitle("No trace data (empty rollout)")
             return fig
 
-        env_idx = _validate_env_idx(trace, int(ctx.env_idx))
-        freq_idx = _validate_freq_idx(trace, int(ctx.freq_idx))
+        env_idx = validate_env_idx(trace, int(ctx.env_idx))
+        freq_idx = validate_freq_idx(trace, "output/inference/p_inf", int(ctx.freq_idx))
 
-        world = _get_world(trace, env_idx)
+        world = get_world(trace, env_idx)
 
         selection = _select_rate_maps(trace, env_idx, freq_idx, max_cells=12)
         n_cells = selection.cell_indices.size
@@ -184,20 +182,20 @@ def plot_pathways(trace: RolloutTrace, ctx: FigureContext) -> Figure:
             return fig
 
         pathways = [
-            ("p_inf", _get_multiscale_steps(trace.output.inference.p_inf, freq_idx)),
-            ("p_gen_gi", _get_multiscale_steps(trace.output.generative.p_gen_gi, freq_idx)),
-            ("p_gen_gg", _get_multiscale_steps(trace.output.generative.p_gen_gg, freq_idx)),
+            ("p_inf", get_multiscale(trace, "output/inference/p_inf", freq_idx)),
+            ("p_gen_gi", get_multiscale(trace, "output/generative/p_gen_gi", freq_idx)),
+            ("p_gen_gg", get_multiscale(trace, "output/generative/p_gen_gg", freq_idx)),
         ]
 
         grid = fig.add_gridspec(len(pathways), n_cells)
         all_maps = []
         pathway_maps = []
 
-        location_ids = _get_location_ids(trace, env_idx)
+        location_ids = get_location_ids_for_env(trace, env_idx)
         n_locations = len(world.locations)
 
         for _, activity_steps in pathways:
-            activity_env = activity_steps[:, env_idx, :].numpy()
+            activity_env = activity_steps[:, env_idx, :]
             rate_map, _ = _aggregate_rate_maps_from_steps(
                 activity_env,
                 location_ids,
@@ -218,7 +216,7 @@ def plot_pathways(trace: RolloutTrace, ctx: FigureContext) -> Figure:
                 if col == 0:
                     ax.set_ylabel(pathway_name, fontsize=9)
 
-        title = f"Place-cell Rate Maps Across Pathways (freq={freq_idx}, env={env_idx})"
+        title = "Place-cell Rate Maps Across Pathways " f"(freq={freq_idx}, env={env_idx})"
         if ctx.split_name:
             title += f" - {ctx.split_name}"
         if ctx.global_step is not None:
@@ -228,10 +226,10 @@ def plot_pathways(trace: RolloutTrace, ctx: FigureContext) -> Figure:
         return fig
 
 
-def _select_rate_maps(trace: RolloutTrace, env_idx: int, freq_idx: int, *, max_cells: int) -> _RateMapSelection:
+def _select_rate_maps(trace: TraceTree, env_idx: int, freq_idx: int, *, max_cells: int) -> _RateMapSelection:
     rate_map, occupancy = _aggregate_rate_maps(trace, env_idx, freq_idx)
-    activity_steps = _get_multiscale_steps(trace.output.inference.p_inf, freq_idx)
-    activity_env = activity_steps[:, env_idx, :].numpy()
+    activity_steps = get_multiscale(trace, "output/inference/p_inf", freq_idx)
+    activity_env = activity_steps[:, env_idx, :]
 
     n_cells = activity_env.shape[1] if activity_env.ndim == 2 else 0
     if n_cells == 0:
@@ -242,11 +240,11 @@ def _select_rate_maps(trace: RolloutTrace, env_idx: int, freq_idx: int, *, max_c
     return _RateMapSelection(cell_indices, rate_map[:, cell_indices], occupancy)
 
 
-def _aggregate_rate_maps(trace: RolloutTrace, env_idx: int, freq_idx: int) -> tuple[np.ndarray, np.ndarray]:
-    activity_steps = _get_multiscale_steps(trace.output.inference.p_inf, freq_idx)
-    location_ids = _get_location_ids(trace, env_idx)
-    n_locations = len(_get_world(trace, env_idx).locations)
-    return _aggregate_rate_maps_from_steps(activity_steps[:, env_idx, :].numpy(), location_ids, n_locations)
+def _aggregate_rate_maps(trace: TraceTree, env_idx: int, freq_idx: int) -> tuple[np.ndarray, np.ndarray]:
+    activity_steps = get_multiscale(trace, "output/inference/p_inf", freq_idx)
+    location_ids = get_location_ids_for_env(trace, env_idx)
+    n_locations = len(get_world(trace, env_idx).locations)
+    return _aggregate_rate_maps_from_steps(activity_steps[:, env_idx, :], location_ids, n_locations)
 
 
 def _aggregate_rate_maps_from_steps(
@@ -285,47 +283,6 @@ def _robust_min_max(values: np.ndarray, lower: float = 5.0, upper: float = 95.0)
     if vmin == vmax:
         vmax = vmin + 1.0
     return float(vmin), float(vmax)
-
-
-def _get_multiscale_steps(steps: Iterable, freq_idx: int) -> torch.Tensor:
-    if not steps:
-        raise ValueError("RolloutTrace has no inference steps")
-    if not (0 <= freq_idx < len(steps[0])):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(steps[0])})")
-    return torch.stack([step[freq_idx].detach().cpu() for step in steps], dim=0)
-
-
-def _get_world(trace: RolloutTrace, env_idx: int):
-    if not trace.world_step.environments:
-        raise ValueError("RolloutTrace has no environments")
-    return trace.world_step.environments[env_idx]
-
-
-def _get_location_ids(trace: RolloutTrace, env_idx: int) -> list[int]:
-    location_ids = trace.world_step.location_ids
-    if not location_ids:
-        raise ValueError("RolloutTrace has no location ids")
-    return location_ids[env_idx]
-
-
-def _get_n_freq(trace: RolloutTrace) -> int:
-    steps = trace.output.inference.p_inf
-    if not steps:
-        raise ValueError("RolloutTrace has no inference steps")
-    return len(steps[0])
-
-
-def _validate_env_idx(trace: RolloutTrace, env_idx: int) -> int:
-    if not (0 <= env_idx < trace.batch_size):
-        raise IndexError(f"env_idx {env_idx} out of range [0, {trace.batch_size})")
-    return env_idx
-
-
-def _validate_freq_idx(trace: RolloutTrace, freq_idx: int) -> int:
-    n_freq = _get_n_freq(trace)
-    if not (0 <= freq_idx < n_freq):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {n_freq})")
-    return freq_idx
 
 
 def _get_default_style():

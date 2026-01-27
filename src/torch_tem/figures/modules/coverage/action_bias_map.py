@@ -8,12 +8,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import RolloutTrace, WorldTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_action_ids_for_env, get_length, get_location_ids_for_env, get_world, validate_env_idx
 
 
-def plot(trace: WorldTrace | RolloutTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render an action bias map summarizing action entropy per location.
 
     Args:
@@ -27,16 +28,15 @@ def plot(trace: WorldTrace | RolloutTrace, ctx: FigureContext) -> Figure:
     with style_ctx:
         fig, ax = plt.subplots(figsize=ctx.figsize)
 
-        world_trace = _coerce_world_trace(trace)
-        if world_trace.batch_size == 0 or len(world_trace) == 0:
+        if get_length(trace) == 0:
             ax.set_title("No trace data (empty rollout)")
             ax.axis("off")
             return fig
 
-        env_idx = _validate_env_idx(world_trace, int(ctx.env_idx))
-        world = _get_world(world_trace, env_idx)
-        location_ids = _get_location_ids(world_trace, env_idx)
-        actions = _get_actions(world_trace, env_idx)
+        env_idx = validate_env_idx(trace, int(ctx.env_idx))
+        world = get_world(trace, env_idx)
+        location_ids = get_location_ids_for_env(trace, env_idx)
+        actions = get_action_ids_for_env(trace, env_idx)
 
         bias = _compute_action_bias(location_ids, actions, world.n_locations, world.n_actions)
         max_val = float(np.nanmax(bias)) if np.isfinite(bias).any() else 1.0
@@ -58,12 +58,7 @@ def plot(trace: WorldTrace | RolloutTrace, ctx: FigureContext) -> Figure:
         return fig
 
 
-def _compute_action_bias(
-    location_ids: list[int],
-    actions: list[int | None],
-    n_locations: int,
-    n_actions: int,
-) -> np.ndarray:
+def _compute_action_bias(location_ids: list[int], actions: list[int], n_locations: int, n_actions: int) -> np.ndarray:
     """Compute normalized action bias per location.
 
     Args:
@@ -77,7 +72,7 @@ def _compute_action_bias(
     """
     counts = np.zeros((n_locations, max(n_actions, 1)), dtype=int)
     for loc_id, action in zip(location_ids, actions):
-        if action is None or not (0 <= loc_id < n_locations):
+        if action < 0 or not (0 <= loc_id < n_locations):
             continue
         if 0 <= action < n_actions:
             counts[loc_id, action] += 1
@@ -96,48 +91,6 @@ def _compute_action_bias(
         entropy = -np.sum([p * math.log(p) for p in probs if p > 0]) / log_base
         bias[loc_id] = 1.0 - entropy
     return bias
-
-
-def _coerce_world_trace(trace: WorldTrace | RolloutTrace) -> WorldTrace:
-    """Normalize to a WorldTrace instance."""
-    if isinstance(trace, RolloutTrace):
-        return trace.world_step
-    if isinstance(trace, WorldTrace):
-        return trace
-    raise ValueError("Expected WorldTrace or RolloutTrace")
-
-
-def _get_world(trace: WorldTrace, env_idx: int):
-    """Get the World for the selected environment index."""
-    if not trace.environments:
-        raise ValueError("WorldTrace has no environments")
-    return trace.environments[env_idx]
-
-
-def _get_location_ids(trace: WorldTrace, env_idx: int) -> list[int]:
-    """Get per-step location ids for the selected environment."""
-    location_ids = trace.location_ids
-    if not location_ids:
-        raise ValueError("WorldTrace has no location ids")
-    return location_ids[env_idx]
-
-
-def _get_actions(trace: WorldTrace, env_idx: int) -> list[int | None]:
-    """Get per-step actions for the selected environment."""
-    actions: list[int | None] = []
-    for step_actions in trace.actions:
-        if env_idx < len(step_actions):
-            actions.append(step_actions[env_idx])
-        else:
-            actions.append(None)
-    return actions
-
-
-def _validate_env_idx(trace: WorldTrace, env_idx: int) -> int:
-    """Validate the selected environment index."""
-    if not (0 <= env_idx < trace.batch_size):
-        raise IndexError(f"env_idx {env_idx} out of range [0, {trace.batch_size})")
-    return env_idx
 
 
 def _append_context(title: str, ctx: FigureContext) -> str:

@@ -8,12 +8,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import RolloutTrace, WorldTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_length, get_location_ids_for_env, get_world, validate_env_idx
 
 
-def plot(trace: WorldTrace | RolloutTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render an occupancy map for a selected environment.
 
     Args:
@@ -27,15 +28,14 @@ def plot(trace: WorldTrace | RolloutTrace, ctx: FigureContext) -> Figure:
     with style_ctx:
         fig, ax = plt.subplots(figsize=ctx.figsize)
 
-        world_trace = _coerce_world_trace(trace)
-        if world_trace.batch_size == 0 or len(world_trace) == 0:
+        if get_length(trace) == 0:
             ax.set_title("No trace data (empty rollout)")
             ax.axis("off")
             return fig
 
-        env_idx = _validate_env_idx(world_trace, int(ctx.env_idx))
-        world = _get_world(world_trace, env_idx)
-        location_ids = _get_location_ids(world_trace, env_idx)
+        env_idx = validate_env_idx(trace, int(ctx.env_idx))
+        world = get_world(trace, env_idx)
+        location_ids = get_location_ids_for_env(trace, env_idx)
         n_locations = len(world.locations)
 
         occupancy = _compute_occupancy(location_ids, n_locations)
@@ -43,14 +43,7 @@ def plot(trace: WorldTrace | RolloutTrace, ctx: FigureContext) -> Figure:
         values[occupancy == 0] = np.nan
         max_val = float(np.nanmax(values)) if np.isfinite(values).any() else 1.0
 
-        plot_map(
-            world,
-            values,
-            ax=ax,
-            min_val=0.0,
-            max_val=max_val,
-            shape="square",
-        )
+        plot_map(world, values, ax=ax, min_val=0.0, max_val=max_val, shape="square")
 
         coverage = np.isfinite(values).sum() / max(n_locations, 1)
         title = f"Occupancy Map (coverage={coverage:.0%})"
@@ -75,44 +68,6 @@ def _compute_occupancy(location_ids: Iterable[int], n_locations: int) -> np.ndar
         if 0 <= loc_id < n_locations:
             occupancy[loc_id] += 1
     return occupancy
-
-
-def _coerce_world_trace(trace: WorldTrace | RolloutTrace) -> WorldTrace:
-    """Normalize to a WorldTrace instance.
-
-    Args:
-        trace: Input trace (WorldTrace or RolloutTrace).
-
-    Returns:
-        WorldTrace view of the data.
-    """
-    if isinstance(trace, RolloutTrace):
-        return trace.world_step
-    if isinstance(trace, WorldTrace):
-        return trace
-    raise ValueError("Expected WorldTrace or RolloutTrace")
-
-
-def _get_world(trace: WorldTrace, env_idx: int):
-    """Get the World for the selected environment index."""
-    if not trace.environments:
-        raise ValueError("WorldTrace has no environments")
-    return trace.environments[env_idx]
-
-
-def _get_location_ids(trace: WorldTrace, env_idx: int) -> list[int]:
-    """Get per-step location ids for the selected environment."""
-    location_ids = trace.location_ids
-    if not location_ids:
-        raise ValueError("WorldTrace has no location ids")
-    return location_ids[env_idx]
-
-
-def _validate_env_idx(trace: WorldTrace, env_idx: int) -> int:
-    """Validate the selected environment index."""
-    if not (0 <= env_idx < trace.batch_size):
-        raise IndexError(f"env_idx {env_idx} out of range [0, {trace.batch_size})")
-    return env_idx
 
 
 def _append_context(title: str, ctx: FigureContext) -> str:

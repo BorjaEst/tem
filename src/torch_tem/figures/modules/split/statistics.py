@@ -9,11 +9,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import WorldTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_batch_size, get_environments, get_length, get_meta
 
 
-def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Generate dataset split statistics figure.
 
     Creates a summary figure showing:
@@ -33,7 +34,7 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     axes = axes.flatten()
 
     # Panel 1: Environment size distribution (n_locations)
-    env_sizes = [env.n_locations for env in trace.environments]
+    env_sizes = [env.n_locations for env in get_environments(trace)]
     axes[0].hist(env_sizes, bins=20, edgecolor="black", alpha=0.7, color="steelblue")
     axes[0].set_title("Environment Size Distribution")
     axes[0].set_xlabel("Number of Locations")
@@ -41,7 +42,7 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     axes[0].grid(alpha=0.3)
 
     # Panel 2: Walk length distribution
-    walk_lengths = [len(trace)] * trace.batch_size
+    walk_lengths = [get_length(trace)] * get_batch_size(trace)
     axes[1].hist(walk_lengths, bins=20, edgecolor="black", alpha=0.7, color="coral")
     axes[1].set_title("Walk Length Distribution")
     axes[1].set_xlabel("Walk Length (steps)")
@@ -49,7 +50,7 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     axes[1].grid(alpha=0.3)
 
     # Panel 3: Number of actions per environment
-    n_actions_list = [env.n_actions for env in trace.environments]
+    n_actions_list = [env.n_actions for env in get_environments(trace)]
     axes[2].hist(n_actions_list, bins=20, edgecolor="black", alpha=0.7, color="mediumseagreen")
     axes[2].set_title("Action Space Size")
     axes[2].set_xlabel("Number of Actions")
@@ -58,10 +59,11 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
 
     # Panel 4: Summary statistics table
     axes[3].axis("off")
+    meta = get_meta(trace)
     summary_text = f"""
-    Split: {trace.meta.get('split', 'N/A')}
+    Split: {meta.get('split', 'N/A')}
     
-    Batch Size: {trace.batch_size}
+    Batch Size: {get_batch_size(trace)}
     Avg Walk Length: {np.mean(walk_lengths):.1f}
     Avg Env Size: {np.mean(env_sizes):.1f}
     
@@ -70,7 +72,7 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     axes[3].text(0.1, 0.5, summary_text, fontsize=12, verticalalignment="center", family="monospace")
 
     # Add overall title
-    split_name = trace.meta.get("split", "Unknown")
+    split_name = meta.get("split", "Unknown")
     fig.suptitle(f"Split Statistics: {split_name}", fontsize=16, y=0.995)
     plt.tight_layout()
     return fig

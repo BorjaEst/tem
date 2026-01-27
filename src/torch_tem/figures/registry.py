@@ -11,7 +11,7 @@ from typing import Any, Callable, Optional
 
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import TraceBase
+from torch_tem.diagnostics.traces import TraceTree
 
 
 @dataclass
@@ -66,8 +66,8 @@ class FigureSpec:
         if not isinstance(self.tags, frozenset):
             self.tags = frozenset(self.tags)
         # Enforce nominal typing for dispatch.
-        if not isinstance(self.accepts, type) or not issubclass(self.accepts, TraceBase):
-            raise TypeError(f"FigureSpec.accepts must be a subclass of TraceBase; got {self.accepts!r}")
+        if not isinstance(self.accepts, type) or not issubclass(self.accepts, TraceTree):
+            raise TypeError("FigureSpec.accepts must be TraceTree; " f"got {self.accepts!r}")
 
 
 class FigureRegistry:

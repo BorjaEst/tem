@@ -10,19 +10,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import WorldTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.primitives import plot_map
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_location_ids_for_env, get_world, validate_env_idx
 
 
-def plot(trace: WorldTrace, ctx: FigureContext, *, deterministic: bool = True, seed: int = 42, max_steps: int | None = None) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext, *, deterministic: bool = True, seed: int = 42, max_steps: int | None = None) -> Figure:
     """Generate walk trajectory figure.
 
     Renders walk trajectories overlaid on the environment map. By default,
     uses deterministic jitter for reproducible visualizations.
 
     Args:
-        trace: WorldTrace with environment(s) and walk(s).
+        trace: TraceTree with environment(s) and walk data.
         ctx: Figure context (env_idx, figsize, style, etc.).
         deterministic: Whether to use deterministic jitter (default: True).
         seed: Random seed for deterministic jitter (default: 42).
@@ -32,12 +33,12 @@ def plot(trace: WorldTrace, ctx: FigureContext, *, deterministic: bool = True, s
         matplotlib Figure showing walk trajectories.
     """
     # Select single environment if batch trace
-    env = trace.environments[ctx.env_idx]
-    walk = trace
+    env_idx = validate_env_idx(trace, int(ctx.env_idx))
+    env = get_world(trace, env_idx)
     n_locs = env.n_locations
 
     # Extract location IDs for the selected environment
-    location_ids = _extract_location_ids(walk, ctx.env_idx)
+    location_ids = get_location_ids_for_env(trace, env_idx)
     if not location_ids:
         fig, ax = plt.subplots(figsize=ctx.figsize)
         ax.text(0.5, 0.5, "No location data available", ha="center", va="center", fontsize=12)
@@ -67,13 +68,7 @@ def plot(trace: WorldTrace, ctx: FigureContext, *, deterministic: bool = True, s
     return fig
 
 
-def _plot_walk_deterministic(
-    environment,
-    location_ids: list[int],
-    ax: plt.Axes,
-    max_steps: int,
-    seed: int | None = None,
-) -> None:
+def _plot_walk_deterministic(environment, location_ids: list[int], ax: plt.Axes, max_steps: int, seed: int | None = None) -> None:
     """Plot walk trajectory with optional deterministic jitter.
 
     Args:
@@ -113,26 +108,6 @@ def _plot_walk_deterministic(
         ax.plot([prev_loc[0], new_loc[0]], [prev_loc[1], new_loc[1]], color=[color_intensity] * 3, linewidth=1.5, alpha=0.7)
 
         prev_loc = new_loc
-
-
-def _extract_location_ids(agent_trace, env_idx: int) -> list[int]:
-    """Extract per-step location IDs for a single environment."""
-    location_ids: list[int] = []
-    for step in agent_trace:
-        locations = step.locations
-        if env_idx >= len(locations):
-            continue
-        location_ids.append(_coerce_location_id(locations[env_idx]))
-    return location_ids
-
-
-def _coerce_location_id(location) -> int:
-    """Coerce location dicts/tensors/ints into a location id integer."""
-    if isinstance(location, dict) and "id" in location:
-        return int(location["id"])
-    if hasattr(location, "item"):
-        return int(location.item())
-    return int(location)
 
 
 def _location_coords(environment, location_id: int) -> np.ndarray:

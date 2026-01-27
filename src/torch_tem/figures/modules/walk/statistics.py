@@ -6,17 +6,18 @@ Generates summary statistics and histograms for walk characteristics.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Iterable
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import WorldTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_action_ids, get_batch_size, get_environments, get_length, get_location_ids, get_visited, get_world
 
 
-def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Generate walk statistics figure.
 
     Creates a multi-panel figure showing:
@@ -26,7 +27,7 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     - Shiny object hit statistics (if applicable)
 
     Args:
-        trace: WorldTrace with environment(s) and walk(s).
+        trace: TraceTree with environment(s) and walk data.
         ctx: Figure context (env_idx, figsize, style, etc.).
 
     Returns:
@@ -36,7 +37,7 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     axes = axes.flatten()
 
     # Panel 1: Walk length distribution (per environment in batch)
-    walk_lengths = [len(trace)] * trace.batch_size
+    walk_lengths = [get_length(trace)] * get_batch_size(trace)
     axes[0].hist(walk_lengths, bins=20, edgecolor="black", alpha=0.7)
     axes[0].set_title("Walk Length Distribution")
     axes[0].set_xlabel("Walk Length (steps)")
@@ -47,7 +48,7 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     all_actions = _flatten_actions(trace)
 
     action_counts = Counter(all_actions)
-    n_actions = _infer_action_count(trace.environments, action_counts)
+    n_actions = _infer_action_count(get_environments(trace), action_counts)
     action_freqs = [action_counts.get(i, 0) for i in range(n_actions)]
 
     axes[1].bar(range(n_actions), action_freqs, edgecolor="black", alpha=0.7)
@@ -57,8 +58,9 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
     axes[1].grid(alpha=0.3, axis="y")
 
     # Panel 3: Location revisit statistics
-    if trace.visited:
-        visit_counts = [sum(visited) for visited in trace.visited]
+    visited = get_visited(trace)
+    if visited:
+        visit_counts = [sum(env_visited) for env_visited in visited]
         axes[2].hist(visit_counts, bins=20, edgecolor="black", alpha=0.7, color="green")
         axes[2].set_title("Locations Visited per Walk")
         axes[2].set_xlabel("Unique Locations Visited")
@@ -82,20 +84,17 @@ def plot(trace: WorldTrace, ctx: FigureContext) -> Figure:
         axes[3].axis("off")
 
     # Add overall title
-    fig.suptitle(f"Walk Statistics ({trace.batch_size} walks)", fontsize=16, y=0.995)
+    fig.suptitle(f"Walk Statistics ({get_batch_size(trace)} walks)", fontsize=16, y=0.995)
     plt.tight_layout()
     return fig
 
 
-def _flatten_actions(agent_trace: Iterable[Any]) -> list[int]:
+def _flatten_actions(trace: TraceTree) -> list[int]:
     """Flatten actions across time and batch, ignoring missing actions."""
-    actions: list[int] = []
-    for step in agent_trace:
-        for action in step.action:
-            if action is None:
-                continue
-            actions.append(int(action))
-    return actions
+    actions = get_action_ids(trace)
+    if actions.size == 0:
+        return []
+    return [int(value) for value in actions.ravel() if value >= 0]
 
 
 def _infer_action_count(environments: list[Any], action_counts: Counter) -> int:
@@ -107,22 +106,22 @@ def _infer_action_count(environments: list[Any], action_counts: Counter) -> int:
     return max(max_env_actions, 1)
 
 
-def _collect_shiny_hits(trace: WorldTrace) -> list[int]:
+def _collect_shiny_hits(trace: TraceTree) -> list[int]:
     """Count shiny hits per environment over the trace duration."""
-    if not trace.environments or len(trace) == 0:
+    envs = [get_world(trace, idx) for idx in range(get_batch_size(trace))]
+    if not envs or get_length(trace) == 0:
         return []
 
     shiny_hits: list[int] = []
-    for env_idx, env in enumerate(trace.environments):
+    location_ids = get_location_ids(trace)
+    for env_idx, env in enumerate(envs):
         if env.shiny is None:
             continue
         hits = 0
-        for step in trace:
-            locations = step.locations
-            if env_idx >= len(locations):
-                continue
-            loc = locations[env_idx]
-            if isinstance(loc, dict) and loc.get("shiny", False):
-                hits += 1
+        for loc_id in location_ids[:, env_idx]:
+            if 0 <= int(loc_id) < len(env.locations):
+                loc = env.locations[int(loc_id)]
+                if loc.get("shiny", False):
+                    hits += 1
         shiny_hits.append(hits)
     return shiny_hits

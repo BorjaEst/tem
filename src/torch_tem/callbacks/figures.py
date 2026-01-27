@@ -9,7 +9,7 @@ from __future__ import annotations
 import itertools
 import traceback
 from pathlib import Path
-from typing import Any, Iterable, List, Literal, Optional, Sequence
+from typing import Any, Iterable, List, Literal, Optional
 
 import lightning.pytorch as pl
 import matplotlib.pyplot as plt
@@ -18,7 +18,8 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from pydantic import BaseModel, ConfigDict, Field
 
-from torch_tem.diagnostics.traces import RolloutTrace
+from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree, concat_traces, downsample_trace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures import register, sinks
 from torch_tem.figures.registry import REGISTRY, FigureContext
 
@@ -121,7 +122,7 @@ class FiguresCallback(pl.Callback):
         try:
             self._generate_figures(trainer, pl_module, split_name="validate")
         except Exception as e:
-            print(f"FiguresCallback: Error generating figures at step {trainer.global_step}: {e}")
+            print("FiguresCallback: Error generating figures at step " f"{trainer.global_step}: {e}")
             traceback.print_exc()
 
     def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
@@ -131,15 +132,14 @@ class FiguresCallback(pl.Callback):
         try:
             self._generate_figures(trainer, pl_module, split_name="test")
         except Exception as e:
-            print(f"FiguresCallback: Error generating figures at step {trainer.global_step}: {e}")
+            print("FiguresCallback: Error generating figures at step " f"{trainer.global_step}: {e}")
             traceback.print_exc()
 
     def _generate_figures(self, trainer: Trainer, pl_module: LightningModule, split_name: str) -> None:
         """Generate and persist all configured figures.
 
-        Builds TEMStateTrace (for model diagnostics), WorldTrace (for data/walk figures),
-        and RolloutTrace (for combined spatial figures), then dispatches each requested
-            figure to the appropriate trace using isinstance-based type matching.
+        Builds a TraceTree for episode sampling and (optionally) an aggregated
+        TraceTree, then dispatches each requested figure.
 
         Args:
             trainer: PyTorch Lightning trainer.
@@ -176,37 +176,35 @@ class FiguresCallback(pl.Callback):
         # Generate and persist each figure
         context = self.figure_context(trainer, split_name)
 
-        episode_traces = [episode_trace, episode_trace.world_step, episode_trace.output, episode_trace.state]
-        aggregate_traces = [aggregate_trace, aggregate_trace.world_step, aggregate_trace.output, aggregate_trace.state]
-
         aggregate_names = self._aggregate_figure_names(self.settings.figures)
         episode_names = [name for name in self.settings.figures if name not in aggregate_names]
 
-        self._dispatch_figures(trainer, episode_names, context, episode_traces)
-        self._dispatch_figures(trainer, aggregate_names, context, aggregate_traces)
+        self._dispatch_figures(trainer, episode_names, context, episode_trace)
+        self._dispatch_figures(trainer, aggregate_names, context, aggregate_trace)
 
     def _sample_batch(self, datamodule: Any, split_name: str) -> Any:
         """Sample a single batch from the requested split."""
         return datamodule.sample_batch(split=split_name)
 
-    def _build_rollout_trace(self, trainer: Trainer, datamodule: Any, model: Any, batch: Any, split_name: str) -> RolloutTrace:
-        """Create a RolloutTrace from a batch."""
+    def _build_rollout_trace(self, trainer: Trainer, datamodule: Any, model: Any, batch: Any, split_name: str) -> TraceTree:
+        """Create a TraceTree from a batch."""
         if type(batch) not in {tuple, list}:
-            raise ValueError(f"FiguresCallback expected batch=(walk, visited); got type={type(batch).__name__}")
+            raise ValueError("FiguresCallback expected batch=(walk, visited); " f"got type={type(batch).__name__}")
         if len(batch) != 2:
-            raise ValueError(f"FiguresCallback expected batch of length 2; got length={len(batch)}")
+            raise ValueError("FiguresCallback expected batch of length 2; " f"got length={len(batch)}")
 
         dataset = datamodule.get_dataset(split_name)
         if dataset is None:
             raise ValueError(f"Dataset for split '{split_name}' not available")
 
-        return RolloutTrace.from_batch(
+        trace = collect_rollout_trace_tree(
             batch=self._move_to_device(batch, self._infer_model_device(model)),
             environments=dataset.environments,
             model=model,
             stop=self.settings.max_rollout_steps,
             meta={"global_step": trainer.global_step, "split": split_name},
-        ).downsample_time(self.settings.downsample_stride)
+        )
+        return downsample_trace(trace, self.settings.downsample_stride)
 
     def _infer_model_device(self, model: Any) -> torch.device:
         """Infer the device used by the model parameters.
@@ -243,7 +241,7 @@ class FiguresCallback(pl.Callback):
             return {key: self._move_to_device(val, device) for key, val in value.items()}
         return value
 
-    def _build_aggregate_trace(self, trainer: Trainer, datamodule: Any, model: Any, split_name: str, episode_batch: Any, batch_iter: Iterable[Any]) -> RolloutTrace:
+    def _build_aggregate_trace(self, trainer: Trainer, datamodule: Any, model: Any, split_name: str, episode_batch: Any, batch_iter: Iterable[Any]) -> TraceTree:
         """Create an aggregated trace by concatenating all batches."""
         traces = [self._build_rollout_trace(trainer, datamodule, model, episode_batch, split_name)]
 
@@ -254,7 +252,7 @@ class FiguresCallback(pl.Callback):
         for batch in batch_iter:
             traces.append(self._build_rollout_trace(trainer, datamodule, model, batch, split_name))
 
-        return self._concat_rollout_traces(traces)
+        return concat_traces(traces)
 
     def _aggregate_figure_names(self, figure_names: Iterable[str]) -> list[str]:
         """Resolve figure names that should use aggregated sampling."""
@@ -264,40 +262,13 @@ class FiguresCallback(pl.Callback):
 
         return [name for name in figure_names if REGISTRY.get(name).tags & aggregate_tags]
 
-    def _concat_rollout_traces(self, traces: Sequence[RolloutTrace]) -> RolloutTrace:
-        """Concatenate rollout traces along time, enforcing environment consistency."""
-        if not traces:
-            raise ValueError("No traces provided for aggregation")
-
-        base = traces[0]
-        base_envs = list(base.world_step.environments)
-        base_batch = base.batch_size
-
-        for trace in traces[1:]:
-            if trace.batch_size != base_batch:
-                raise ValueError("Aggregate traces must share the same batch size")
-            if len(trace.world_step.environments) != len(base_envs):
-                raise ValueError("Aggregate traces must share the same environment list")
-            for idx, (env_a, env_b) in enumerate(zip(base_envs, trace.world_step.environments)):
-                if env_a is not env_b:
-                    raise ValueError(f"Aggregate traces require identical environments (mismatch at index {idx})")
-
-        agg = RolloutTrace(meta=base.meta.copy())
-        for trace in traces:
-            for step in trace:
-                agg.append(step)
-
-        agg.world_step.environments = base_envs
-        agg.world_step.visited = base.world_step.visited
-        return agg
-
-    def _dispatch_figures(self, trainer: Trainer, figure_names: Iterable[str], context: FigureContext, traces: Sequence[Any]) -> None:
+    def _dispatch_figures(self, trainer: Trainer, figure_names: Iterable[str], context: FigureContext, trace: TraceTree) -> None:
         for figure_name in figure_names:
             spec = REGISTRY.get(figure_name)
-            if trace := next((t for t in traces if isinstance(t, spec.accepts)), None):
+            if isinstance(trace, spec.accepts):
                 self.generate_figure(trainer, trace, context, spec)
             else:
-                print(f"Warning: Skipping {figure_name} (no compatible trace for {spec.accepts.__name__})")
+                print("Warning: Skipping " f"{figure_name} (no compatible trace)")
 
     def figure_context(self, trainer: Trainer, split_name: Optional[str]) -> FigureContext:
         """Build FigureContext from settings and trainer state."""

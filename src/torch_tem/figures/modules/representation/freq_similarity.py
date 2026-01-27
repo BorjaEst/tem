@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import RolloutTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_length, get_multiscale, get_n_freq, validate_env_idx
 
 
-def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Render representational similarity across frequency modules.
 
     Args:
@@ -25,13 +25,13 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     with style_ctx:
         fig, ax = plt.subplots(figsize=ctx.figsize)
 
-        if trace.batch_size == 0 or len(trace) == 0:
+        if get_length(trace) == 0:
             ax.set_title("No trace data (empty rollout)")
             ax.axis("off")
             return fig
 
-        env_idx = _validate_env_idx(trace, int(ctx.env_idx))
-        n_freq = _get_n_freq(trace)
+        env_idx = validate_env_idx(trace, int(ctx.env_idx))
+        n_freq = get_n_freq(trace, "output/inference/p_inf")
         if n_freq <= 1:
             ax.set_title("Not enough frequency modules for comparison")
             ax.axis("off")
@@ -39,8 +39,8 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
 
         vectors = []
         for freq_idx in range(n_freq):
-            steps = _get_multiscale_steps(trace.output.inference.p_inf, freq_idx)
-            activity = steps[:, env_idx, :].numpy()
+            steps = get_multiscale(trace, "output/inference/p_inf", freq_idx)
+            activity = steps[:, env_idx, :]
             if activity.shape[0] < 2:
                 vectors.append(np.array([]))
                 continue
@@ -94,30 +94,6 @@ def _corrcoef_safe(left: np.ndarray, right: np.ndarray) -> float:
         left = left[:min_size]
         right = right[:min_size]
     return float(np.corrcoef(left, right)[0, 1])
-
-
-def _get_multiscale_steps(steps, freq_idx: int) -> torch.Tensor:
-    """Stack multiscale steps for a single frequency."""
-    if not steps:
-        raise ValueError("RolloutTrace has no inference steps")
-    if not (0 <= freq_idx < len(steps[0])):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(steps[0])})")
-    return torch.stack([step[freq_idx].detach().cpu() for step in steps], dim=0)
-
-
-def _get_n_freq(trace: RolloutTrace) -> int:
-    """Return the number of frequency modules."""
-    steps = trace.output.inference.p_inf
-    if not steps:
-        return 0
-    return len(steps[0])
-
-
-def _validate_env_idx(trace: RolloutTrace, env_idx: int) -> int:
-    """Validate the selected environment index."""
-    if not (0 <= env_idx < trace.batch_size):
-        raise IndexError(f"env_idx {env_idx} out of range [0, {trace.batch_size})")
-    return env_idx
 
 
 def _append_context(title: str, ctx: FigureContext) -> str:

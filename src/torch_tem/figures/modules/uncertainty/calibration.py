@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import RolloutTrace
+from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.trace_access import get_length, get_multiscale, validate_env_idx, validate_freq_idx
 
 
-def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
+def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     """Plot calibration of uncertainty proxies versus error.
 
     Uses MEC uncertainty (if available) and path-integration error between
@@ -28,23 +28,23 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
     with style_ctx:
         fig, ax = plt.subplots(figsize=ctx.figsize)
 
-        if trace.batch_size == 0 or len(trace) == 0:
+        if get_length(trace) == 0:
             ax.set_title("No trace data (empty rollout)")
             ax.axis("off")
             return fig
 
-        env_idx = _validate_env_idx(trace, int(ctx.env_idx))
-        freq_idx = _validate_freq_idx(trace, int(ctx.freq_idx))
+        env_idx = validate_env_idx(trace, int(ctx.env_idx))
+        freq_idx = validate_freq_idx(trace, "output/inference/g_inf", int(ctx.freq_idx))
 
-        uncertainty_steps = trace.state.mec.uncertainty
-        if not uncertainty_steps or uncertainty_steps[0] is None:
+        try:
+            uncert = get_multiscale(trace, "state/mec/location/uncertainty", freq_idx)
+        except (ValueError, IndexError):
             ax.set_title("No uncertainty data available")
             ax.axis("off")
             return fig
 
-        uncert = _get_multiscale_steps(uncertainty_steps, freq_idx)
-        g_inf = _get_multiscale_steps(trace.output.inference.g_inf, freq_idx)
-        g_gen = _get_multiscale_steps(trace.output.generative.g_gen, freq_idx)
+        g_inf = get_multiscale(trace, "output/inference/g_inf", freq_idx)
+        g_gen = get_multiscale(trace, "output/generative/g_gen", freq_idx)
 
         n_steps = min(uncert.shape[0], g_inf.shape[0], g_gen.shape[0])
         if n_steps == 0:
@@ -52,11 +52,8 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
             ax.axis("off")
             return fig
 
-        uncert_env = uncert[:n_steps, env_idx, :].numpy()
-        error_env = np.linalg.norm(
-            g_inf[:n_steps, env_idx, :].numpy() - g_gen[:n_steps, env_idx, :].numpy(),
-            axis=1,
-        )
+        uncert_env = uncert[:n_steps, env_idx, :]
+        error_env = np.linalg.norm(g_inf[:n_steps, env_idx, :] - g_gen[:n_steps, env_idx, :], axis=1)
         uncertainty_value = np.nanmean(uncert_env, axis=1)
 
         bins = np.quantile(uncertainty_value, np.linspace(0.0, 1.0, 11))
@@ -77,11 +74,7 @@ def plot(trace: RolloutTrace, ctx: FigureContext) -> Figure:
         return fig
 
 
-def _bin_errors(
-    uncertainty: np.ndarray,
-    errors: np.ndarray,
-    bins: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+def _bin_errors(uncertainty: np.ndarray, errors: np.ndarray, bins: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Aggregate errors within uncertainty bins."""
     mean_error = np.full(len(bins) - 1, np.nan, dtype=float)
     counts = np.zeros(len(bins) - 1, dtype=int)
@@ -91,35 +84,6 @@ def _bin_errors(
             counts[idx] = int(mask.sum())
             mean_error[idx] = float(np.mean(errors[mask]))
     return mean_error, counts
-
-
-def _get_multiscale_steps(steps, freq_idx: int) -> torch.Tensor:
-    """Stack multiscale steps for a single frequency."""
-    if not steps:
-        raise ValueError("RolloutTrace has no steps for this pathway")
-    if steps[0] is None:
-        raise ValueError("Uncertainty steps are missing")
-    if not (0 <= freq_idx < len(steps[0])):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {len(steps[0])})")
-    return torch.stack([step[freq_idx].detach().cpu() for step in steps], dim=0)
-
-
-def _validate_env_idx(trace: RolloutTrace, env_idx: int) -> int:
-    """Validate the selected environment index."""
-    if not (0 <= env_idx < trace.batch_size):
-        raise IndexError(f"env_idx {env_idx} out of range [0, {trace.batch_size})")
-    return env_idx
-
-
-def _validate_freq_idx(trace: RolloutTrace, freq_idx: int) -> int:
-    """Validate the selected frequency index."""
-    steps = trace.output.inference.g_inf
-    if not steps:
-        raise ValueError("RolloutTrace has no inference steps")
-    n_freq = len(steps[0])
-    if not (0 <= freq_idx < n_freq):
-        raise IndexError(f"freq_idx {freq_idx} out of range [0, {n_freq})")
-    return freq_idx
 
 
 def _append_context(title: str, ctx: FigureContext) -> str:

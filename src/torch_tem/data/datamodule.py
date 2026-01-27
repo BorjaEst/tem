@@ -109,7 +109,7 @@ class DataModule(pl.LightningDataModule):
                 walk_it_min=self.data_settings.walk.walk_it_min,
                 walk_it_max=self.data_settings.walk.walk_it_max,
                 walk_it_window=self.data_settings.walk.walk_it_window,
-                max_batches=self.data_settings.iterator.eval.val_batches,
+                max_batches=self.data_settings.iterator.eval.val_steps,
                 seed=self.data_settings.iterator.eval.val_seed,
             )
 
@@ -120,7 +120,7 @@ class DataModule(pl.LightningDataModule):
                 walk_it_min=self.data_settings.walk.walk_it_min,
                 walk_it_max=self.data_settings.walk.walk_it_max,
                 walk_it_window=self.data_settings.walk.walk_it_window,
-                max_batches=self.data_settings.iterator.eval.test_batches,
+                max_batches=self.data_settings.iterator.eval.test_steps,
                 seed=self.data_settings.iterator.eval.test_seed,
             )
 

@@ -106,11 +106,11 @@ class EvalSettings(BaseModel):
         default=True,
         description="Enable test loop after training.",
     )
-    val_batches: int = Field(
+    val_steps: int = Field(
         default=10,
         description="Number of batches per validation epoch (finite).",
     )
-    test_batches: int = Field(
+    test_steps: int = Field(
         default=10,
         description="Number of batches per test epoch (finite).",
     )

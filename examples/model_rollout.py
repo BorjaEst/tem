@@ -146,7 +146,7 @@ class ExampleArguments(BaseSettings):
     @property
     def iterator(self) -> RolloutStreamSettings:
         """Create the aggregate RolloutStreamSettings consumed by the DataModule."""
-        eval_settings = EvalSettings(val_batches=1, val_seed=self.data_seed)
+        eval_settings = EvalSettings(val_steps=1, val_seed=self.data_seed)
         rollout_settings = RolloutSettings(batch_size=1, n_rollout=self.max_rollout_steps)
         return RolloutStreamSettings(eval=eval_settings, rollout=rollout_settings)
 

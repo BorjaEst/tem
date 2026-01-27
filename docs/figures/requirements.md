@@ -1,4 +1,21 @@
-# Figures package requirements
+---
+post_title: "Figures package requirements"
+author1: "GitHub Copilot"
+post_slug: "figures-requirements"
+microsoft_alias: "copilot"
+featured_image: "https://example.com/featured/figures-requirements.png"
+categories:
+  - documentation
+tags:
+  - figures
+  - lightning
+  - requirements
+ai_note: "AI-assisted"
+summary: "Requirements for the figures package and training-time figure callback."
+post_date: "2026-01-27"
+---
+
+## Figures package requirements
 
 This document defines functional and non-functional requirements for the
 `torch_tem.figures` package.
@@ -86,7 +103,10 @@ The goals are:
 - **REQ-105 (Coverage control)**: WHEN aggregate sampling is enabled, THE
   SYSTEM SHALL allow configuring the number of validation batches/steps to
   aggregate.
-- **REQ-106 (Deterministic world RNG)**: WHEN environments/walks are generated
+- **REQ-106 (Loop-derived sampling)**: WHEN the figure callback is enabled,
+  THE SYSTEM SHALL build traces from batches produced by the validation/test
+  loop and SHALL skip figure generation when no batch is captured.
+- **REQ-107 (Deterministic world RNG)**: WHEN environments/walks are generated
   for seeded validation/test datasets, THE SYSTEM SHALL avoid use of global
   random state in world generation and SHALL use an injected RNG source.
 
@@ -119,6 +139,9 @@ The goals are:
 - **REQ-032 (TensorBoard logging)**: WHEN a logger with a SummaryWriter-like
   `experiment` is provided, THE SYSTEM SHALL log a rasterized figure image under
   a caller-specified tag.
+- **REQ-034 (Logger capability detection)**: WHEN a logger provides an
+  `experiment.add_figure` API, THE SYSTEM SHALL log figures through that
+  interface.
 - **REQ-033 (Deterministic output paths)**: WHEN an output path is generated,
   THE SYSTEM SHALL follow a deterministic naming convention and include optional
   step/version fields.

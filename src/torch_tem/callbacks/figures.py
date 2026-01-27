@@ -6,7 +6,6 @@ TensorBoard and/or saves them as PDF artifacts.
 
 from __future__ import annotations
 
-import itertools
 import traceback
 from pathlib import Path
 from typing import Any, Iterable, List, Literal, Optional
@@ -52,10 +51,6 @@ class FigureCallbackSettings(BaseModel):
     aggregate_batches: Optional[int] = Field(
         default=None,
         description="Number of batches to aggregate (None = all batches).",
-    )
-    reset_each_val_epoch: bool = Field(
-        default=False,
-        description="Reset validation dataset before and after figure sampling.",
     )
     max_rollout_steps: int = Field(
         default=100,
@@ -112,12 +107,34 @@ class FiguresCallback(pl.Callback):
         """
         super().__init__()
         self.settings = settings
+        self._episode_batch: Optional[Any] = None
+        self._aggregate_batches: list[Any] = []
         register.register_builtin_figures()  # Ensure built-in figures are registered
         REGISTRY.validate(settings.figures)  # Validate figure names at initialization
 
+    def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        if not self._should_capture(trainer, "validate"):
+            return
+        self._reset_capture_state()
+
+    def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        if not self._should_capture(trainer, "test"):
+            return
+        self._reset_capture_state()
+
+    def on_validation_batch_start(self, trainer: Trainer, pl_module: LightningModule, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
+        if not self._should_capture(trainer, "validate") or dataloader_idx != 0:
+            return
+        self._capture_batch(batch)
+
+    def on_test_batch_start(self, trainer: Trainer, pl_module: LightningModule, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
+        if not self._should_capture(trainer, "test") or dataloader_idx != 0:
+            return
+        self._capture_batch(batch)
+
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Generate figures at validation time."""
-        if not self.settings.enabled or trainer.global_rank != 0 or self.settings.split != "validate":
+        if not self.settings.enabled or not trainer.is_global_zero or self.settings.split != "validate":
             return
         try:
             self._generate_figures(trainer, pl_module, split_name="validate")
@@ -127,7 +144,7 @@ class FiguresCallback(pl.Callback):
 
     def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Generate figures at test time."""
-        if not self.settings.enabled or trainer.global_rank != 0 or self.settings.split != "test":
+        if not self.settings.enabled or not trainer.is_global_zero or self.settings.split != "test":
             return
         try:
             self._generate_figures(trainer, pl_module, split_name="test")
@@ -152,26 +169,21 @@ class FiguresCallback(pl.Callback):
         # Validate datamodule
         datamodule = trainer.datamodule
         if datamodule is None or datamodule.get_dataset(split_name) is None:
-            raise ValueError("DataModule or dataset not available")
+            print("FiguresCallback: DataModule or dataset not available; skipping figure generation.")
+            return
 
-        reset_for_figures = self.settings.reset_each_val_epoch and split_name == "validate"
-        if reset_for_figures:
-            datamodule.reset_split(split_name)
+        episode_batch = self._episode_batch
+        if episode_batch is None:
+            print("FiguresCallback: No captured batch available; skipping figure generation.")
+            return
 
-        try:
-            dataset = datamodule.get_dataset(split_name)
-            if dataset is None:
-                raise ValueError(f"Dataset for split '{split_name}' not available")
-
-            batches = iter(dataset)
-            episode_batch = next(batches)
-            episode_trace = self._build_rollout_trace(trainer, datamodule, model, episode_batch, split_name)
-
-            aggregate_names = self._aggregate_figure_names(self.settings.figures)
-            aggregate_trace = self._build_aggregate_trace(trainer, datamodule, model, split_name, episode_batch, batches) if aggregate_names else episode_trace
-        finally:
-            if reset_for_figures:
-                datamodule.reset_split(split_name)
+        episode_trace = self._build_rollout_trace(trainer, datamodule, model, episode_batch, split_name)
+        aggregate_names = self._aggregate_figure_names(self.settings.figures)
+        if aggregate_names and self._aggregate_batches:
+            traces = [self._build_rollout_trace(trainer, datamodule, model, batch, split_name) for batch in self._aggregate_batches]
+            aggregate_trace = concat_traces(traces)
+        else:
+            aggregate_trace = episode_trace
 
         # Generate and persist each figure
         context = self.figure_context(trainer, split_name)
@@ -182,9 +194,29 @@ class FiguresCallback(pl.Callback):
         self._dispatch_figures(trainer, episode_names, context, episode_trace)
         self._dispatch_figures(trainer, aggregate_names, context, aggregate_trace)
 
-    def _sample_batch(self, datamodule: Any, split_name: str) -> Any:
-        """Sample a single batch from the requested split."""
-        return datamodule.sample_batch(split=split_name)
+        self._reset_capture_state()
+
+    def _should_capture(self, trainer: Trainer, split_name: str) -> bool:
+        return self.settings.enabled and trainer.is_global_zero and self.settings.split == split_name
+
+    def _reset_capture_state(self) -> None:
+        self._episode_batch = None
+        self._aggregate_batches = []
+
+    def _capture_batch(self, batch: Any) -> None:
+        if self._episode_batch is None:
+            self._episode_batch = batch
+
+        aggregate_names = self._aggregate_figure_names(self.settings.figures)
+        if not aggregate_names:
+            return
+
+        if self.settings.aggregate_batches is None:
+            self._aggregate_batches.append(batch)
+            return
+
+        if len(self._aggregate_batches) < self.settings.aggregate_batches:
+            self._aggregate_batches.append(batch)
 
     def _build_rollout_trace(self, trainer: Trainer, datamodule: Any, model: Any, batch: Any, split_name: str) -> TraceTree:
         """Create a TraceTree from a batch."""
@@ -241,19 +273,6 @@ class FiguresCallback(pl.Callback):
             return {key: self._move_to_device(val, device) for key, val in value.items()}
         return value
 
-    def _build_aggregate_trace(self, trainer: Trainer, datamodule: Any, model: Any, split_name: str, episode_batch: Any, batch_iter: Iterable[Any]) -> TraceTree:
-        """Create an aggregated trace by concatenating all batches."""
-        traces = [self._build_rollout_trace(trainer, datamodule, model, episode_batch, split_name)]
-
-        remaining = self.settings.aggregate_batches
-        if remaining is not None:
-            batch_iter = itertools.islice(batch_iter, max(remaining - 1, 0))
-
-        for batch in batch_iter:
-            traces.append(self._build_rollout_trace(trainer, datamodule, model, batch, split_name))
-
-        return concat_traces(traces)
-
     def _aggregate_figure_names(self, figure_names: Iterable[str]) -> list[str]:
         """Resolve figure names that should use aggregated sampling."""
         aggregate_tags = set(self.settings.aggregate_for_tags)
@@ -291,9 +310,14 @@ class FiguresCallback(pl.Callback):
                 sinks.save_pdf(fig, pdf_path)
 
         # Log to TensorBoard if requested
-        if self.settings.log_tensorboard and isinstance(trainer.logger, TensorBoardLogger):
+        if self.settings.log_tensorboard and trainer.logger is not None:
             tag = f"figures/{spec.default_filename}"
-            sinks.log_tensorboard_figure(trainer.logger, tag, fig, global_step=trainer.global_step)
+            if isinstance(trainer.logger, TensorBoardLogger):
+                sinks.log_tensorboard_figure(trainer.logger, tag, fig, global_step=trainer.global_step)
+            else:
+                experiment = getattr(trainer.logger, "experiment", None)
+                if experiment is not None and hasattr(experiment, "add_figure"):
+                    experiment.add_figure(tag, fig, global_step=trainer.global_step)
 
         # Close figure to prevent memory leaks
         plt.close(fig)

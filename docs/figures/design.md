@@ -1,4 +1,21 @@
-# Figures package design
+---
+post_title: "Figures package design"
+author1: "GitHub Copilot"
+post_slug: "figures-design"
+microsoft_alias: "copilot"
+featured_image: "https://example.com/featured/figures-design.png"
+categories:
+  - documentation
+tags:
+  - figures
+  - lightning
+  - design
+ai_note: "AI-assisted"
+summary: "Architecture and callback integration design for TEM figures."
+post_date: "2026-01-27"
+---
+
+## Figures package design
 
 This document describes the design of the `torch_tem.figures` package: its
 components, the data flow from traces to matplotlib figures, and the extension
@@ -78,7 +95,8 @@ responsible for:
 Recommended default:
 
 - Trigger figure generation during the validation loop (e.g.
-  `on_validation_epoch_end` or `on_validation_batch_start` with `batch_idx==0`).
+- Capture representative batches during `on_validation_batch_start` and render
+  figures during `on_validation_epoch_end`.
 - Keep step-based gating (`every_n_steps`) but evaluate it at validation time
   against `trainer.global_step`.
 
@@ -148,7 +166,6 @@ Suggested additions to callback settings (exact field names are implementation
 details):
 
 - Split selection: `split = "validate" | "test"` (default: `"validate"`).
-- Repeatability: `reset_each_val_epoch: bool`.
 - Sampling:
   - `episode_steps` (or reuse `max_rollout_steps` explicitly as episode length).
   - `aggregate_batches` (number of validation batches to concatenate).

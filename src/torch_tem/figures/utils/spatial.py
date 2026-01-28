@@ -213,6 +213,69 @@ def autocorr_2d(values: np.ndarray, world) -> np.ndarray:
     return _autocorr_2d_from_zgrid(z_grid)
 
 
+def infer_grid_spacing(world) -> tuple[float | None, float | None]:
+    """Infer grid spacing from world location coordinates.
+
+    Returns:
+        Tuple of (dx, dy) in world units. Returns (None, None) if spacing
+        cannot be inferred.
+    """
+    coords = _location_coords(world)
+    if coords.size == 0:
+        return None, None
+
+    xs = np.unique(coords[:, 0])
+    ys = np.unique(coords[:, 1])
+    dx = _median_positive_diff(xs)
+    dy = _median_positive_diff(ys)
+    return dx, dy
+
+
+def infer_distance_scale(world) -> float | None:
+    """Infer a representative distance scale for converting to cell units."""
+    dx, dy = infer_grid_spacing(world)
+    spacings = [val for val in (dx, dy) if val is not None and val > 0]
+    if not spacings:
+        return None
+    return float(np.mean(spacings))
+
+
+def autocorr_extent(world, *, units: str = "world") -> tuple[float, float, float, float] | None:
+    """Compute a 2D autocorr extent for imshow.
+
+    Args:
+        world: Environment world with location coordinates.
+        units: "world" for world units or "cells" for grid-cell steps.
+
+    Returns:
+        Extent tuple (xmin, xmax, ymin, ymax) or None if unavailable.
+    """
+    coords = _location_coords(world)
+    if coords.size == 0:
+        return None
+
+    xs = np.unique(coords[:, 0])
+    ys = np.unique(coords[:, 1])
+    if xs.size < 2 or ys.size < 2:
+        return None
+
+    nx = xs.size
+    ny = ys.size
+
+    if units == "cells":
+        x_max = float(nx - 1)
+        y_max = float(ny - 1)
+    else:
+        dx = _median_positive_diff(xs)
+        dy = _median_positive_diff(ys)
+        if dx is None or dy is None:
+            return None
+        x_max = float((nx - 1) * dx)
+        y_max = float((ny - 1) * dy)
+
+    return (-x_max, x_max, -y_max, y_max)
+
+
 def _location_coords(world) -> np.ndarray:
     return np.asarray([[float(loc["o"]), float(loc["y"])] for loc in world.locations], dtype=float)
 
@@ -241,6 +304,17 @@ def _values_to_grid(values: np.ndarray, world) -> np.ndarray:
 def _pairwise_distances(coords: np.ndarray) -> np.ndarray:
     diff = coords[:, None, :] - coords[None, :, :]
     return np.linalg.norm(diff, axis=2)
+
+
+def _median_positive_diff(values: np.ndarray) -> float | None:
+    values = np.asarray(values, dtype=float)
+    if values.size < 2:
+        return None
+    diffs = np.diff(np.sort(values))
+    diffs = diffs[diffs > 0]
+    if diffs.size == 0:
+        return None
+    return float(np.median(diffs))
 
 
 def _autocorr_2d_from_zgrid(z_grid: np.ndarray) -> np.ndarray:
@@ -300,7 +374,10 @@ def _autocorr_curve(values: np.ndarray, distances: np.ndarray, bins: np.ndarray)
     dists = dists[valid]
     products = vals_i[valid] * vals_j[valid]
     for bin_idx in range(n_bins):
-        mask = (dists >= bins[bin_idx]) & (dists < bins[bin_idx + 1])
+        if bin_idx == n_bins - 1:
+            mask = (dists >= bins[bin_idx]) & (dists <= bins[bin_idx + 1])
+        else:
+            mask = (dists >= bins[bin_idx]) & (dists < bins[bin_idx + 1])
         if mask.any():
             out[bin_idx] = float(np.mean(products[mask]))
         else:

@@ -26,9 +26,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
+from torch_tem.diagnostics.trace_access import get_batch_size, get_environments, get_length
 from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree
 from torch_tem.figures.registry import FigureContext
-from torch_tem.figures.trace_access import get_batch_size, get_environments, get_length
 from torch_tem.model import Model as TEMModel
 from torch_tem.model import TEMConfig
 from torch_tem.settings import (

@@ -10,13 +10,9 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import TraceTree
-from torch_tem.figures.primitives import plot_map
-from torch_tem.figures.registry import FigureContext
-from torch_tem.figures.trace_access import (
+from torch_tem.diagnostics.trace_access import (
     get_hpc_memory,
     get_lec_cells,
     get_length,
@@ -28,7 +24,11 @@ from torch_tem.figures.trace_access import (
     get_world,
     validate_env_idx,
 )
-from torch_tem.figures.utils.spatial import aggregate_rate_map
+from torch_tem.diagnostics.traces import TraceTree
+from torch_tem.figures.plots import plot_time_colored_trajectory
+from torch_tem.figures.primitives import plot_map
+from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.utils.spatial import aggregate_rate_map, clip_unit_interval, select_feature_by_spatial_variance
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
@@ -64,7 +64,8 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
 
         _plot_observation_ids(trace, env_idx, ax_obs, ctx)
         _plot_lec_cells(trace, env_idx, ax_lec, ctx)
-        _plot_time_colored_trajectory(world, location_ids, ax_traj, ctx)
+        plot_time_colored_trajectory(ax_traj, world, location_ids)
+        ax_traj.set_title(_append_context("Trajectory (time-colored)", ctx))
         _plot_mec_rate_maps(trace, env_idx, world, location_ids, ax_mec, ctx)
         _plot_hpc_rate_maps(trace, env_idx, world, location_ids, ax_hpc, ctx)
         _plot_hpc_memory(trace, env_idx, ax_mem, ctx)
@@ -129,35 +130,6 @@ def _plot_lec_cells(trace: TraceTree, env_idx: int, ax: plt.Axes, ctx: FigureCon
     ax.set_ylabel("Cells")
     ax.set_yticks([])
     ax.set_title(_append_context(title=None, ctx=ctx))
-
-
-def _plot_time_colored_trajectory(world: object, location_ids: list[int], ax: plt.Axes, ctx: FigureContext) -> None:
-    """Plot a trajectory colored by time."""
-    if not location_ids:
-        _plot_missing(ax, "No trajectory")
-        return
-
-    values = np.full(len(world.locations), np.nan, dtype=float)
-    plot_map(world, values, ax=ax, shape="square")
-
-    coords = np.array([[world.locations[loc_id]["o"], world.locations[loc_id]["y"]] for loc_id in location_ids], dtype=float)
-    if coords.shape[0] < 2:
-        ax.scatter(coords[:, 0], coords[:, 1], s=10, color="black")
-        ax.set_title(_append_context("Trajectory", ctx))
-        return
-
-    segments = np.stack([coords[:-1], coords[1:]], axis=1)
-    colors = np.linspace(0, 1, segments.shape[0])
-
-    lc = LineCollection(segments, cmap="viridis", array=colors, linewidths=1.5)
-    ax.add_collection(lc)
-    ax.scatter(coords[0, 0], coords[0, 1], s=20, color="black", zorder=3)
-    ax.scatter(coords[-1, 0], coords[-1, 1], s=20, color="white", edgecolor="black", zorder=3)
-
-    ax.set_aspect(1)
-    ax.invert_yaxis()
-    ax.axis("off")
-    ax.set_title(_append_context("Trajectory (time-colored)", ctx))
 
 
 def _plot_mec_rate_maps(trace: TraceTree, env_idx: int, world: object, location_ids: list[int], ax: plt.Axes, ctx: FigureContext) -> None:
@@ -256,8 +228,8 @@ def _select_rate_map_cell(rate_map: np.ndarray) -> tuple[int, Optional[np.ndarra
     """Select the most spatially varying cell and return its values."""
     if rate_map.size == 0:
         return 0, None
-    cell_idx = _select_feature_by_spatial_variance(rate_map)
-    values = _clip_unit_interval(rate_map[:, cell_idx])
+    cell_idx = select_feature_by_spatial_variance(rate_map)
+    values = clip_unit_interval(rate_map[:, cell_idx])
     if values.size == 0:
         return cell_idx, None
     return cell_idx, values
@@ -272,21 +244,6 @@ def _select_top_k_temporal(activity: np.ndarray, k: int) -> np.ndarray:
     if k == 0:
         return np.array([], dtype=int)
     return np.argsort(-variances)[:k]
-
-
-def _select_feature_by_spatial_variance(rate_map: np.ndarray) -> int:
-    """Select the spatially most varying feature index."""
-    if rate_map.size == 0:
-        return 0
-    variances = np.nanvar(rate_map, axis=0)
-    if not np.isfinite(variances).any():
-        return 0
-    return int(np.nanargmax(variances))
-
-
-def _clip_unit_interval(values: np.ndarray) -> np.ndarray:
-    """Clip values to [0, 1] for display."""
-    return np.clip(values, 0.0, 1.0)
 
 
 def _append_context(title: Optional[str], ctx: FigureContext) -> str:

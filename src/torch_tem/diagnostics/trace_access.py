@@ -138,11 +138,7 @@ def get_mec_ovc_modules(trace: TraceTree) -> Optional[int]:
         return None
 
 
-def get_multiscale(
-    trace: TraceTree,
-    base_path: str,
-    freq_idx: int,
-) -> np.ndarray:
+def get_multiscale(trace: TraceTree, base_path: str, freq_idx: int) -> np.ndarray:
     """Return a multi-scale dense array for a single frequency.
 
     Args:

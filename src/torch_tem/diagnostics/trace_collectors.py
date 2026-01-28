@@ -260,11 +260,7 @@ def _to_trace_step(step: RolloutStep) -> TraceStep:
     """
     action_ids = _coerce_action_ids(step.world_step.action)
     location_ids = _coerce_location_ids(step.world_step.locations)
-    world_step = TraceWorldStep(
-        observation=step.world_step.observation,
-        action_ids=action_ids,
-        location_ids=location_ids,
-    )
+    world_step = TraceWorldStep(step.world_step.observation, action_ids, location_ids)
     return TraceStep(world_step=world_step, output=step.output, state=step.state)
 
 
@@ -315,10 +311,7 @@ def _downsample_node(node: TraceNode, stride: int) -> TraceNode:
     return down
 
 
-def _downsample_meta_sparse(
-    meta_sparse: dict[str, list[MetaUpdate]],
-    stride: int,
-) -> dict[str, list[MetaUpdate]]:
+def _downsample_meta_sparse(meta_sparse: dict[str, list[MetaUpdate]], stride: int) -> dict[str, list[MetaUpdate]]:
     """Downsample sparse metadata updates by stride."""
     downsampled: dict[str, list[MetaUpdate]] = {}
     for key, updates in meta_sparse.items():
@@ -328,10 +321,7 @@ def _downsample_meta_sparse(
     return downsampled
 
 
-def _downsample_events(
-    events: dict[str, list[Event]],
-    stride: int,
-) -> dict[str, list[Event]]:
+def _downsample_events(events: dict[str, list[Event]], stride: int) -> dict[str, list[Event]]:
     """Downsample events by stride."""
     downsampled: dict[str, list[Event]] = {}
     for key, entries in events.items():
@@ -406,10 +396,7 @@ def _concat_data(nodes: Sequence[TraceNode]) -> dict[str, np.ndarray]:
     return merged
 
 
-def _merge_meta_sparse(
-    nodes: Sequence[TraceNode],
-    offsets: Sequence[int],
-) -> dict[str, list[MetaUpdate]]:
+def _merge_meta_sparse(nodes: Sequence[TraceNode], offsets: Sequence[int]) -> dict[str, list[MetaUpdate]]:
     """Merge sparse metadata updates with offsets."""
     merged: dict[str, list[MetaUpdate]] = {}
     for node, offset in zip(nodes, offsets):
@@ -419,10 +406,7 @@ def _merge_meta_sparse(
     return merged
 
 
-def _merge_events(
-    nodes: Sequence[TraceNode],
-    offsets: Sequence[int],
-) -> dict[str, list[Event]]:
+def _merge_events(nodes: Sequence[TraceNode], offsets: Sequence[int]) -> dict[str, list[Event]]:
     """Merge events with offsets."""
     merged: dict[str, list[Event]] = {}
     for node, offset in zip(nodes, offsets):

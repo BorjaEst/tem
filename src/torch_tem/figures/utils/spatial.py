@@ -52,6 +52,28 @@ def robust_min_max(values: np.ndarray, lower: float = 5.0, upper: float = 95.0) 
     return min_val, max_val
 
 
+def select_feature_by_spatial_variance(rate_map: np.ndarray) -> int:
+    """Select the most spatially varying feature index.
+
+    Args:
+        rate_map: Array of shape (n_locations, n_features).
+
+    Returns:
+        Index of the feature with highest spatial variance.
+    """
+    if rate_map.size == 0:
+        return 0
+    variances = np.nanvar(rate_map, axis=0)
+    if not np.isfinite(variances).any():
+        return 0
+    return int(np.nanargmax(variances))
+
+
+def clip_unit_interval(values: np.ndarray) -> np.ndarray:
+    """Clip values to the [0, 1] interval for display."""
+    return np.clip(values, 0.0, 1.0)
+
+
 def radial_autocorr(values: np.ndarray, world, n_bins: int = 12) -> tuple[np.ndarray, np.ndarray]:
     """Compute radial spatial autocorrelogram curve for a single feature.
 

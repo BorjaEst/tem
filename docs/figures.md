@@ -14,10 +14,10 @@ Many built-in figures fall into one of two intent categories:
 
 The table below lists the figures that are registered by default.
 
-| Figure                              | Summary |
-| ----------------------------------- | ------- |
-| [overview][mod_overview]            |         |
-| [overview.rate_maps][mod_rate_maps] |         |
+| Figure                             | Summary |
+| ---------------------------------- | ------- |
+| [overview][mod_overview]           |         |
+| [spatial.structure][mod_rate_maps] |         |
 
 > TODO plots
 

@@ -69,6 +69,50 @@ def select_feature_by_spatial_variance(rate_map: np.ndarray) -> int:
     return int(np.nanargmax(variances))
 
 
+def select_top_k_by_spatial_variance(
+    rate_map: np.ndarray,
+    occupancy: np.ndarray | None,
+    k: int,
+    min_coverage: float = 0.1,
+) -> np.ndarray:
+    """Select top-k feature indices by spatial variance with coverage filtering.
+
+    Args:
+        rate_map: Array of shape (n_locations, n_features).
+        occupancy: Optional per-location visit counts.
+        k: Number of features to select.
+        min_coverage: Minimum fraction of locations required per feature.
+
+    Returns:
+        Array of selected feature indices (length <= k).
+    """
+    if rate_map.size == 0 or k <= 0:
+        return np.array([], dtype=int)
+
+    n_locations, n_features = rate_map.shape
+    min_locations = max(1, int(np.ceil(min_coverage * n_locations)))
+
+    if occupancy is not None and occupancy.size:
+        visited_mask = occupancy > 0
+    else:
+        visited_mask = np.isfinite(rate_map).any(axis=1)
+
+    scores = np.full(n_features, -np.inf, dtype=float)
+    for idx in range(n_features):
+        values = rate_map[:, idx]
+        valid = np.isfinite(values) & visited_mask
+        if valid.sum() < min_locations:
+            continue
+        scores[idx] = float(np.nanvar(values[valid]))
+
+    if not np.isfinite(scores).any():
+        return np.array([], dtype=int)
+
+    order = np.argsort(-scores)
+    k = min(k, n_features)
+    return order[:k]
+
+
 def clip_unit_interval(values: np.ndarray) -> np.ndarray:
     """Clip values to the [0, 1] interval for display."""
     return np.clip(values, 0.0, 1.0)
@@ -92,6 +136,51 @@ def radial_autocorr(values: np.ndarray, world, n_bins: int = 12) -> tuple[np.nda
     bins, centers = _distance_bins(distances, n_bins=n_bins)
     curve = _autocorr_curve(values, distances, bins)
     return centers, curve
+
+
+def summarize_radial_autocorr(
+    rate_map: np.ndarray,
+    world: object,
+    *,
+    n_bins: int = 12,
+    min_coverage: float = 0.1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Summarize radial autocorrelograms across features.
+
+    Args:
+        rate_map: Array of shape (n_locations, n_features).
+        world: Environment world with location coordinates.
+        n_bins: Number of distance bins.
+        min_coverage: Minimum fraction of locations required per feature.
+
+    Returns:
+        Tuple of (centers, median, q25, q75). Empty arrays if unavailable.
+    """
+    if rate_map.size == 0:
+        return np.array([]), np.array([]), np.array([]), np.array([])
+
+    n_locations, n_features = rate_map.shape
+    min_locations = max(1, int(np.ceil(min_coverage * n_locations)))
+
+    curves: list[np.ndarray] = []
+    centers: np.ndarray | None = None
+
+    for idx in range(n_features):
+        values = rate_map[:, idx]
+        if np.isfinite(values).sum() < min_locations:
+            continue
+        centers, curve = radial_autocorr(values, world, n_bins=n_bins)
+        if curve.size:
+            curves.append(curve)
+
+    if not curves or centers is None or centers.size == 0:
+        return np.array([]), np.array([]), np.array([]), np.array([])
+
+    stacked = np.vstack(curves)
+    median = np.nanmedian(stacked, axis=0)
+    q25 = np.nanpercentile(stacked, 25, axis=0)
+    q75 = np.nanpercentile(stacked, 75, axis=0)
+    return centers, median, q25, q75
 
 
 def autocorr_2d(values: np.ndarray, world) -> np.ndarray:

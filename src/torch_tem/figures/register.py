@@ -24,11 +24,20 @@ def register_builtin_figures() -> None:
         )
     )
 
+    # Spatial structure figures
     REGISTRY.register(
         FigureSpec(
             name="spatial.structure",
             description="Multi-panel overview with occupancy, abstract rate maps, autocorrelograms, and trajectory",
             plot=spatial.structure.plot,
+            tags={"model", "rollout", "spatial"},
+        )
+    )
+    REGISTRY.register(
+        FigureSpec(
+            name="spatial.autocorrelogram",
+            description="Multi-panel spatial summary for HPC place-like activity",
+            plot=spatial.autocorrelogram.plot,
             tags={"model", "rollout", "spatial"},
         )
     )

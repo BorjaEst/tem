@@ -245,6 +245,7 @@ def main() -> None:
     figs: list[tuple[str, plt.Figure]] = [
         (f"01_overview.png", figures.overview.plot(trace, ctx)),
         (f"02_spatial_structure.png", figures.spatial.structure.plot(trace, ctx)),
+        (f"03_spatial_autocorr.png", figures.spatial.autocorrelogram.plot(trace, ctx)),
     ]
 
     print(f"Step 4: Generated {len(figs)} figure(s).")

@@ -1,45 +1,40 @@
-"""Explicit figure registration module.
+"""Registration helpers for built-in figures."""
 
-Import this module to register all built-in figures. This avoids circular
-import issues by separating registration from core infrastructure.
-"""
+from __future__ import annotations
 
 from torch_tem.figures.modules import autocorr, overview, spatial
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 
 def register_builtin_figures() -> None:
-    """Register all built-in TEM figures.
-
-    This function is idempotent - it can be called multiple times safely.
-    Re-registering a figure with the same name is a no-op.
-    """
-    # Model overview figures
-    REGISTRY.register(
-        FigureSpec(
-            name="overview",
-            description="Multi-panel TEM circuit overview (LEC/MEC/HPC)",
-            plot=overview.plot,
-            tags={"model", "rollout", "overview"},
+    """Register built-in figure specifications."""
+    if "overview" not in REGISTRY.list():
+        REGISTRY.register(
+            FigureSpec(
+                name="overview",
+                plot=overview.plot,
+                default_filename="overview",
+                tags={"episode"},
+                description="Overview of rollout observations",
+            )
         )
-    )
-
-    # Spatial structure figures
-    REGISTRY.register(
-        FigureSpec(
-            name="spatial.structure",
-            description="Multi-panel overview with occupancy, abstract rate maps, autocorrelograms, and trajectory",
-            plot=spatial.structure.plot,
-            tags={"model", "rollout", "spatial"},
+    if "spatial.structure" not in REGISTRY.list():
+        REGISTRY.register(
+            FigureSpec(
+                name="spatial.structure",
+                plot=spatial.structure.plot,
+                default_filename="spatial_structure",
+                tags={"coverage"},
+                description="Spatial structure summary",
+            )
         )
-    )
-
-    # Autocorrelogram figures
-    REGISTRY.register(
-        FigureSpec(
-            name="autocorr.g_gen",
-            description="Multi-panel g_gen rate maps and autocorrelograms with trajectory",
-            plot=autocorr.g_gen.plot,
-            tags={"model", "rollout", "spatial"},
+    if "autocorr.g_gen" not in REGISTRY.list():
+        REGISTRY.register(
+            FigureSpec(
+                name="autocorr.g_gen",
+                plot=autocorr.g_gen.plot,
+                default_filename="autocorr_g_gen",
+                tags={"episode"},
+                description="Autocorrelation of inferred state",
+            )
         )
-    )

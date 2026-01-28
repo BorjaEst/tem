@@ -1,22 +1,51 @@
-"""Shared helpers for figure-level orchestration."""
+"""Base types for figure orchestration."""
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Optional, Protocol
 
-from torch_tem.figures.registry import FigureContext
+
+class PanelCallable(Protocol):
+    """Protocol for panel render functions."""
+
+    def __call__(self, ax: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        ...
 
 
-def style_context(ctx: FigureContext):
-    """Return a scoped style context manager for figure generation.
+@dataclass(frozen=True)
+class StyleContext:
+    """Style context for resolving tokenized styles."""
 
-    Args:
-        ctx: Figure context containing an optional ``style``.
+    theme: "Theme"
 
-    Returns:
-        A context manager that applies the style, or a no-op context.
-    """
-    style = getattr(ctx, "style", None)
-    if style is None:
-        return nullcontext()
-    return style.apply_context()
+    def resolve(self, style: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+        """Resolve style tokens to concrete values.
+
+        Args:
+                style: Optional style mapping.
+
+        Returns:
+                Resolved style dictionary.
+        """
+        from torch_tem.figures.figures.styles import resolve_style_tokens
+
+        return resolve_style_tokens(style or {}, self.theme)
+
+
+@dataclass(frozen=True)
+class GuidePolicy:
+    """Guide policy configuration for composition."""
+
+    legend: str = "shared"
+    colorbar: str = "shared"
+
+
+@dataclass(frozen=True)
+class LayoutConfig:
+    """Layout configuration for figure grids."""
+
+    nrows: int
+    ncols: int
+    sharex: bool = False
+    sharey: bool = False

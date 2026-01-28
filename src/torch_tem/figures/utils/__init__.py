@@ -1,29 +1,16 @@
-"""Utility helpers for figure modules."""
+"""Shared utilities for figures and plots."""
 
-from torch_tem.figures.utils.spatial import (
-    aggregate_rate_map,
-    autocorr_2d,
-    autocorr_extent,
-    clip_unit_interval,
-    infer_distance_scale,
-    infer_grid_spacing,
-    radial_autocorr,
-    robust_min_max,
-    select_feature_by_spatial_variance,
-    select_top_k_by_spatial_variance,
-    summarize_radial_autocorr,
-)
+from torch_tem.figures.utils.color import ensure_color_sequence, resolve_categorical_colors, to_rgba
+from torch_tem.figures.utils.data import as_1d_array, as_2d_array, validate_heatmap_data, validate_xy
+from torch_tem.figures.utils.line import resolve_line_style
 
 __all__ = [
-    "aggregate_rate_map",
-    "autocorr_2d",
-    "autocorr_extent",
-    "clip_unit_interval",
-    "infer_distance_scale",
-    "infer_grid_spacing",
-    "radial_autocorr",
-    "robust_min_max",
-    "select_feature_by_spatial_variance",
-    "select_top_k_by_spatial_variance",
-    "summarize_radial_autocorr",
+    "as_1d_array",
+    "as_2d_array",
+    "ensure_color_sequence",
+    "resolve_categorical_colors",
+    "resolve_line_style",
+    "to_rgba",
+    "validate_heatmap_data",
+    "validate_xy",
 ]

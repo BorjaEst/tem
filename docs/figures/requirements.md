@@ -1,204 +1,209 @@
-# Figures module requirements
+# Figures Architecture Requirements
 
-This document defines functional and non-functional requirements for the
-`torch_tem.figures` package architecture.
+## Introduction
 
-The figures stack is intentionally split into two layers:
+This document specifies the architecture pattern for a Python visualization library that separates:
 
-- **Plots (axis-level primitives)**: small, reusable drawing functions that
+- **plots**: low-level, axis-level plot primitives that draw onto a provided plotting target (e.g., a Matplotlib `Axes`).
+- **figures**: high-level figure orchestration (figure creation, subplot/grid layout, styling/themes/templates, and composition of multiple plot primitives).
 
-  render onto a provided Matplotlib `Axes`.
+This separation follows the Figure–Axes separation popularized by Matplotlib and aligns with the Grammar of Graphics concept of layering and composition.
 
-- **Figures (figure-level orchestration)**: higher-level figure constructors
+## 1. Purpose & Scope
 
-  that create the `Figure`, manage subplot layout, apply style/templates, and
-  compose multiple primitives into consistent multi-panel outputs.
+- Define clear responsibilities, interfaces, and constraints for `plots/` and `figures/`.
+- Establish requirements that improve modularity, testability, backend independence, and layout consistency.
 
-This separation follows the Matplotlib Figure–Axes model and the common
-“primitives + orchestration” pattern used by Matplotlib/Seaborn/Plotly/Altair.
+### In Scope
 
-## Definitions
+- Function-level contracts for axis-level primitives.
+- Figure-level orchestration responsibilities (layout, theming, composition, export policy).
+- Return conventions and metadata needed for composition (legends, colorbars, shared scales).
+- Testing strategy aligned with the separation.
 
-- **Axes**: A Matplotlib `Axes` instance; the target surface on which artists
+### Out of Scope
 
-  are drawn.
+- Implementing specific plot types or figure recipes.
+- Choosing a specific rendering backend (Matplotlib, Plotly, Altair) as the only supported option.
+- Full API reference documentation for end users.
 
-- **Figure**: A Matplotlib `Figure` instance; the container that owns axes,
+## 2. Definitions
 
-  layout, and export configuration.
+- **Axes**: A plotting surface within a figure (e.g., `matplotlib.axes.Axes`).
+- **Figure**: A container for one or more Axes plus layout and figure-level elements (e.g., `matplotlib.figure.Figure`).
+- **Plot primitive**: A low-level, axis-level function that draws onto a provided Axes/target.
+- **Figure orchestration**: High-level logic that creates/manages figures, subplots, layout, styling, and plot composition.
+- **Theme**: A named set of styling defaults (fonts, sizes, colors, grid rules).
+- **Template**: A reusable figure-level configuration that can include theme + layout + export settings.
+- **Guide**: A visual explanation of encodings, typically legends and colorbars.
+- **Resolved style**: Concrete rendering parameters passed to primitives (e.g., `color="#4C78A8"`, `lw=2`).
 
-- **Plot primitive**: A pure-ish function that draws onto a provided `Axes` and
+## 3. Requirements, Constraints & Guidelines
 
-  returns artist handles or structured results.
+### Core Architecture Requirements
 
-- **Figure module**: A function/module that creates a `Figure` and one or more
+- **REQ-001**: WHEN a plot primitive is called, THE SYSTEM SHALL draw only on the provided target (e.g., Axes) and SHALL NOT create a Figure.
+- **REQ-002**: WHEN a plot primitive is called, THE SYSTEM SHALL NOT create or modify subplot grids, constrained layouts, or global layout settings.
+- **REQ-003**: WHEN a plot primitive is called, THE SYSTEM SHALL NOT mutate global styling state (e.g., Matplotlib `rcParams`) as a side effect.
+- **REQ-004**: WHEN a figure-level function is called, THE SYSTEM SHALL be able to create and manage Figure objects and subplot/grid layouts.
+- **REQ-005**: WHEN a figure-level function composes multiple primitives, THE SYSTEM SHALL manage consistent guides (legends/colorbars) across axes.
+- **REQ-006**: WHEN a figure-level function applies styling, THE SYSTEM SHALL apply theme/template policies in `figures/` and pass resolved style parameters into `plots/`.
 
-  `Axes` (subplots), then orchestrates calls to plot primitives.
+### Composition and Return-Value Requirements
 
-- **Theme/style**: Centralized configuration applied to Matplotlib (typically
+- **REQ-010**: WHEN a plot primitive produces artists/traces, THE SYSTEM SHALL return handles sufficient for later composition (legend entries, colorbar mappables, etc.).
+- **REQ-011**: WHEN a plot primitive produces multiple handles, THE SYSTEM SHALL return a structured result object (e.g., a dataclass or NamedTuple) rather than an ambiguous tuple.
+- **REQ-012**: WHEN a plot primitive uses an encoded color scale (continuous or categorical), THE SYSTEM SHALL expose the information needed for figure-level guide creation (e.g., a mappable, normalization, and/or labels).
 
-  via `rcParams` or a context manager) to enforce consistent visuals.
+### Dependency and Import Constraints
 
-- **Template**: A reusable layout/styling recipe for a family of figures.
-- **Composition**: Combining multiple primitives across multiple axes into a
+- **CON-001**: The `plots/` package SHALL NOT import from `figures/`.
+- **CON-002**: The `figures/` package MAY import from `plots/`.
+- **CON-003**: Shared helpers (data validation, color utilities) SHALL live in `utils/` (or another shared module) to avoid circular dependencies.
 
-  single coherent figure (shared guides, shared scales, consistent spacing).
+### Backend Independence Requirements
 
-- **Sink**: An output adapter that saves or logs a generated figure (PNG/PDF,
+- **REQ-020**: WHEN a plot primitive is executed in a headless environment, THE SYSTEM SHALL be runnable without requiring interactive UI state.
+- **REQ-021**: WHEN a figure-level function is executed, THE SYSTEM SHALL centralize export policy (DPI, size, background, file writing) in `figures/`.
+- **GUD-001**: Plot primitives SHOULD accept an explicit target object rather than using global state (e.g., no implicit `plt.gca()` usage).
 
-  TensorBoard, etc.).
+### Layout Consistency Requirements
 
-- **Registry**: A stable mapping from figure names to figure specifications for
+- **REQ-030**: WHEN multiple axes are created by a figure-level function, THE SYSTEM SHALL apply a single, consistent layout engine and spacing policy.
+- **REQ-031**: WHEN a composite figure includes multiple subplots, THE SYSTEM SHALL define a deterministic policy for shared vs independent scales.
+- **REQ-032**: WHEN a composite figure includes a legend and/or colorbar, THE SYSTEM SHALL define a deterministic policy for placement and sizing.
 
-  configuration-driven selection and validation.
+### API Usability Guidelines
 
-## Requirements (EARS notation)
+- **GUD-010**: Plot primitives SHOULD be small, single-purpose, and composable.
+- **GUD-011**: Figure-level APIs SHOULD provide “recipes” for common multi-panel compositions while delegating rendering to `plots/`.
+- **GUD-012**: Both layers SHOULD validate inputs and fail fast with clear exceptions; heavy data transformation SHOULD be placed in `utils/data.py` or figure-level preprocessing.
 
-### Plot primitives (axis-level)
+## 4. Interfaces & Data Contracts
 
-- **REQ-001 (Axes-first contract)**: WHEN a plot primitive is called, THE
+### Plot Primitive Interface (Conceptual)
 
-  SYSTEM SHALL accept a caller-provided `Axes` as the drawing target.
+All plot primitives SHALL follow this conceptual interface:
 
-- **REQ-002 (No figure creation)**: WHEN a plot primitive is called, THE SYSTEM
+```python
+def primitive(ax, data, *, mapping=None, style=None, label=None, **kwargs):
+  """Draw on `ax` and return handles and metadata for composition."""
+  ...
+```
 
-  SHALL NOT create a Matplotlib `Figure` or allocate subplots.
+### Structured Result Objects
 
-- **REQ-003 (No layout orchestration)**: WHEN a plot primitive is called, THE
+Plot primitives that create multiple artists SHOULD return a structured result:
 
-  SYSTEM SHALL NOT call layout orchestration operations (e.g., creating
-  `GridSpec`, `tight_layout`, `constrained_layout`) as part of the primitive.
+```python
+from dataclasses import dataclass
+from typing import Any, Sequence, Optional
 
-- **REQ-004 (No global style side effects)**: WHEN a plot primitive is called,
+@dataclass(frozen=True)
+class HeatmapResult:
+    image: Any
+    mappable: Any
+    vmin: Optional[float]
+    vmax: Optional[float]
 
-  THE SYSTEM SHALL NOT mutate global Matplotlib state (e.g., `mpl.rcParams`) and
-  SHALL NOT depend on implicit global current axes (e.g., `plt.gca()`).
-
-- **REQ-005 (Deterministic output)**: WHEN a plot primitive is called with the
-
-  same inputs and a freshly configured `Axes`, THE SYSTEM SHALL produce the same
-  set of artists and properties (modulo Matplotlib version rendering
-  differences).
-
-- **REQ-006 (Return handles/results)**: WHEN a plot primitive creates artists,
-
-  THE SYSTEM SHALL return artist handles or a structured result sufficient for
-  figure-level composition (e.g., legend/colorbar construction).
-
-### Figure orchestration (figure-level)
-
-- **REQ-010 (Figure ownership)**: WHEN a figure module is called, THE SYSTEM
-
-  SHALL create and own the Matplotlib `Figure` and all required `Axes` objects.
-
-- **REQ-011 (Layout responsibility)**: WHEN a figure module is called, THE
-
-  SYSTEM SHALL manage subplot layout (rows/cols, `GridSpec`, spacing,
-  aspect/limits policy, alignment of colorbars/legends).
-
-- **REQ-012 (Composition responsibility)**: WHEN composing multiple primitives,
-
-  THE SYSTEM SHALL centralize guide placement (legends/colorbars) and other
-  cross-axes coordination in the figure module (not in primitives).
-
-- **REQ-013 (Styling entrypoint)**: WHEN a figure module is called with a style
-
-  configuration, THE SYSTEM SHALL apply style consistently across all axes in
-  the figure via a centralized mechanism.
-
-- **REQ-014 (Context contract)**: WHEN a figure module is called with a
-
-  `FigureContext` (or equivalent), THE SYSTEM SHALL interpret it consistently
-  (e.g., `figsize`, `env_idx`, `freq_idx`, `split_name`, `global_step`).
-
-### Style and themes
-
-- **REQ-020 (Scoped style application)**: WHEN a style is applied for figure
-
-  creation, THE SYSTEM SHALL provide a scoped mechanism (e.g., context manager)
-  so that global Matplotlib configuration can be restored after figure
-  generation.
-
-- **REQ-021 (Single source of truth)**: WHEN style defaults are needed, THE
-
-  SYSTEM SHALL read them from a single centralized configuration object (e.g.,
-  `StyleConfig`) rather than duplicating defaults across figure modules.
-
-### Registry and discoverability
-
-- **REQ-030 (Stable names)**: WHEN a figure is registered, THE SYSTEM SHALL
-
-  assign it a stable, unique name used for configuration-driven selection.
-
-- **REQ-031 (Validation)**: WHEN a client requests figures by name, THE SYSTEM
-
-  SHALL validate names and provide an actionable error listing available names
-  for unknown entries.
-
-- **REQ-032 (Deterministic listing)**: WHEN listing registered figures, THE
-
-  SYSTEM SHALL return results in deterministic order.
-
-### Sinks (save/log)
-
-- **REQ-040 (Backend-safe output)**: WHEN saving or logging figures, THE SYSTEM
-
-  SHALL support headless execution (non-interactive Matplotlib backend) without
-  requiring a GUI.
-
-- **REQ-041 (Resource ownership)**: WHEN a sink completes, THE SYSTEM SHALL NOT
-
-  leak figure resources; it SHALL either close figures or document ownership
-  rules clearly.
-
-### Testability
-
-- **REQ-050 (Primitive unit tests)**: WHEN testing plot primitives, THE SYSTEM
-
-  SHALL allow tests to run without file I/O and without requiring full figure
-  layouts (i.e., primitives must be testable via a provided `Axes`).
-
-- **REQ-051 (Figure integration tests)**: WHEN testing figure modules, THE
-
-  SYSTEM SHALL allow assertions on layout invariants (axes count, grid shape,
-  shared guides) without depending on pixel-perfect image comparisons.
-
-## Constraints
-
-- **CON-001 (Rendering backend)**: The primary rendering backend SHALL be
-
-  Matplotlib.
-
-- **CON-002 (Headless compatibility)**: The system SHOULD work under headless
-
-  environments (e.g., CI) using a non-interactive Matplotlib backend.
-
-- **CON-003 (No implicit global state)**: Plot primitives MUST avoid reliance on
-
-  global current figure/axes state to reduce coupling and improve composability.
-
-## Acceptance criteria
-
-- **AC-001**: Given a plot primitive and a caller-created `Axes`, when the
-
-  primitive is called, then no new `Figure` is created and no global rcParams are
-  mutated.
-
-- **AC-002**: Given a figure module, when it is called with a `FigureContext`
-
-  specifying `figsize`, then the returned `Figure` has that size.
-
-- **AC-003**: Given a composed multi-panel figure, when it is generated, then
-
-  legends/colorbars are placed consistently by the figure module (not duplicated
-  by primitives).
-
-- **AC-004**: Given an unknown figure name, when registry validation is
-
-  performed, then the raised error includes the unknown names and a sorted list
-  of available figure names.
-
-- **AC-005**: Given a style configuration applied via a context mechanism, when
-
-  figure generation exits the context, then Matplotlib rcParams are restored to
-  their prior values.
+@dataclass(frozen=True)
+class HistResult:
+    patches: Sequence[Any]
+    bin_edges: Sequence[float]
+```
+
+### Figure-Level Interface (Conceptual)
+
+Figure-level functions manage layout, theming, composition, and export:
+
+```python
+def make_figure(*, template=None, theme=None, size=None):
+  """Create and return a Figure and Axes grid plus orchestration metadata."""
+  ...
+
+def compose(*, template=None, theme=None):
+  """Assemble primitives into a multi-axes figure with shared guides."""
+  ...
+```
+
+## 5. Acceptance Criteria
+
+- **AC-001**: Given an existing Axes, When `plots.line(ax, ...)` is called, Then no new Figure is created and the line is added to the provided Axes.
+- **AC-002**: Given a clean global style state, When a plot primitive is called, Then global style (e.g., `rcParams`) remains unchanged after the call.
+- **AC-003**: Given a multi-panel figure created by a figure-level function, When multiple primitives are composed, Then the layout spacing policy is applied consistently across all axes.
+- **AC-004**: Given two subplots with the same categorical mapping, When composed via a figure-level function, Then a single combined legend is produced according to the figure-level legend policy.
+- **AC-005**: Given two heatmaps intended to share a color scale, When composed via a figure-level function with shared scale enabled, Then both axes use the same normalization and a single colorbar is rendered.
+
+## 6. Test Automation Strategy
+
+- **Test Levels**
+  - Unit: `plots/*` primitives
+  - Integration: `figures/*` layout/theme/composition
+  - Optional E2E: smoke tests that render and compare basic image properties
+- **Frameworks**
+  - Preferred: `pytest`
+  - Optional: image regression tools (only if already used in the project)
+- **Test Data Management**
+  - Use small deterministic arrays/dataframes.
+  - Avoid randomness unless seeded.
+- **CI/CD Integration**
+  - Run headless rendering tests in CI.
+  - Fail fast on import cycles and style-state mutation.
+
+## 7. Rationale & Context
+
+- Separating primitives from orchestration reduces coupling and enables reuse of the same primitive across many layouts.
+- Testing becomes simpler: primitives can be unit-tested on a single Axes; orchestration can be integration-tested for layout/guide policies.
+- Backend independence improves because primitives do not rely on global, interactive state and figure-level export settings are centralized.
+- Layout consistency improves because there is a single authority for spacing, shared scales, and guide placement.
+
+## 8. Dependencies & External Integrations
+
+### External Systems
+
+- **EXT-001**: Rendering backend(s) (e.g., Matplotlib) - provides Figure/Axes primitives and export.
+
+### Technology Platform Dependencies
+
+- **PLT-001**: Python runtime - required for library execution and testing.
+
+## 9. Examples & Edge Cases
+
+```python
+# Axis-level primitive usage
+fig, ax = plt.subplots()
+artist = plots.line(ax, x=[0, 1], y=[0, 1], label="identity")
+
+# Figure-level composition usage
+fig = figures.compose(
+
+    panels=[
+        lambda ax: plots.scatter(ax, x=a, y=b, label="A"),
+        lambda ax: plots.scatter(ax, x=c, y=d, label="B"),
+    ],
+    layout=(1, 2),
+    legend="shared",
+    theme="paper",
+)
+```
+
+Edge cases to handle:
+
+- Primitives called with an Axes that already contains artists.
+- Composition of primitives that set conflicting axis limits.
+- Shared vs independent normalization for heatmaps.
+- Legend merging when labels collide.
+
+## 10. Validation Criteria
+
+- No plot primitive creates figures or subplots.
+- No plot primitive mutates global style state.
+- Figure-level functions produce deterministic layout and guide policies.
+- Import graph respects `plots` → `figures` direction constraint.
+
+## 11. Related Specifications / Further Reading
+
+- Matplotlib Figure–Axes separation (conceptual reference)
+- Seaborn axes-level vs figure-level API pattern (conceptual reference)
+- Plotly traces vs `Figure` templates/subplots (conceptual reference)
+- Altair layering and composition (Grammar of Graphics) (conceptual reference)

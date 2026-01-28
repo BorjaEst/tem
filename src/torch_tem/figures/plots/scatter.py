@@ -20,6 +20,7 @@ class ScatterResult:
     mappable: Optional[Any]
     legend_handle: Optional[Any]
     label: Optional[str]
+    colorbar_group: Optional[str] = None
 
 
 def scatter(
@@ -29,6 +30,7 @@ def scatter(
     y: Sequence[float],
     c: Optional[Sequence[float]] = None,
     label: Optional[str] = None,
+    colorbar_group: Optional[str] = None,
     style: Optional[Mapping[str, Any]] = None,
     **kwargs: Any,
 ) -> ScatterResult:
@@ -43,7 +45,7 @@ def scatter(
             style: Optional style mapping.
             **kwargs: Additional Matplotlib scatter kwargs.
 
-    Returns:
+        Returns:
             ScatterResult with artist handles and optional mappable.
     """
     x_arr, y_arr = validate_xy(x, y)
@@ -67,4 +69,5 @@ def scatter(
         mappable=mappable,
         legend_handle=legend_handle,
         label=label,
+        colorbar_group=colorbar_group,
     )

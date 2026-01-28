@@ -106,6 +106,11 @@ def get_mec_cells(trace: TraceTree, freq_idx: int) -> np.ndarray:
     return get_multiscale(trace, "output/inference/g_inf", freq_idx)
 
 
+def get_mec_g_gen(trace: TraceTree, freq_idx: int) -> np.ndarray:
+    """Return MEC generative abstract location for a frequency module."""
+    return get_multiscale(trace, "output/generative/g_gen", freq_idx)
+
+
 def get_hpc_cells(trace: TraceTree, freq_idx: int) -> np.ndarray:
     """Return HPC inferred grounded location for a frequency module."""
     return get_multiscale(trace, "output/inference/p_inf", freq_idx)

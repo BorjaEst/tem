@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import matplotlib.gridspec as mpl_gridspec
 import matplotlib.pyplot as plt
 
 from torch_tem.figures.figures.base import GuidePolicy, PanelCallable
@@ -120,6 +121,115 @@ def compose(
     return fig
 
 
+def compose_gridspec(
+    *,
+    panels: Sequence[PanelCallable],
+    layout: Tuple[int, int],
+    theme: Optional[str | Theme] = None,
+    template: Optional[str | Template] = None,
+    legend: str = "shared",
+    colorbar: str = "grouped",
+    sharex: bool = False,
+    sharey: bool = False,
+    share_color_norm: bool = False,
+    size: Optional[Tuple[float, float]] = None,
+    gridspec_layout: Optional[Dict[str, Any]] = None,
+    content_positions: Optional[Sequence[Tuple[int, int]]] = None,
+    colorbar_groups: Optional[Dict[str, Tuple[int, int]]] = None,
+) -> plt.Figure:
+    """Compose a multi-panel figure using GridSpec and grouped guides.
+
+    Args:
+            panels: Panel callables.
+            layout: Tuple of (nrows, ncols) for content panels.
+            theme: Theme name or instance.
+            template: Template name or instance.
+            legend: Legend policy (none, per-axes, shared).
+            colorbar: Colorbar policy (none, per-axes, shared, grouped).
+            sharex: Share x-axis across content panels.
+            sharey: Share y-axis across content panels.
+            share_color_norm: Share color normalization across mappables.
+            size: Optional figure size override.
+            gridspec_layout: GridSpec layout overrides (nrows, ncols, ratios).
+            content_positions: GridSpec positions for content panels.
+            colorbar_groups: Map group name to GridSpec positions.
+
+    Returns:
+            Matplotlib Figure instance.
+    """
+    nrows, ncols = layout
+    if nrows * ncols != len(panels):
+        raise ValueError("layout does not match number of panels")
+
+    template_obj = template if isinstance(template, Template) else get_template(template)
+    theme_obj = theme if isinstance(theme, Theme) else get_theme(theme)
+
+    gs_config = dict(gridspec_layout or {})
+    gs_rows = int(gs_config.pop("nrows", nrows))
+    gs_cols = int(gs_config.pop("ncols", ncols))
+    fig = plt.figure(figsize=size or template_obj.size)
+    grid = mpl_gridspec.GridSpec(gs_rows, gs_cols, figure=fig, **gs_config)
+
+    content_positions = content_positions or _default_positions(nrows, ncols)
+    if len(content_positions) != len(panels):
+        raise ValueError("content_positions do not match number of panels")
+
+    axes_list: List[Any] = []
+    first_ax: Optional[Any] = None
+    for row, col in content_positions:
+        sharex_ax = first_ax if sharex else None
+        sharey_ax = first_ax if sharey else None
+        ax = fig.add_subplot(grid[row, col], sharex=sharex_ax, sharey=sharey_ax)
+        if first_ax is None:
+            first_ax = ax
+        axes_list.append(ax)
+
+    guide_axes: Dict[str, Any] = {}
+    if colorbar_groups:
+        for group, (row, col) in colorbar_groups.items():
+            guide_axes[group] = fig.add_subplot(grid[row, col])
+
+    results: List[Any] = []
+    panel_results: List[List[Any]] = []
+    for panel, ax in zip(panels, axes_list):
+        panel_output = list(_iter_results(_call_panel(panel, ax, theme_obj)))
+        panel_results.append(panel_output)
+        results.extend(panel_output)
+
+    guides = GuidePolicy(legend=legend, colorbar=colorbar)
+    if guides.legend == "per-axes":
+        for ax in axes_list:
+            ax.legend()
+    if guides.legend == "shared":
+        handles, labels = _collect_legend_items(results)
+        if handles:
+            fig.legend(handles, labels, loc="upper right")
+
+    if guides.colorbar == "per-axes":
+        for ax, panel_output in zip(axes_list, panel_results):
+            mappable = _first_mappable(panel_output)
+            if mappable is not None:
+                fig.colorbar(mappable, ax=ax)
+    if guides.colorbar == "shared":
+        mappables = _collect_mappables(results)
+        if share_color_norm and mappables:
+            _apply_shared_norm(results, mappables)
+        if mappables:
+            fig.colorbar(mappables[0], ax=axes_list)
+    if guides.colorbar == "grouped":
+        grouped = _collect_grouped_mappables(results)
+        for group, mappables in grouped.items():
+            if share_color_norm and mappables:
+                _apply_group_shared_norm(results, mappables, group)
+            if not mappables:
+                continue
+            cax = guide_axes.get(group)
+            if cax is None:
+                continue
+            fig.colorbar(mappables[0], cax=cax)
+    return fig
+
+
 def _call_panel(panel: PanelCallable, ax: Any, theme: Theme) -> Any:
     """Invoke a panel callable with fallback for older signatures."""
     try:
@@ -182,6 +292,56 @@ def _collect_mappables(results: Sequence[Any]) -> List[Any]:
         if mappable is not None:
             mappables.append(mappable)
     return mappables
+
+
+def _collect_grouped_mappables(results: Sequence[Any]) -> Dict[str, List[Any]]:
+    """Collect mappables grouped by colorbar group."""
+    grouped: Dict[str, List[Any]] = {}
+    for result in results:
+        group = _colorbar_group_from_result(result)
+        if not group:
+            continue
+        mappable = _first_mappable(_iter_results(result))
+        if mappable is None:
+            continue
+        grouped.setdefault(group, []).append(mappable)
+    return grouped
+
+
+def _colorbar_group_from_result(result: Any) -> Optional[str]:
+    """Extract colorbar group from a result if present."""
+    if hasattr(result, "colorbar_group"):
+        return getattr(result, "colorbar_group")
+    return None
+
+
+def _apply_group_shared_norm(
+    results: Sequence[Any],
+    mappables: Sequence[Any],
+    group: str,
+) -> None:
+    """Apply shared normalization to mappables within a group."""
+    vmins = []
+    vmaxs = []
+    for result in results:
+        if _colorbar_group_from_result(result) != group:
+            continue
+        if hasattr(result, "vmin") and getattr(result, "vmin") is not None:
+            vmins.append(getattr(result, "vmin"))
+        if hasattr(result, "vmax") and getattr(result, "vmax") is not None:
+            vmaxs.append(getattr(result, "vmax"))
+    if not vmins or not vmaxs:
+        return
+    vmin = min(vmins)
+    vmax = max(vmaxs)
+    for mappable in mappables:
+        if hasattr(mappable, "set_clim"):
+            mappable.set_clim(vmin=vmin, vmax=vmax)
+
+
+def _default_positions(nrows: int, ncols: int) -> List[Tuple[int, int]]:
+    """Return row-major GridSpec positions for a content grid."""
+    return [(row, col) for row in range(nrows) for col in range(ncols)]
 
 
 def _first_mappable(results: Iterable[Any]) -> Optional[Any]:

@@ -4,7 +4,7 @@ Import this module to register all built-in figures. This avoids circular
 import issues by separating registration from core infrastructure.
 """
 
-from torch_tem.figures.modules import overview, spatial
+from torch_tem.figures.modules import autocorr, overview, spatial
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 
@@ -33,11 +33,13 @@ def register_builtin_figures() -> None:
             tags={"model", "rollout", "spatial"},
         )
     )
+
+    # Autocorrelogram figures
     REGISTRY.register(
         FigureSpec(
             name="autocorr.g_gen",
             description="Multi-panel g_gen rate maps and autocorrelograms with trajectory",
-            plot=spatial.autocorrelogram.plot,
+            plot=autocorr.g_gen.plot,
             tags={"model", "rollout", "spatial"},
         )
     )

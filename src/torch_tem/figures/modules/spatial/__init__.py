@@ -1,3 +1,3 @@
-from torch_tem.figures.modules.spatial import autocorrelogram, structure
+from torch_tem.figures.modules.spatial import structure
 
-__all__ = ["structure", "autocorrelogram"]
+__all__ = ["structure"]

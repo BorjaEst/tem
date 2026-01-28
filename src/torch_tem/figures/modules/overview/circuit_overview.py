@@ -54,7 +54,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
         location_ids = get_location_ids_for_env(trace, env_idx)
 
         grid = fig.add_gridspec(2, 3)
-        obs_lec = grid[0, 1:].subgridspec(2, 1, height_ratios=[1, 4], hspace=0.05)
+        obs_lec = grid[0, 1:].subgridspec(2, 1, height_ratios=[2, 2], hspace=0.05)
         ax_mem = fig.add_subplot(grid[0, 0])
         ax_traj = fig.add_subplot(grid[1, 0])
         ax_obs = fig.add_subplot(obs_lec[0])
@@ -190,7 +190,9 @@ def _plot_mec_rate_maps(trace: TraceTree, env_idx: int, world: object, location_
         _plot_missing(ax, "No MEC grid activity")
         return
 
-    plot_map(world, values, ax=ax, min_val=0.0, max_val=0.2, shape="square", location_cm="Blues")
+    max_val = float(np.max(values[~np.isnan(values)])) if np.isfinite(values).any() else 1.0
+    max_val = max(max_val, 0.1)
+    plot_map(world, values, ax=ax, min_val=0.0, max_val=max_val, shape="square", location_cm="cividis")
     ax.set_title(_append_context(f"MEC g_inf f{freq_idx} (cell {cell_idx}, OVC excluded)", ctx))
 
 
@@ -219,7 +221,9 @@ def _plot_hpc_rate_maps(trace: TraceTree, env_idx: int, world: object, location_
         _plot_missing(ax, "No HPC activity")
         return
 
-    plot_map(world, values, ax=ax, min_val=0.0, max_val=0.2, shape="square", location_cm="Blues")
+    max_val = float(np.max(values[~np.isnan(values)])) if np.isfinite(values).any() else 1.0
+    max_val = max(max_val, 0.1)
+    plot_map(world, values, ax=ax, min_val=0.0, max_val=0.4, shape="square", location_cm="cividis")
     ax.set_title(_append_context(f"HPC p_inf f{freq_idx} (cell {cell_idx})", ctx))
 
 
@@ -242,7 +246,7 @@ def _plot_hpc_memory(trace: TraceTree, env_idx: int, ax: plt.Axes, ctx: FigureCo
 
     max_val = float(np.max(np.abs(matrix))) if np.isfinite(matrix).any() else 1.0
     max_val = max(max_val, 1e-6)
-    ax.imshow(matrix, cmap="coolwarm", vmin=-max_val, vmax=max_val)
+    ax.imshow(matrix, cmap="bwr", vmin=-max_val, vmax=max_val)
     ax.set_title(_append_context("HPC memory (hierarchical)", ctx))
     ax.set_xticks([])
     ax.set_yticks([])

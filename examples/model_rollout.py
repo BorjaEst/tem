@@ -243,8 +243,8 @@ def main() -> None:
     FREQUENCY_INDEX = 0  # Select frequency index for multi-scale signals
     ctx = FigureContext(env_idx=0, freq_idx=FREQUENCY_INDEX, figsize=(14, 10), split_name="validate")
     figs: list[tuple[str, plt.Figure]] = [
-        (f"01_circuit_overview.png", figures.overview.circuit_overview.plot(trace, ctx)),
-        (f"02_spatial_structure.png", figures.overview.spatial_structure.plot(trace, ctx)),
+        (f"01_overview.png", figures.overview.plot(trace, ctx)),
+        (f"02_spatial_structure.png", figures.spatial.structure.plot(trace, ctx)),
     ]
 
     print(f"Step 4: Generated {len(figs)} figure(s).")

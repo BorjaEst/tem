@@ -14,28 +14,33 @@ Many built-in figures fall into one of two intent categories:
 
 The table below lists the figures that are registered by default.
 
-| Figure                                              | Trace type                 | Sampling  | Summary                                   |
-| --------------------------------------------------- | -------------------------- | --------- | ----------------------------------------- |
-| [overview][mod_overview]                            | RolloutTrace               | Episode   | Time heatmaps for g_inf, g_gen, actions   |
-| [overview.rate_maps][mod_rate_maps]                 | RolloutTrace               | Aggregate | Time heatmaps + spatial maps + trajectory |
-| [environment.layout][mod_env_layout]                | WorldTrace                 | Static    | Static environment layout                 |
-| [walk.trajectories][mod_walk_traj]                  | WorldTrace                 | Episode   | Trajectory overlay on map                 |
-| [walk.statistics][mod_walk_stats]                   | WorldTrace                 | Aggregate | Walk length/actions/visits/shiny stats    |
-| [split.statistics][mod_split_stats]                 | WorldTrace                 | Static    | Dataset composition histograms            |
-| [coverage.occupancy_map][mod_occ_map]               | WorldTrace or RolloutTrace | Aggregate | Per-location visit count and coverage     |
-| [coverage.action_bias_map][mod_bias_map]            | WorldTrace or RolloutTrace | Aggregate | Per-location action entropy (bias)        |
-| [cells.place_rate_maps][mod_place_maps]             | RolloutTrace               | Aggregate | Occupancy + grid of cell rate maps        |
-| [cells.place_rate_maps.frequencies][mod_place_maps] | RolloutTrace               | Aggregate | Same cells across all frequencies         |
-| [cells.place_rate_maps.pathways][mod_place_maps]    | RolloutTrace               | Aggregate | Same cells across pathways                |
-| [cells.place_field_summary][mod_field_sum]          | RolloutTrace               | Aggregate | Sparsity, peak, field-size histograms     |
-| [cells.remapping_correlation][mod_remap]            | RolloutTrace               | Aggregate | Env-by-env remapping correlation matrix   |
-| [cells.spatial_autocorrelogram][mod_autocorr]       | RolloutTrace               | Aggregate | Radial autocorrelogram vs distance        |
-| [decoding.location_error_map][mod_decode_err]       | RolloutTrace               | Aggregate | Ridge-decoding error per location         |
-| [dynamics.path_integration_drift][mod_drift]        | RolloutTrace               | Episode   | L2 drift between g_inf and g_gen          |
-| [dynamics.sequence_consistency][mod_seq]            | RolloutTrace               | Episode   | Cosine similarity of g_gen(t) vs g_inf    |
-| [representation.freq_similarity][mod_freq]          | RolloutTrace               | Aggregate | Frequency-by-frequency similarity heatmap |
-| [memory.retrieval_error_by_location][mod_mem]       | RolloutTrace               | Aggregate | Reconstruction MSE per location           |
-| [uncertainty.calibration][mod_unc]                  | RolloutTrace               | Aggregate | Uncertainty calibration curve             |
+| Figure                              | Summary |
+| ----------------------------------- | ------- |
+| [overview][mod_overview]            |         |
+| [overview.rate_maps][mod_rate_maps] |         |
+
+> TODO plots
+
+| Figure                                              | Summary                                   |
+| --------------------------------------------------- | ----------------------------------------- |
+| [environment.layout][mod_env_layout]                | Static environment layout                 |
+| [walk.trajectories][mod_walk_traj]                  | Trajectory overlay on map                 |
+| [walk.statistics][mod_walk_stats]                   | Walk length/actions/visits/shiny stats    |
+| [split.statistics][mod_split_stats]                 | Dataset composition histograms            |
+| [coverage.occupancy_map][mod_occ_map]               | Per-location visit count and coverage     |
+| [coverage.action_bias_map][mod_bias_map]            | Per-location action entropy (bias)        |
+| [cells.place_rate_maps][mod_place_maps]             | Occupancy + grid of cell rate maps        |
+| [cells.place_rate_maps.frequencies][mod_place_maps] | Same cells across all frequencies         |
+| [cells.place_rate_maps.pathways][mod_place_maps]    | Same cells across pathways                |
+| [cells.place_field_summary][mod_field_sum]          | Sparsity, peak, field-size histograms     |
+| [cells.remapping_correlation][mod_remap]            | Env-by-env remapping correlation matrix   |
+| [cells.spatial_autocorrelogram][mod_autocorr]       | Radial autocorrelogram vs distance        |
+| [decoding.location_error_map][mod_decode_err]       | Ridge-decoding error per location         |
+| [dynamics.path_integration_drift][mod_drift]        | L2 drift between g_inf and g_gen          |
+| [dynamics.sequence_consistency][mod_seq]            | Cosine similarity of g_gen(t) vs g_inf    |
+| [representation.freq_similarity][mod_freq]          | Frequency-by-frequency similarity heatmap |
+| [memory.retrieval_error_by_location][mod_mem]       | Reconstruction MSE per location           |
+| [uncertainty.calibration][mod_unc]                  | Uncertainty calibration curve             |
 
 [mod_overview]: ../src/torch_tem/figures/modules/overview/observations.py
 [mod_rate_maps]: ../src/torch_tem/figures/modules/overview/rate_maps.py

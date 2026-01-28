@@ -1,355 +1,180 @@
----
-post_title: "Figures package design"
-author1: "GitHub Copilot"
-post_slug: "figures-design"
-microsoft_alias: "copilot"
-featured_image: "https://example.com/featured/figures-design.png"
-categories:
-  - documentation
-tags:
-  - figures
-  - lightning
-  - design
-ai_note: "AI-assisted"
-summary: "Architecture and callback integration design for TEM figures."
-post_date: "2026-01-27"
----
+# Figures module design
 
-## Figures package design
+This document describes the design of the `torch_tem.figures` submodule.
 
-This document describes the design of the `torch_tem.figures` package: its
-components, the data flow from traces to matplotlib figures, and the extension
-pattern for adding new figures.
+The figures system is intentionally split into:
+
+- **Pure figure construction**: Convert a `TraceTree` + `FigureContext` into a
+  matplotlib `Figure`.
+- **Persistence and logging**: Save artifacts (PDF/PNG) and log preview images
+  to TensorBoard.
+
+This separation keeps plotting code testable and reusable in scripts, notebooks,
+and training callbacks.
 
 ## Goals
 
-- Provide a coherent “figure ecosystem” for TEM analysis.
-- Make figures discoverable by stable name (configuration-friendly).
-- Keep figure code modular (primitives vs multi-panel compositions).
-- Support batched traces and multi-scale model outputs.
-- Support both artifact saving (PDF/PNG) and training-time preview logging.
-
-## Additional goals: validation-oriented monitoring
-
-- Make training-time figure generation reflect generalization by default
-  (validation split).
-- Support two sampling modes:
-  - Contiguous episodes for temporal diagnostics.
-  - Aggregated coverage for spatial/statistical maps.
-- Provide deterministic and repeatable figure inputs (identical per validation
-  epoch when configured).
+- Provide a stable, name-based interface for selecting figures via a registry.
+- Make figure generation configuration-driven (names + tags).
+- Support long-horizon figures by stitching consecutive rollout batches into a
+  single continuous episode trace.
+- Produce high-quality, versionable artifacts (PDF) and lightweight previews
+  (TensorBoard images).
+- Avoid training interruptions and memory leaks during long runs.
 
 ## Non-goals
 
-- The figures package does not own training loops or dataset construction.
-- The figures package does not define the TEM model; it consumes trace objects.
-- The figures package does not implement interactive GUIs.
-
-## Scope note
-
-This document describes the design of the figures package itself and the
-recommended integration pattern for training-time figure generation via the
-Lightning callback in `torch_tem.callbacks`.
+- The figures submodule does not define how traces are collected; it consumes
+  `TraceTree` produced by `torch_tem.diagnostics`.
+- The figures submodule does not own training schedule decisions (when to
+  generate figures); this is handled by the Lightning callback.
+- The figures submodule does not define environment generation or rollouts.
 
 ## Architecture overview
 
-The package is split into five layers:
-
-1. **Trace layer** (`torch_tem.diagnostics.traces`)
-   - Defines `TraceBase` and concrete traces such as `WorldTrace` and `RolloutTrace`.
-   - Traces are sequences over time and carry batch dimension.
-
-1. **Registry layer** (`torch_tem.figures.registry`)
-   - Defines `FigureContext`, `FigureSpec`, and `FigureRegistry`.
-   - Provides a global registry instance `REGISTRY`.
-
-1. **Registration layer** (`torch_tem.figures.register`)
-   - Defines `register_builtin_figures()` which registers built-in figures.
-   - Keeps registration separate to avoid import cycles.
-
-1. **Figure modules** (`torch_tem.figures.modules.*`)
-   - Namespaced folders by domain: `overview/`, `environment/`, `walk/`, `split/`.
-   - Each module exposes a `plot(trace, ctx) -> Figure` function.
-
-1. **Utilities**
-   - **Primitives** (`torch_tem.figures.primitives`): environment-centric drawing utilities.
-   - **Styling** (`torch_tem.figures.style`): centralized matplotlib rcParams via `StyleConfig`.
-   - **Sinks** (`torch_tem.figures.sinks`): saving and logging outputs.
-
-## Training-time integration design (callback)
-
-### Overview
-
-The training-time figure generation mechanism lives outside the figures package
-as a Lightning callback (currently `FiguresCallback`). The callback is
-responsible for:
-
-- Selecting which split to visualize (default: validation).
-- Constructing one or more traces (`RolloutTrace`, `WorldTrace`, etc.) from
-  batches sampled from that split.
-- Dispatching requested figure specs by name through `REGISTRY`.
-- Persisting outputs via sinks (PDF artifacts and TensorBoard images).
-
-### Trigger policy
-
-Recommended default:
-
-- Trigger figure generation during the validation loop (e.g.
-- Capture representative batches during `on_validation_batch_start` and render
-  figures during `on_validation_epoch_end`.
-- Keep step-based gating (`every_n_steps`) but evaluate it at validation time
-  against `trainer.global_step`.
-
-Rationale:
-
-- Validation-oriented figures align with generalization monitoring.
-- Training dynamics are already available via scalars logged every step.
-
-### Sampling modes
-
-The callback should support two sampling modes without requiring additional
-dataset splits:
-
-1. **Contiguous episode** (temporal diagnostics)
-   - Sample a single batch/episode (typically the first validation batch after
-     reset).
-   - Construct a `RolloutTrace` preserving temporal ordering.
-
-2. **Aggregated coverage** (spatial/statistical maps)
-   - Sample multiple validation batches and concatenate steps to improve
-     occupancy and rate-map stability.
-   - Construct an aggregated `RolloutTrace` (or equivalent trace) for figures
-     that benefit from coverage.
-
-Figure selection should be controlled by configuration (e.g., two lists or a
-name->mode mapping) and/or by figure tags.
-
-### Determinism and repeatability
-
-The data generation stack currently includes seeded validation/test datasets,
-but repeatability requires addressing two properties:
-
-- **Statefulness**: `TEMDataset` mutates internal walks and visited masks while
-  iterating. To achieve identical inputs per validation epoch, the dataset must
-  support a reset operation that restores deterministic initial state.
-- **World RNG**: `World` currently relies on global NumPy randomness. For seeded
-  datasets, stochastic world generation (start locations, shiny placement,
-  random observation assignments, action sampling) should instead be driven by
-  an injected RNG (`np.random.Generator`) owned by the dataset.
-
-Recommended interfaces:
-
-- `TEMDataset.reset()`: restores RNG state and reinitializes environments, walks
-  and visited masks.
-- `DataModule.reset_split("validate"|"test")`: convenience wrapper for callback.
-- `World(..., rng=Generator)`: all stochastic choices come from `rng`.
-
-### Trace construction
-
-For a sampled batch `(chunk, visited)`:
-
-- Build a `RolloutTrace` via the canonical constructor
-  `RolloutTrace.from_batch(...)`.
-- Apply `downsample_time(stride)`.
-- Optionally cap time steps for episode traces.
-
-For aggregated traces:
-
-- Collect `N` batches from validation after reset.
-- Concatenate time steps (world + output + state) in a consistent order.
-- Ensure batch dimension consistency (same environments in the batch or a clear
-  contract describing how aggregation behaves).
-
-### Configuration surface
-
-Suggested additions to callback settings (exact field names are implementation
-details):
-
-- Split selection: `split = "validate" | "test"` (default: `"validate"`).
-- Sampling:
-  - `episode_steps` (or reuse `max_rollout_steps` explicitly as episode length).
-  - `aggregate_batches` (number of validation batches to concatenate).
-- Figure grouping:
-  - `figures_episode: list[str]`
-  - `figures_aggregate: list[str]`
-  - optional `figures_static: list[str]`
-
-### Spatiotemporal interpretability
-
-For spatially aggregated maps (rate maps, occupancy maps), temporal structure
-is intentionally collapsed. To support inspection of revisits and temporal
-ordering, prefer adding a companion panel rather than encoding time directly in
-the rate-map colormap.
-
-Recommended companion visualizations:
-
-- 2D trajectory colored by time (early->late) with optional activation overlay.
-- Location-id vs time (or position vs time) strips aligned with activation.
-
-## Key data contracts
-
-### TraceBase
-
-`TraceBase[TStep]` is a `collections.abc.Sequence` over time with:
-
-- `__len__()` = number of time steps.
-- `batch_size` property = number of parallel environments $B$.
-- `from_iter()` / `attach()` for streaming construction.
-- `downsample_time(stride)` for time subsampling.
-
-Design notes:
-
-- Traces are append-only during construction.
-- Traces store the actual data in Python lists; `get_item()` reconstructs a step object on demand.
-
-### WorldTrace
-
-`WorldTrace` models world observations across time:
-
-- Batch-level:
-  - `environments: list[World]` (length $B$)
-  - `visited: list[list[bool]] | None` (optional)
-- Time series (length $T$):
-  - `locations: list[list[LocationLabel]]` where inner list length $B$
-  - `observations: list[Observation]` where each item has batch dimension
-  - `actions: list[list[Action]]` where inner list length $B$
-- Convenience:
-  - `location_ids -> list[list[int]]` returns per-env series of visited location ids
-
-### RolloutTrace
-
-`RolloutTrace` models a full TEM rollout:
-
-- `world_step: WorldTrace`
-- `output: TEMOutputTrace` (inference/generative/reconstruction)
-- `state: TEMStateTrace` (LEC/MEC/HPC internal states)
-
-Construction uses `RolloutStream(model, batch[0], initial)` so figure modules can
-assume time alignment between `world_step`, `output`, and `state`.
-
-### FigureContext
-
-`FigureContext` is passed to every figure module:
-
-- `env_idx`: which environment in a batch to render
-- `freq_idx`: which scale in a multi-scale code to render
-- `figsize`: figure size for `plt.subplots`
-- `style`: optional style config (expected to support `apply_context()`)
-- `global_step` / `split_name`: optional metadata for titles/annotations
-
-## FigureSpec
-
-`FigureSpec` binds a stable name to a plotting function:
-
-- `name`: namespaced stable id (e.g., `walk.statistics`)
-- `description`: human-readable description
-- `plot`: callable `(trace, ctx) -> Figure`
-- `accepts`: a `TraceBase` subclass used for validation/dispatch
-- `default_filename`: derived from `name` by replacing `.` with `_` unless explicitly set
-- `tags`: immutable tag set for filtering/grouping
-
-## Execution flow
-
-High-level sequence for producing a figure:
-
-1. Call `register_builtin_figures()` (once per process).
-1. Select a figure by name: `spec = REGISTRY.get(name)`.
-1. Validate trace type (caller responsibility today; `spec.accepts` exists for this).
-1. Construct context: `ctx = FigureContext(env_idx=..., freq_idx=..., figsize=..., style=...)`.
-1. Render: `fig = spec.plot(trace, ctx)`.
-1. Persist/log: `save_pdf(fig, path)` and/or `log_tensorboard_figure(logger, tag, fig, step)`.
-
-## Built-in figure inventory
-
-Built-ins are registered in `register_builtin_figures()`:
-
-- `overview` (accepts `RolloutTrace`): time heatmaps for g_inf, g_gen and actions.
-- `overview.rate_maps` (accepts `RolloutTrace`): time heatmaps plus spatial maps.
-- `environment.layout` (accepts `WorldTrace`): static environment layout.
-- `walk.trajectories` (accepts `WorldTrace`): walk overlaid on environment map.
-- `walk.statistics` (accepts `WorldTrace`): walk summary statistics.
-- `split.statistics` (accepts `WorldTrace`): dataset split composition summary.
-
-## Environment rendering model
-
-The environment plotting primitives assume an environment object with:
-
-- `n_locations: int`
-- `n_actions: int`
-- `locations: list[dict]` where each location dict includes:
-  - `id: int`
-  - `o: float` (x in [0, 1])
-  - `y: float` (y in [0, 1])
-  - `shiny: bool` (optional)
-  - `actions: list[dict]` where each action dict includes:
-    - `id: int`
-    - `probability: float`
-    - `transition: Sequence[float]` (non-zero indicates reachable destinations)
-
-`plot_map()` renders location markers colored by per-location values and can overlay action arrows.
-
-## Extension workflow: adding a new figure
-
-### 1) Decide the domain and name
-
-- Choose a namespaced figure name: `<domain>.<figure>`.
-- Keep names stable; treat them as part of the public interface.
-- Add tags that match existing conventions (`model`, `rollout`, `data`, `debug`, `statistics`, `spatial`).
-
-### 2) Implement a figure module
-
-Create a new module file under `src/torch_tem/figures/modules/<domain>/` and implement:
-
-```python
-def plot(trace: <TraceType>, ctx: FigureContext) -> Figure:
-    ...
+### Components
+
+1. **Figure registry** (`torch_tem.figures.registry`)
+   - `FigureContext`: Small container for runtime plotting context (env index,
+     frequency index, global step, split name, optional style).
+   - `FigureSpec`: `(name, description, plot, default_filename, tags)`.
+   - `FigureRegistry`: Stores and validates specs.
+   - `REGISTRY`: Global registry instance.
+
+2. **Registration entrypoint** (`torch_tem.figures.register`)
+   - `register_builtin_figures()` registers built-in figure specs.
+   - Kept separate to avoid circular imports (registry imports nothing from
+     modules).
+
+3. **Figure modules** (`torch_tem.figures.modules.*`)
+   - Implement `plot(trace, ctx) -> Figure`.
+   - Use `torch_tem.diagnostics.trace_access` helpers to read trace fields.
+   - Compose reusable panel-level plotting functions.
+
+4. **Reusable plotting utilities**
+   - `torch_tem.figures.primitives`: Environment-centric low-level drawings
+     (`plot_map`, walk/actions rendering, axis initialization).
+   - `torch_tem.figures.plots.*`: Reusable panels (trajectory, autocorr, insets).
+   - `torch_tem.figures.utils.*`: Numerical helpers for aggregation and spatial
+     transforms (rate-map aggregation, autocorr utilities).
+
+5. **Sinks** (`torch_tem.figures.sinks`)
+   - `save_pdf(fig, path)` / `save_png(fig, path)`.
+   - `log_tensorboard_figure(logger, tag, fig, global_step)` rasterizes and logs
+     to TensorBoard.
+   - `make_figure_path(base_dir, figure_name, step?, version?, extension)`.
+
+6. **Training integration** (`torch_tem.callbacks.figures`)
+   - `FiguresCallback` captures batches during validation/test, builds a
+     `TraceTree`, dispatches figure specs, and persists via sinks.
+
+### Data flow
+
+High-level figure generation pipeline:
+
+```text
+Lightning validation/test loop
+  -> dataloader yields (walk_chunk, visited)
+  -> FiguresCallback snapshots batch (protect against visited mutation)
+  -> (optional) stitch consecutive batches into episode batch
+  -> collect_rollout_trace_tree(batch, environments, model)
+  -> (optional) downsample_trace(trace, stride)
+  -> spec.plot(trace, FigureContext)
+  -> sinks.save_pdf / sinks.log_tensorboard_figure
+  -> close Figure
 ```
 
-Implementation guidelines:
+Key design choice: Figures operate on a **TraceTree**, not on raw model tensors.
+This enforces stable, inspectable paths and simplifies multi-panel plots.
 
-- Validate `ctx.env_idx` and `ctx.freq_idx` against `trace.batch_size` and the available scales.
-- Handle empty traces gracefully.
-- Use `ctx.style.apply_context()` when style is provided; do not permanently mutate global rcParams.
-- Prefer `torch.no_grad()` and `.detach().cpu()` when converting tensors.
-- Use primitives (`plot_map`, `plot_actions`, `plot_walk`) for environment geometry to keep visuals consistent.
+## Namespacing and discoverability
 
-### 3) Register the figure
+Registry names are stable identifiers used in configuration and outputs.
 
-Edit the registration function to add a new `FigureSpec`:
+- Flat names: `overview`
+- Namespaced names: `spatial.structure`
 
-- Use `accepts=<TraceBaseSubclass>`.
-- Set a clear `description`.
-- Keep `register_builtin_figures()` idempotent (registry already treats duplicate names as no-ops).
+The dotted naming convention maps naturally to a module folder structure:
 
-### 4) Validate outputs
+- `torch_tem.figures.modules.spatial.structure.plot` corresponds to
+  `spatial.structure`.
 
-Minimum validation:
+Tags are used to group figures for policy decisions (e.g. “aggregate” vs
+“episode” sampling in the callback).
 
-- The figure returns a `matplotlib.figure.Figure`.
-- Saving to PDF/PNG succeeds.
-- The figure works for:
-  - $B=1$ and $B>1$ with different `ctx.env_idx`
-  - at least one value of `ctx.freq_idx` (when multi-scale)
+## Built-in figures
 
-## Error handling strategy
+Built-in figures are registered in `register_builtin_figures()`.
 
-Preferred failure modes:
+Current built-ins:
 
-- Out-of-range indices: raise `IndexError` with the valid range.
-- Missing required trace data: raise `ValueError` describing what is missing.
-- Empty trace: return a Figure with an informative title or message.
+- `overview`: Multi-panel TEM circuit overview across LEC/MEC/HPC, plus
+  observation ids and trajectory.
+- `spatial.structure`: Occupancy, rate maps, spatial autocorrelograms, and
+  trajectory with coverage inset.
 
-Avoid:
+## Trace contracts
 
-- Silent shape mismatches.
-- Partially rendered figures without warnings.
+Figure modules depend on specific `TraceTree` paths.
+To avoid hard-coding string paths in many places, modules use
+`torch_tem.diagnostics.trace_access` helpers.
 
-## Persistence and logging
+Commonly used trace fields:
 
-The sinks implement a dual-output pattern:
+- `world_step/location_ids`: `(T, B)` integer location ids
+- `world_step/action_ids`: `(T, B)` integer action ids
+- `world_step/observation`: `(T, B, n_o)` observation vectors
+- `state/lec/cells/<freq>/value`: `(T, B, C)` activity
+- `output/inference/g_inf/<freq>/value`: `(T, B, C)` inferred abstract location
+- `output/generative/g_gen/<freq>/value`: `(T, B, C)` generated abstract location
+- Root metadata:
+  - `environments`: list of environment/world objects aligned to batch
+  - `visited`: visited masks aligned to environments
 
-- PDF is the canonical, publication-quality artifact.
-- PNG is used for raster previews (including TensorBoard images).
+Design principle:
 
-`make_figure_path()` standardizes filenames under `<base_dir>/figures/` and can include
-`step` and `version` suffixes.
+- Figure modules SHOULD tolerate missing optional fields and render “missing”
+  panels where appropriate.
+- For required fields, modules MAY fail fast with actionable errors.
+
+## Styling strategy
+
+`torch_tem.figures.style.StyleConfig` centralizes matplotlib style choices.
+
+Two application modes are supported:
+
+- Global: `StyleConfig.apply()` (modifies `mpl.rcParams`).
+- Scoped: `StyleConfig.apply_context()` (temporary rcParams overrides).
+
+Figure modules may accept `ctx.style` and use a context manager to keep styling
+consistent without permanently modifying global state.
+
+## Persistence and logging strategy
+
+The system uses a dual-output pattern:
+
+- **PDF**: canonical, high-quality artifact suitable for papers and reports.
+- **TensorBoard image**: raster preview for fast training monitoring.
+
+File naming:
+
+- Deterministic and step-aware: `<base_dir>/figures/<name>_step<k>.pdf`.
+
+## Error handling
+
+- Registry validation fails early to prevent silent misconfiguration.
+- The training callback catches and reports exceptions during plotting so figure
+  failures do not crash training.
+- The callback closes figures after saving/logging to prevent memory growth.
+
+## Extending the figures system
+
+To add a new figure:
+
+1. Implement `plot(trace: TraceTree, ctx: FigureContext) -> Figure` under
+   `src/torch_tem/figures/modules/...`.
+2. Register it in `torch_tem.figures.register.register_builtin_figures()` with a
+   stable name, description, and tags.
+3. If it requires longer temporal context, assign a tag used by the callback’s
+   sampling policy (e.g. `coverage`).
+4. Ensure it renders a valid “no data” figure when `trace.length == 0`.

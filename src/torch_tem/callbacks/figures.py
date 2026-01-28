@@ -41,7 +41,7 @@ class FigureCallbackSettings(BaseModel):
         description="Split to sample for figure generation.",
     )
     figures: List[str] = Field(
-        default_factory=lambda: ["overview", "walk.trajectories"],
+        default_factory=lambda: ["overview"],
         description="Figure names to generate (from registry).",
     )
     aggregate_for_tags: List[str] = Field(

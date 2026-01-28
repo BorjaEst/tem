@@ -14,17 +14,16 @@ def register_builtin_figures() -> None:
     This function is idempotent - it can be called multiple times safely.
     Re-registering a figure with the same name is a no-op.
     """
-    # Model figures
+    # Model overview figures
     REGISTRY.register(
         FigureSpec(
-            name="overview",
-            description="Multi-panel TEM model overview (g_inf, g_gen, actions)",
-            plot=overview.observations.plot,
+            name="overview.circuit_overview",
+            description="Multi-panel TEM circuit overview (LEC/MEC/HPC)",
+            plot=overview.circuit_overview.plot,
             tags={"model", "rollout", "overview"},
         )
     )
 
-    # Combined model + spatial figures
     REGISTRY.register(
         FigureSpec(
             name="overview.spatial_structure",

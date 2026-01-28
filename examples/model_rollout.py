@@ -240,14 +240,12 @@ def main() -> None:
     # Step 4: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
 
-    figs: list[tuple[str, plt.Figure]] = []
-    for freq_idx in range(model.mec.n_freq):
-        print(f"Generating figures for frequency index: {freq_idx}")
-        ctx = FigureContext(env_idx=0, freq_idx=freq_idx, figsize=(14, 10), split_name="validate")
-        figs += [
-            (f"01.{freq_idx}_spatial_structure.png", figures.overview.spatial_structure.plot(trace, ctx)),
-            (f"02.{freq_idx}_todo.png", figures.overview.observations.plot(trace, ctx)),
-        ]
+    FREQUENCY_INDEX = 0  # Select frequency index for multi-scale signals
+    ctx = FigureContext(env_idx=0, freq_idx=FREQUENCY_INDEX, figsize=(14, 10), split_name="validate")
+    figs: list[tuple[str, plt.Figure]] = [
+        (f"01_circuit_overview.png", figures.overview.circuit_overview.plot(trace, ctx)),
+        (f"02_spatial_structure.png", figures.overview.spatial_structure.plot(trace, ctx)),
+    ]
 
     print(f"Step 4: Generated {len(figs)} figure(s).")
     print()

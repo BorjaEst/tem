@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 import numpy as np
 
@@ -61,6 +61,25 @@ def get_observations(trace: TraceTree) -> np.ndarray:
     return get_dense(trace, "world_step/observation")
 
 
+def get_observation_ids_for_env(trace: TraceTree, env_idx: int) -> list[int]:
+    """Return per-step observation ids for a selected environment.
+
+    Args:
+        trace: TraceTree holding rollout data.
+        env_idx: Environment index to select.
+
+    Returns:
+        List of observation ids inferred via argmax on the observation vector.
+    """
+    observations = get_observations(trace)
+    if observations.size == 0:
+        return []
+    env_obs = observations[:, env_idx, :]
+    if env_obs.ndim == 1:
+        return [int(np.argmax(env_obs))]
+    return [int(np.argmax(step)) for step in env_obs]
+
+
 def get_location_ids_for_env(trace: TraceTree, env_idx: int) -> list[int]:
     """Return per-step location ids for a selected environment."""
     location_ids = get_location_ids(trace)
@@ -75,6 +94,48 @@ def get_action_ids_for_env(trace: TraceTree, env_idx: int) -> list[int]:
     if action_ids.size == 0:
         return []
     return [int(v) for v in action_ids[:, env_idx]]
+
+
+def get_lec_cells(trace: TraceTree, freq_idx: int) -> np.ndarray:
+    """Return LEC cell activations for a single frequency module."""
+    return get_multiscale(trace, "state/lec/cells", freq_idx)
+
+
+def get_mec_cells(trace: TraceTree, freq_idx: int) -> np.ndarray:
+    """Return MEC inferred abstract location for a frequency module."""
+    return get_multiscale(trace, "output/inference/g_inf", freq_idx)
+
+
+def get_hpc_cells(trace: TraceTree, freq_idx: int) -> np.ndarray:
+    """Return HPC inferred grounded location for a frequency module."""
+    return get_multiscale(trace, "output/inference/p_inf", freq_idx)
+
+
+def get_hpc_memory(trace: TraceTree, memory_idx: int) -> np.ndarray:
+    """Return HPC memory matrix trace for a selected memory index."""
+    return get_multiscale(trace, "state/hpc/_memory", memory_idx)
+
+
+def get_mec_ovc_modules(trace: TraceTree) -> Optional[int]:
+    """Return the number of MEC OVC modules, if available.
+
+    Args:
+        trace: TraceTree holding rollout data.
+
+    Returns:
+        Number of OVC modules or None if not recorded.
+    """
+    try:
+        values = get_dense(trace, "state/mec/_n_ovc_modules")
+    except ValueError:
+        return None
+    if values.size == 0:
+        return None
+    latest = values[-1] if values.ndim >= 1 else values
+    try:
+        return int(np.asarray(latest).item())
+    except (TypeError, ValueError):
+        return None
 
 
 def get_multiscale(
@@ -148,6 +209,12 @@ def get_node(trace: TraceTree, path: str) -> TraceNode:
             raise ValueError(f"Trace path '{path}' is missing '{part}'")
         current = current.children[part]
     return current
+
+
+def get_node_meta_static(trace: TraceTree, path: str) -> dict[str, Any]:
+    """Return static metadata for a TraceNode path."""
+    node = get_node(trace, path)
+    return dict(node.meta_static)
 
 
 def _split_path(path: str) -> tuple[str, str]:

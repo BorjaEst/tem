@@ -53,7 +53,7 @@ class FigureCallbackSettings(BaseModel):
         description="Number of batches to stitch for aggregate traces (None = all batches).",
     )
     episode_batches: int = Field(
-        default=1,
+        default=10,
         ge=1,
         description="Number of consecutive batches to stitch into a single episode trace.",
     )
@@ -62,7 +62,7 @@ class FigureCallbackSettings(BaseModel):
         description="Policy for selecting consecutive batches for the episode trace.",
     )
     max_rollout_steps: int = Field(
-        default=100,
+        default=200,
         description="Maximum rollout steps to extract for figures (after stitching).",
     )
     downsample_stride: int = Field(

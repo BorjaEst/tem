@@ -15,16 +15,16 @@ from torch_tem.figures.utils.spatial import aggregate_rate_map, clip_unit_interv
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
-    """Render a multi-panel spatial summary for place-like activity.
+    """Render a multi-panel spatial summary for g_gen activity.
 
     Panels include:
-    - Time-colored trajectory.
-    - 2D autocorrelogram for a representative cell.
-    - Population radial autocorr summary (median + IQR band).
-    - Top-k exemplar rate maps.
+    - Time-colored trajectory (top-left).
+    - Population radial autocorr summary (bottom-left).
+    - Top-3 g_gen rate maps (top row, columns 2-4).
+    - Matching 2D autocorrelograms (bottom row, columns 2-4).
 
     Args:
-        trace: TraceTree containing inference codes.
+        trace: TraceTree containing generative codes.
         ctx: Figure context with env and frequency selection.
 
     Returns:
@@ -33,27 +33,27 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     style_ctx = _style_context(ctx)
     with style_ctx:
         fig = plt.figure(figsize=ctx.figsize)
-        grid = fig.add_gridspec(2, 3)
+        grid = fig.add_gridspec(2, 4)
         ax_traj = fig.add_subplot(grid[0, 0])
-        ax_autocorr2d = fig.add_subplot(grid[0, 1])
-        ax_radial = fig.add_subplot(grid[0, 2])
-        ax_maps = [fig.add_subplot(grid[1, idx]) for idx in range(3)]
+        ax_radial = fig.add_subplot(grid[1, 0])
+        ax_maps = [fig.add_subplot(grid[0, idx]) for idx in range(1, 4)]
+        ax_autos = [fig.add_subplot(grid[1, idx]) for idx in range(1, 4)]
 
         if get_length(trace) == 0:
             fig.suptitle("No trace data (empty rollout)")
             return fig
 
         env_idx = validate_env_idx(trace, int(ctx.env_idx))
-        freq_idx = validate_freq_idx(trace, "output/inference/p_inf", int(ctx.freq_idx))
+        freq_idx = validate_freq_idx(trace, "output/generative/g_gen", int(ctx.freq_idx))
 
         world = get_world(trace, env_idx)
         location_ids = get_location_ids_for_env(trace, env_idx)
-        activity_steps = get_multiscale(trace, "output/inference/p_inf", freq_idx)
+        activity_steps = get_multiscale(trace, "output/generative/g_gen", freq_idx)
         activity_env = activity_steps[:, env_idx, :]
         rate_map, occupancy = aggregate_rate_map(activity_env, location_ids, len(world.locations))
 
         if rate_map.size == 0:
-            for ax in [ax_traj, ax_autocorr2d, ax_radial, *ax_maps]:
+            for ax in [ax_traj, ax_radial, *ax_maps, *ax_autos]:
                 _plot_missing(ax, "No rate map values available")
             return fig
 
@@ -63,18 +63,6 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
         top_cells = select_top_k_by_spatial_variance(rate_map, occupancy, k=3, min_coverage=0.1)
         if top_cells.size == 0:
             top_cells = np.arange(min(3, rate_map.shape[1]))
-
-        if top_cells.size:
-            cell_idx = int(top_cells[0])
-            values = clip_unit_interval(rate_map[:, cell_idx])
-            plot_autocorr2d(
-                ax_autocorr2d,
-                world,
-                values,
-                title=_append_context(f"2D Autocorr (cell {cell_idx})", ctx),
-            )
-        else:
-            _plot_missing(ax_autocorr2d, "No valid cells")
 
         centers, median, q25, q75 = summarize_radial_autocorr(
             rate_map,
@@ -88,25 +76,44 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
             ax_radial.axhline(0.0, color="#999999", linewidth=0.8, linestyle="--")
             ax_radial.set_xlabel("Distance")
             ax_radial.set_ylabel("Autocorrelation")
-            ax_radial.set_title(_append_context("Radial Autocorr (median ± IQR)", ctx))
+            ax_radial.set_title(_append_context("g_gen Radial Autocorr (median ± IQR)", ctx))
         else:
             _plot_missing(ax_radial, "No radial autocorr")
 
-        for ax, cell_idx in zip(ax_maps, top_cells, strict=False):
+        if top_cells.size:
+            selected_values = [clip_unit_interval(rate_map[:, int(cell_idx)]) for cell_idx in top_cells]
+            stacked = np.concatenate([vals[np.isfinite(vals)] for vals in selected_values if np.isfinite(vals).any()])
+            if stacked.size:
+                shared_min, shared_max = robust_min_max(stacked)
+            else:
+                shared_min, shared_max = 0.0, 1.0
+        else:
+            selected_values = []
+            shared_min, shared_max = 0.0, 1.0
+
+        for ax_map, ax_auto, cell_idx in zip(ax_maps, ax_autos, top_cells, strict=False):
             values = clip_unit_interval(rate_map[:, int(cell_idx)])
-            min_val, max_val = robust_min_max(values)
             plot_map(
                 world,
                 values,
-                ax=ax,
-                min_val=min_val,
-                max_val=max_val,
+                ax=ax_map,
+                min_val=shared_min,
+                max_val=shared_max,
                 shape="square",
                 location_cm="viridis",
             )
-            ax.set_title(_append_context(f"Rate Map (cell {int(cell_idx)})", ctx))
+            ax_map.set_title(_append_context(f"g_gen Rate Map (cell {int(cell_idx)})", ctx))
+            plot_autocorr2d(
+                ax_auto,
+                world,
+                values,
+                title=_append_context(f"g_gen 2D Autocorr (cell {int(cell_idx)})", ctx),
+            )
 
         for ax in ax_maps[len(top_cells) :]:
+            _plot_missing(ax, "No additional cells")
+
+        for ax in ax_autos[len(top_cells) :]:
             _plot_missing(ax, "No additional cells")
 
         fig.tight_layout()

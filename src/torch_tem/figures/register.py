@@ -35,8 +35,8 @@ def register_builtin_figures() -> None:
     )
     REGISTRY.register(
         FigureSpec(
-            name="spatial.autocorrelogram",
-            description="Multi-panel spatial summary for HPC place-like activity",
+            name="autocorr.g_gen",
+            description="Multi-panel g_gen rate maps and autocorrelograms with trajectory",
             plot=spatial.autocorrelogram.plot,
             tags={"model", "rollout", "spatial"},
         )

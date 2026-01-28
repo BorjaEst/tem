@@ -1,180 +1,272 @@
 # Figures module design
 
-This document describes the design of the `torch_tem.figures` submodule.
+This document describes the design of the `torch_tem.figures` package.
 
-The figures system is intentionally split into:
+The design follows a layered visualization architecture:
 
-- **Pure figure construction**: Convert a `TraceTree` + `FigureContext` into a
-  matplotlib `Figure`.
-- **Persistence and logging**: Save artifacts (PDF/PNG) and log preview images
-  to TensorBoard.
+1. **Plot primitives (axis-level)**: reusable drawing functions that operate on
+   a caller-provided Matplotlib `Axes`.
+2. **Figure modules (figure-level)**: orchestration functions that create the
+   `Figure`, manage subplot layout, apply consistent style, and compose multiple
+   primitives into a coherent multi-panel output.
 
-This separation keeps plotting code testable and reusable in scripts, notebooks,
-and training callbacks.
+This mirrors the separation commonly used by Matplotlib (Figure vs Axes) and by
+libraries with Grammar-of-Graphics lineage (layered marks + higher-level
+composition).
 
 ## Goals
 
-- Provide a stable, name-based interface for selecting figures via a registry.
-- Make figure generation configuration-driven (names + tags).
-- Support long-horizon figures by stitching consecutive rollout batches into a
-  single continuous episode trace.
-- Produce high-quality, versionable artifacts (PDF) and lightweight previews
-  (TensorBoard images).
-- Avoid training interruptions and memory leaks during long runs.
+- Provide consistent, reusable axis-level primitives for common visual elements
+  (maps, trajectories, heatmaps, time series, insets).
+- Provide figure-level orchestration for multi-panel layouts with consistent
+  spacing, guide placement (legend/colorbar), and styling.
+- Enable configuration-driven figure selection using stable names and a
+  registry.
+- Ensure headless execution is supported for CI and remote environments.
+- Improve testability by enabling unit tests for primitives and integration
+  tests for figure layouts.
 
 ## Non-goals
 
-- The figures submodule does not define how traces are collected; it consumes
-  `TraceTree` produced by `torch_tem.diagnostics`.
-- The figures submodule does not own training schedule decisions (when to
-  generate figures); this is handled by the Lightning callback.
-- The figures submodule does not define environment generation or rollouts.
+- Perfect pixel-identical rendering across Matplotlib versions/backends.
+- A general-purpose charting API independent of TEM domain concepts.
+- A full Grammar-of-Graphics implementation (encodings/scales as first-class
+  objects). The design borrows the layering principle but stays Matplotlib-first.
 
 ## Architecture overview
 
-### Components
-
-1. **Figure registry** (`torch_tem.figures.registry`)
-   - `FigureContext`: Small container for runtime plotting context (env index,
-     frequency index, global step, split name, optional style).
-   - `FigureSpec`: `(name, description, plot, default_filename, tags)`.
-   - `FigureRegistry`: Stores and validates specs.
-   - `REGISTRY`: Global registry instance.
-
-2. **Registration entrypoint** (`torch_tem.figures.register`)
-   - `register_builtin_figures()` registers built-in figure specs.
-   - Kept separate to avoid circular imports (registry imports nothing from
-     modules).
-
-3. **Figure modules** (`torch_tem.figures.modules.*`)
-   - Implement `plot(trace, ctx) -> Figure`.
-   - Use `torch_tem.diagnostics.trace_access` helpers to read trace fields.
-   - Compose reusable panel-level plotting functions.
-
-4. **Reusable plotting utilities**
-   - `torch_tem.figures.primitives`: Environment-centric low-level drawings
-     (`plot_map`, walk/actions rendering, axis initialization).
-   - `torch_tem.figures.plots.*`: Reusable panels (trajectory, autocorr, insets).
-   - `torch_tem.figures.utils.*`: Numerical helpers for aggregation and spatial
-     transforms (rate-map aggregation, autocorr utilities).
-
-5. **Sinks** (`torch_tem.figures.sinks`)
-   - `save_pdf(fig, path)` / `save_png(fig, path)`.
-   - `log_tensorboard_figure(logger, tag, fig, global_step)` rasterizes and logs
-     to TensorBoard.
-   - `make_figure_path(base_dir, figure_name, step?, version?, extension)`.
-
-6. **Training integration** (`torch_tem.callbacks.figures`)
-   - `FiguresCallback` captures batches during validation/test, builds a
-     `TraceTree`, dispatches figure specs, and persists via sinks.
-
-### Data flow
-
-High-level figure generation pipeline:
+### Package structure (conceptual)
 
 ```text
-Lightning validation/test loop
-  -> dataloader yields (walk_chunk, visited)
-  -> FiguresCallback snapshots batch (protect against visited mutation)
-  -> (optional) stitch consecutive batches into episode batch
-  -> collect_rollout_trace_tree(batch, environments, model)
-  -> (optional) downsample_trace(trace, stride)
-  -> spec.plot(trace, FigureContext)
-  -> sinks.save_pdf / sinks.log_tensorboard_figure
-  -> close Figure
+torch_tem.figures/
+	plots/          # axis-level primitives: draw(ax, ...)
+	figures/        # figure-level constructors/templates
+	palettes/       # color palettes, colormap helpers
+	style.py        # StyleConfig and style application
+	registry.py     # FigureSpec, FigureContext, registry
+	sinks.py        # save/log adapters (PNG/PDF/TensorBoard)
+	modules/        # domain figure modules that return a Figure
+	utils/          # shared helpers (formatting, annotation, etc.)
 ```
 
-Key design choice: Figures operate on a **TraceTree**, not on raw model tensors.
-This enforces stable, inspectable paths and simplifies multi-panel plots.
+Notes:
 
-## Namespacing and discoverability
+- `plots/` contains functions that draw on a provided `Axes`.
+- `modules/` contains callable figure definitions that create and return a
+  Matplotlib `Figure` (often multi-panel).
+- `registry.py` enables discoverable name-based generation.
+- `sinks.py` handles I/O responsibilities.
 
-Registry names are stable identifiers used in configuration and outputs.
+### Dependency direction
 
-- Flat names: `overview`
-- Namespaced names: `spatial.structure`
+Enforce a one-way dependency graph:
 
-The dotted naming convention maps naturally to a module folder structure:
+```text
+modules/figures -> plots
+modules/figures -> style/palettes/utils
+modules/figures -> registry (for typing / context)
 
-- `torch_tem.figures.modules.spatial.structure.plot` corresponds to
-  `spatial.structure`.
+plots -> (palettes/utils)    # allowed
+plots -X-> modules/figures   # forbidden
+plots -X-> sinks/registry    # avoid coupling
+```
 
-Tags are used to group figures for policy decisions (e.g. “aggregate” vs
-“episode” sampling in the callback).
+This prevents circular imports and preserves reusability of primitives.
 
-## Built-in figures
+## Data flow
 
-Built-in figures are registered in `register_builtin_figures()`.
+The typical flow for TEM visualizations is:
 
-Current built-ins:
+```text
+TraceTree + FigureContext
+	-> (registry lookup)
+	-> figure module (creates Figure + Axes grid)
+	-> plot primitives called per panel
+	-> figure module finalizes layout + guides
+	-> sinks save/log
+```
 
-- `overview`: Multi-panel TEM circuit overview across LEC/MEC/HPC, plus
-  observation ids and trajectory.
-- `spatial.structure`: Occupancy, rate maps, spatial autocorrelograms, and
-  trajectory with coverage inset.
+### Sequence: generate and save a figure
 
-## Trace contracts
+```text
+client
+	|-- ctx = FigureContext(...)
+	|-- spec = REGISTRY.get(name)
+	|-- with ctx.style.apply_context():
+	|     fig = spec.plot(trace, ctx)
+	|-- save_png(fig, path)
+	|-- close(fig)   (ownership rule in sinks)
+```
 
-Figure modules depend on specific `TraceTree` paths.
-To avoid hard-coding string paths in many places, modules use
-`torch_tem.diagnostics.trace_access` helpers.
+## Interfaces and contracts
 
-Commonly used trace fields:
+### FigureContext (inputs)
 
-- `world_step/location_ids`: `(T, B)` integer location ids
-- `world_step/action_ids`: `(T, B)` integer action ids
-- `world_step/observation`: `(T, B, n_o)` observation vectors
-- `state/lec/cells/<freq>/value`: `(T, B, C)` activity
-- `output/inference/g_inf/<freq>/value`: `(T, B, C)` inferred abstract location
-- `output/generative/g_gen/<freq>/value`: `(T, B, C)` generated abstract location
-- Root metadata:
-  - `environments`: list of environment/world objects aligned to batch
-  - `visited`: visited masks aligned to environments
+`FigureContext` carries runtime configuration that should not be hard-coded into
+primitives:
 
-Design principle:
+- `env_idx`: which environment in a batched trace to visualize.
+- `freq_idx`: which frequency/module index to visualize for multi-scale models.
+- `figsize`: (width, height) in inches.
+- `style`: style configuration (typically a `StyleConfig`).
+- `global_step`: optional metadata for titles/logging.
+- `split_name`: optional metadata for filenames/annotations.
 
-- Figure modules SHOULD tolerate missing optional fields and render “missing”
-  panels where appropriate.
-- For required fields, modules MAY fail fast with actionable errors.
+Design rule:
 
-## Styling strategy
+- Plot primitives MAY accept fine-grained styling kwargs (color/linewidth/cmap)
+  but SHOULD NOT consume `FigureContext` directly.
 
-`torch_tem.figures.style.StyleConfig` centralizes matplotlib style choices.
+### FigureSpec and registry (discoverability)
 
-Two application modes are supported:
+Each figure is registered as a `FigureSpec`:
 
-- Global: `StyleConfig.apply()` (modifies `mpl.rcParams`).
-- Scoped: `StyleConfig.apply_context()` (temporary rcParams overrides).
+- `name`: stable identifier, used in config.
+- `description`: human-readable intent.
+- `plot(trace, ctx) -> Figure`: figure constructor.
+- `default_filename`: optional default stem.
+- `tags`: optional grouping.
 
-Figure modules may accept `ctx.style` and use a context manager to keep styling
-consistent without permanently modifying global state.
+Registry behavior:
 
-## Persistence and logging strategy
+- registration is idempotent
+- listing order is deterministic
+- validation errors list available names
 
-The system uses a dual-output pattern:
+### Plot primitives (axis-level)
 
-- **PDF**: canonical, high-quality artifact suitable for papers and reports.
-- **TensorBoard image**: raster preview for fast training monitoring.
+Plot primitives are small, reusable drawing functions.
 
-File naming:
+Contract:
 
-- Deterministic and step-aware: `<base_dir>/figures/<name>_step<k>.pdf`.
+- **Inputs**: an `Axes` plus data and explicit rendering parameters.
+- **Side effects**: only add artists to the provided `Axes`.
+- **Forbidden**: figure/subplot creation, layout orchestration, global style
+  mutation, file I/O.
+- **Outputs**: artist handles or structured results for composition.
+
+Recommended signature patterns:
+
+```python
+def scatter(ax, x, y, *, color=None, label=None, **kwargs) -> PathCollection:
+		...
+
+@dataclass
+class HeatmapResult:
+		image: AxesImage
+		vmin: float
+		vmax: float
+
+def heatmap(ax, values, *, cmap=None, vmin=None, vmax=None, **kwargs) -> HeatmapResult:
+		...
+```
+
+Why structured results matter:
+
+- Figure modules can build a single shared legend/colorbar across subplots.
+- Tests can assert on returned handles without pixel comparisons.
+
+### Figure modules (figure-level)
+
+Figure modules:
+
+- Create `Figure` and `Axes` grid (e.g., via `plt.subplots` or `GridSpec`).
+- Apply style (prefer `StyleConfig.apply_context()` to bound global effects).
+- Orchestrate calls to primitives, passing explicit `Axes` to each.
+- Centralize guide placement (legend/colorbars).
+- Enforce consistent spacing and labeling conventions.
+
+Recommended figure module shape:
+
+```text
+plot(trace, ctx):
+	with style context:
+		fig, axes = build_layout(ctx.figsize)
+		primitives.draw_panel_1(axes[0], ...)
+		primitives.draw_panel_2(axes[1], ...)
+		finalize_guides(fig, axes)
+		finalize_titles(fig, ctx)
+	return fig
+```
+
+## Styling and templates
+
+### StyleConfig
+
+Centralize style parameters in a `StyleConfig` object.
+
+Design choices:
+
+- Use a context manager (`rc_context`) to scope style changes.
+- Keep figure-level defaults (dpi, base font size, facecolors) in one place.
+- Allow modules to override local styling explicitly without mutating globals.
+
+### Templates
+
+Templates are reusable recipes for:
+
+- standard multi-panel grid structures (e.g., overview pages)
+- consistent title/annotation placement
+- consistent legend/colorbar sizing and placement
+
+Templates live at the figure-level because they allocate layout space.
 
 ## Error handling
 
-- Registry validation fails early to prevent silent misconfiguration.
-- The training callback catches and reports exceptions during plotting so figure
-  failures do not crash training.
-- The callback closes figures after saving/logging to prevent memory growth.
+### Input validation
 
-## Extending the figures system
+Figure modules should validate inputs early and fail with actionable errors:
 
-To add a new figure:
+- invalid `env_idx` / `freq_idx`
+- missing trace nodes / missing required arrays
+- incompatible shapes for primitives
 
-1. Implement `plot(trace: TraceTree, ctx: FigureContext) -> Figure` under
-   `src/torch_tem/figures/modules/...`.
-2. Register it in `torch_tem.figures.register.register_builtin_figures()` with a
-   stable name, description, and tags.
-3. If it requires longer temporal context, assign a tag used by the callback’s
-   sampling policy (e.g. `coverage`).
-4. Ensure it renders a valid “no data” figure when `trace.length == 0`.
+Plot primitives should validate only what they must (e.g., shape compatibility)
+and raise concise `ValueError`/`TypeError` with enough context to debug.
+
+### Failure modes
+
+- **Global style leakage**: caused by setting `mpl.rcParams` without a context.
+  Mitigation: use `StyleConfig.apply_context()` and keep style application in
+  the figure-level.
+
+- **Layout drift**: caused by primitives trying to "fix" spacing or add their
+  own legends/colorbars. Mitigation: forbid layout orchestration in primitives.
+
+- **Backend fragility**: caused by relying on implicit current axes/figure.
+  Mitigation: always accept explicit `Axes` and return handles.
+
+## Test automation strategy
+
+### Unit tests (plots)
+
+Test axis-level primitives without file I/O:
+
+- create `Figure, Axes` in a headless backend
+- call primitive with explicit `ax`
+- assert artists were added (type/count) and returned handles are non-null
+- assert no global style mutation (optional but recommended)
+
+### Integration tests (figures)
+
+Test figure modules as layout/orchestration:
+
+- assert the number of axes and expected grid structure
+- assert shared legend/colorbar placement policy (single vs per-axis)
+- avoid pixel-perfect comparisons unless absolutely necessary
+
+### CI considerations
+
+- prefer Matplotlib non-interactive backend for tests
+- avoid long-running visual regression tests
+
+## Rationale
+
+This design improves:
+
+- **Modularity**: primitives are reusable across different layouts.
+- **Testability**: primitives can be unit-tested in isolation; orchestration can
+  be integration-tested via structural assertions.
+- **Backend independence**: fewer implicit global state dependencies.
+- **Layout consistency**: spacing and guide rules are centralized at the figure
+  level instead of duplicated across primitives.

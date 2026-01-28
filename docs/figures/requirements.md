@@ -1,165 +1,204 @@
 # Figures module requirements
 
 This document defines functional and non-functional requirements for the
-`torch_tem.figures` submodule.
+`torch_tem.figures` package architecture.
 
-The figures submodule is responsible for:
+The figures stack is intentionally split into two layers:
 
-- Defining a stable, discoverable interface for figure generation via a
-  registry.
-- Rendering matplotlib `Figure` objects from rollout `TraceTree` objects.
-- Persisting figures as on-disk artifacts (PDF/PNG) and logging rasterized
-  previews to TensorBoard.
+- **Plots (axis-level primitives)**: small, reusable drawing functions that
 
-Figures are generated from traces produced by `torch_tem.diagnostics`.
+  render onto a provided Matplotlib `Axes`.
+
+- **Figures (figure-level orchestration)**: higher-level figure constructors
+
+  that create the `Figure`, manage subplot layout, apply style/templates, and
+  compose multiple primitives into consistent multi-panel outputs.
+
+This separation follows the Matplotlib Figure–Axes model and the common
+“primitives + orchestration” pattern used by Matplotlib/Seaborn/Plotly/Altair.
 
 ## Definitions
 
-- **TraceTree**: Hierarchical time-indexed recording of rollout state and
-  outputs (see `torch_tem.diagnostics.traces`).
-- **Figure module**: A Python module that implements `plot(trace, ctx) -> Figure`.
-- **FigureContext**: Runtime context for figure generation (e.g. `env_idx`,
-  `freq_idx`, `global_step`, `split_name`).
-- **FigureSpec**: Registry entry that binds a stable name to a plot function and
-  metadata.
-- **Registry name**: Stable identifier used in configuration and logs, using
-  dotted namespaces (e.g. `spatial.structure`).
-- **Artifact**: Saved figure file on disk (canonical: PDF).
-- **Preview**: Rasterized image logged to TensorBoard.
+- **Axes**: A Matplotlib `Axes` instance; the target surface on which artists
+
+  are drawn.
+
+- **Figure**: A Matplotlib `Figure` instance; the container that owns axes,
+
+  layout, and export configuration.
+
+- **Plot primitive**: A pure-ish function that draws onto a provided `Axes` and
+
+  returns artist handles or structured results.
+
+- **Figure module**: A function/module that creates a `Figure` and one or more
+
+  `Axes` (subplots), then orchestrates calls to plot primitives.
+
+- **Theme/style**: Centralized configuration applied to Matplotlib (typically
+
+  via `rcParams` or a context manager) to enforce consistent visuals.
+
+- **Template**: A reusable layout/styling recipe for a family of figures.
+- **Composition**: Combining multiple primitives across multiple axes into a
+
+  single coherent figure (shared guides, shared scales, consistent spacing).
+
+- **Sink**: An output adapter that saves or logs a generated figure (PNG/PDF,
+
+  TensorBoard, etc.).
+
+- **Registry**: A stable mapping from figure names to figure specifications for
+
+  configuration-driven selection and validation.
 
 ## Requirements (EARS notation)
 
-### Figure module interface
+### Plot primitives (axis-level)
 
-- **REQ-001 (Plot signature)**: WHEN a figure module is registered,
-  THE SYSTEM SHALL provide a `plot(trace: TraceTree, ctx: FigureContext) -> Figure`
-  callable.
+- **REQ-001 (Axes-first contract)**: WHEN a plot primitive is called, THE
 
-- **REQ-002 (No persistence side effects)**: WHEN `plot(...)` is called,
-  THE SYSTEM SHALL return a matplotlib `Figure` and SHALL NOT write files to
-  disk or log to TensorBoard.
+  SYSTEM SHALL accept a caller-provided `Axes` as the drawing target.
 
-- **REQ-003 (Empty trace handling)**: WHEN `plot(...)` is called with
-  `trace.length == 0`, THE SYSTEM SHALL return a valid `Figure` containing a
-  clear “no data” indicator rather than failing.
+- **REQ-002 (No figure creation)**: WHEN a plot primitive is called, THE SYSTEM
 
-- **REQ-004 (Index validation)**: WHEN `plot(...)` uses `ctx.env_idx` or
-  `ctx.freq_idx`, THE SYSTEM SHALL validate index ranges against the trace and
-  SHALL raise a clear error (or render a clear “missing/out of range” panel).
+  SHALL NOT create a Matplotlib `Figure` or allocate subplots.
 
-- **REQ-005 (Deterministic rendering)**: WHEN `plot(trace, ctx)` is called with
-  the same inputs, THE SYSTEM SHALL produce the same visual output modulo
-  matplotlib backend differences.
+- **REQ-003 (No layout orchestration)**: WHEN a plot primitive is called, THE
 
-### Registry
+  SYSTEM SHALL NOT call layout orchestration operations (e.g., creating
+  `GridSpec`, `tight_layout`, `constrained_layout`) as part of the primitive.
 
-- **REQ-010 (Stable name lookup)**: WHEN a client requests a figure by name,
-  THE SYSTEM SHALL resolve it via a central registry mapping names to
-  `FigureSpec`.
+- **REQ-004 (No global style side effects)**: WHEN a plot primitive is called,
 
-- **REQ-011 (Idempotent registration)**: WHEN registering a `FigureSpec` whose
-  name already exists, THE SYSTEM SHALL treat the operation as a no-op.
+  THE SYSTEM SHALL NOT mutate global Matplotlib state (e.g., `mpl.rcParams`) and
+  SHALL NOT depend on implicit global current axes (e.g., `plt.gca()`).
 
-- **REQ-012 (Validation)**: WHEN configuration provides a list of figure names,
-  THE SYSTEM SHALL validate that every name is registered and SHALL fail fast
-  with an error that lists unknown names and available names.
+- **REQ-005 (Deterministic output)**: WHEN a plot primitive is called with the
 
-- **REQ-013 (List ordering)**: WHEN listing registry entries,
-  THE SYSTEM SHALL return specs ordered alphabetically by name.
+  same inputs and a freshly configured `Axes`, THE SYSTEM SHALL produce the same
+  set of artists and properties (modulo Matplotlib version rendering
+  differences).
 
-### Built-in figures
+- **REQ-006 (Return handles/results)**: WHEN a plot primitive creates artists,
 
-- **REQ-020 (Built-in registration entrypoint)**: WHEN
-  `torch_tem.figures.register.register_builtin_figures()` is called,
-  THE SYSTEM SHALL register all built-in figures.
+  THE SYSTEM SHALL return artist handles or a structured result sufficient for
+  figure-level composition (e.g., legend/colorbar construction).
 
-- **REQ-021 (Built-in minimum set)**: WHEN built-in figures are registered,
-  THE SYSTEM SHALL include at minimum the following names:
-  - `overview`
-  - `spatial.structure`
+### Figure orchestration (figure-level)
 
-### Styling
+- **REQ-010 (Figure ownership)**: WHEN a figure module is called, THE SYSTEM
 
-- **REQ-030 (Central style config)**: WHEN figure styling is required,
-  THE SYSTEM SHALL support a centralized style configuration that can be applied
-  globally or as a context manager.
+  SHALL create and own the Matplotlib `Figure` and all required `Axes` objects.
 
-- **REQ-031 (Style isolation)**: WHEN a style context manager is used,
-  THE SYSTEM SHALL restore previous matplotlib rcParams on exit.
+- **REQ-011 (Layout responsibility)**: WHEN a figure module is called, THE
 
-### Persistence and logging (sinks)
+  SYSTEM SHALL manage subplot layout (rows/cols, `GridSpec`, spacing,
+  aspect/limits policy, alignment of colorbars/legends).
 
-- **REQ-040 (PDF as canonical artifact)**: WHEN saving figures to disk,
-  THE SYSTEM SHALL support PDF output and SHALL create parent directories as
-  needed.
+- **REQ-012 (Composition responsibility)**: WHEN composing multiple primitives,
 
-- **REQ-041 (PNG output)**: WHEN saving figures as raster images,
-  THE SYSTEM SHALL support PNG output and SHALL create parent directories as
-  needed.
+  THE SYSTEM SHALL centralize guide placement (legends/colorbars) and other
+  cross-axes coordination in the figure module (not in primitives).
 
-- **REQ-042 (Deterministic paths)**: WHEN constructing output paths,
-  THE SYSTEM SHALL generate deterministic filenames based on
-  `(base_dir, figure_name, step?, version?, extension)`.
+- **REQ-013 (Styling entrypoint)**: WHEN a figure module is called with a style
 
-- **REQ-043 (TensorBoard logging)**: WHEN logging a figure preview,
-  THE SYSTEM SHALL rasterize the figure to an image and log it via a TensorBoard
-  writer-compatible interface.
+  configuration, THE SYSTEM SHALL apply style consistently across all axes in
+  the figure via a centralized mechanism.
 
-- **REQ-044 (Resource cleanup)**: WHEN logging or saving figures in long-running
-  processes, THE SYSTEM SHALL provide a way to close figures to avoid memory
-  leaks.
+- **REQ-014 (Context contract)**: WHEN a figure module is called with a
 
-### Training integration (callback behavior)
+  `FigureContext` (or equivalent), THE SYSTEM SHALL interpret it consistently
+  (e.g., `figsize`, `env_idx`, `freq_idx`, `split_name`, `global_step`).
 
-Note: The Lightning callback is implemented in `torch_tem.callbacks.figures`.
-These requirements define the expected interaction between training and
-`torch_tem.figures`.
+### Style and themes
 
-- **REQ-050 (Rank-0 safety)**: WHEN figures are generated during distributed
-  training, THE SYSTEM SHALL generate artifacts only on rank 0.
+- **REQ-020 (Scoped style application)**: WHEN a style is applied for figure
 
-- **REQ-051 (Batch capture)**: WHEN capturing evaluation batches for figures,
-  THE SYSTEM SHALL snapshot any mutable components (e.g. visited masks) so that
-  later mutations do not affect generated figures.
+  creation, THE SYSTEM SHALL provide a scoped mechanism (e.g., context manager)
+  so that global Matplotlib configuration can be restored after figure
+  generation.
 
-- **REQ-052 (Episode stitching)**: WHEN figures require temporal context longer
-  than a single rollout chunk, THE SYSTEM SHALL support stitching consecutive
-  batches into a single episode before trace collection.
+- **REQ-021 (Single source of truth)**: WHEN style defaults are needed, THE
 
-- **REQ-053 (Non-fatal failures)**: IF a figure fails to generate due to missing
-  trace paths or plotting errors, THEN THE SYSTEM SHALL surface the error for
-  debugging and SHOULD continue training.
+  SYSTEM SHALL read them from a single centralized configuration object (e.g.,
+  `StyleConfig`) rather than duplicating defaults across figure modules.
+
+### Registry and discoverability
+
+- **REQ-030 (Stable names)**: WHEN a figure is registered, THE SYSTEM SHALL
+
+  assign it a stable, unique name used for configuration-driven selection.
+
+- **REQ-031 (Validation)**: WHEN a client requests figures by name, THE SYSTEM
+
+  SHALL validate names and provide an actionable error listing available names
+  for unknown entries.
+
+- **REQ-032 (Deterministic listing)**: WHEN listing registered figures, THE
+
+  SYSTEM SHALL return results in deterministic order.
+
+### Sinks (save/log)
+
+- **REQ-040 (Backend-safe output)**: WHEN saving or logging figures, THE SYSTEM
+
+  SHALL support headless execution (non-interactive Matplotlib backend) without
+  requiring a GUI.
+
+- **REQ-041 (Resource ownership)**: WHEN a sink completes, THE SYSTEM SHALL NOT
+
+  leak figure resources; it SHALL either close figures or document ownership
+  rules clearly.
+
+### Testability
+
+- **REQ-050 (Primitive unit tests)**: WHEN testing plot primitives, THE SYSTEM
+
+  SHALL allow tests to run without file I/O and without requiring full figure
+  layouts (i.e., primitives must be testable via a provided `Axes`).
+
+- **REQ-051 (Figure integration tests)**: WHEN testing figure modules, THE
+
+  SYSTEM SHALL allow assertions on layout invariants (axes count, grid shape,
+  shared guides) without depending on pixel-perfect image comparisons.
 
 ## Constraints
 
-- **CON-001 (Matplotlib dependency)**: Figure generation uses matplotlib and
-  SHALL remain compatible with headless execution (e.g. CI / servers).
+- **CON-001 (Rendering backend)**: The primary rendering backend SHALL be
 
-- **CON-002 (TraceTree contract)**: Figure modules SHALL treat `TraceTree` as
-  the single input source of rollout data, and SHOULD use
-  `torch_tem.diagnostics.trace_access` helpers for robustness.
+  Matplotlib.
 
-- **CON-003 (Separation of concerns)**: Plot construction (`plot(...)`) SHALL be
-  decoupled from persistence/logging (sinks).
+- **CON-002 (Headless compatibility)**: The system SHOULD work under headless
+
+  environments (e.g., CI) using a non-interactive Matplotlib backend.
+
+- **CON-003 (No implicit global state)**: Plot primitives MUST avoid reliance on
+
+  global current figure/axes state to reduce coupling and improve composability.
 
 ## Acceptance criteria
 
-- **AC-001**: Given the process imports `torch_tem.figures.register` and calls
-  `register_builtin_figures()`, when the registry is listed, then entries
-  include `overview` and `spatial.structure`.
+- **AC-001**: Given a plot primitive and a caller-created `Axes`, when the
 
-- **AC-002**: Given a configuration containing an unknown figure name, when the
-  registry validates the list, then validation fails with an error that includes
-  both the unknown name and the available names.
+  primitive is called, then no new `Figure` is created and no global rcParams are
+  mutated.
 
-- **AC-003**: Given a base output directory and a step, when
-  `make_figure_path(base_dir, "overview", step=10, extension="pdf")` is called,
-  then the returned path is under `<base_dir>/figures/` and includes
-  `overview_step10.pdf`.
+- **AC-002**: Given a figure module, when it is called with a `FigureContext`
 
-- **AC-004**: Given a valid matplotlib `Figure`, when `save_pdf(fig, path)` is
-  called with a non-existent parent directory, then the directory is created and
-  the file is written.
+  specifying `figsize`, then the returned `Figure` has that size.
 
-- **AC-005**: Given `trace.length == 0`, when a built-in figure’s `plot(...)` is
-  called, then a `Figure` is returned and no exception is raised.
+- **AC-003**: Given a composed multi-panel figure, when it is generated, then
+
+  legends/colorbars are placed consistently by the figure module (not duplicated
+  by primitives).
+
+- **AC-004**: Given an unknown figure name, when registry validation is
+
+  performed, then the raised error includes the unknown names and a sorted list
+  of available figure names.
+
+- **AC-005**: Given a style configuration applied via a context mechanism, when
+
+  figure generation exits the context, then Matplotlib rcParams are restored to
+  their prior values.

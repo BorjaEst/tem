@@ -1,15 +1,12 @@
-"""Inset panels for figure compositions (deprecated)."""
+"""Figure-level inset helpers for composition and layout."""
 
 from __future__ import annotations
 
-import warnings
 from typing import List
 
 import numpy as np
 from matplotlib.axes import Axes
-
-from torch_tem.figures.figures.insets import add_coverage_inset as _add_coverage_inset
-from torch_tem.figures.figures.insets import coverage_over_time as _coverage_over_time
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 
 def add_coverage_inset(
@@ -24,7 +21,7 @@ def add_coverage_inset(
     line_color: str = "#333333",
     title: str = "Coverage",
 ) -> Axes | None:
-    """Add a coverage-over-time inset to an axes (deprecated).
+    """Add a coverage-over-time inset to an axes.
 
     Args:
         ax: Parent axes to attach inset to.
@@ -40,22 +37,18 @@ def add_coverage_inset(
     Returns:
         The inset axes if created, otherwise None.
     """
-    warnings.warn(
-        "add_coverage_inset has moved to torch_tem.figures.figures.insets.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _add_coverage_inset(
-        ax,
-        location_ids,
-        n_locations,
-        width=width,
-        height=height,
-        loc=loc,
-        borderpad=borderpad,
-        line_color=line_color,
-        title=title,
-    )
+    if not location_ids or n_locations == 0:
+        return None
+    coverage = coverage_over_time(location_ids, n_locations)
+    inset = inset_axes(ax, width=width, height=height, loc=loc, borderpad=borderpad)
+    inset.plot(coverage, color=line_color, linewidth=1.2)
+    inset.set_ylim(0.0, 1.0)
+    inset.set_xlim(0, max(len(coverage) - 1, 1))
+    inset.set_title(title, fontsize=8)
+    inset.set_xticks([])
+    inset.set_yticks([0.0, 1.0])
+    inset.set_yticklabels(["0", "1"], fontsize=7)
+    return inset
 
 
 def coverage_over_time(location_ids: List[int], n_locations: int) -> np.ndarray:
@@ -68,4 +61,10 @@ def coverage_over_time(location_ids: List[int], n_locations: int) -> np.ndarray:
     Returns:
         Array of coverage ratios over time.
     """
-    return _coverage_over_time(location_ids, n_locations)
+    visited = np.zeros(n_locations, dtype=bool)
+    coverage = np.zeros(len(location_ids), dtype=float)
+    for idx, loc_id in enumerate(location_ids):
+        if 0 <= loc_id < n_locations:
+            visited[loc_id] = True
+        coverage[idx] = visited.sum() / max(n_locations, 1)
+    return coverage

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection
 
-from torch_tem.figures.primitives import plot_map
+from torch_tem.figures.plots.map import plot_map
 
 
 def plot_time_colored_trajectory(
@@ -40,7 +40,7 @@ def plot_time_colored_trajectory(
 
     n_locations = len(getattr(world, "locations", []))
     values = np.full(n_locations, np.nan, dtype=float)
-    plot_map(world, values, ax=ax, shape=background_shape)
+    plot_map(ax, world, values, shape=background_shape)
 
     coords = _trajectory_coords(world, location_ids)
     if coords.shape[0] == 0:

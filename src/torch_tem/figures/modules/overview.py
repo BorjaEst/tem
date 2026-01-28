@@ -25,8 +25,9 @@ from torch_tem.diagnostics.trace_access import (
     validate_env_idx,
 )
 from torch_tem.diagnostics.traces import TraceTree
+from torch_tem.figures.figures.base import style_context
 from torch_tem.figures.plots import plot_time_colored_trajectory
-from torch_tem.figures.primitives import plot_map
+from torch_tem.figures.plots.map import plot_map
 from torch_tem.figures.registry import FigureContext
 from torch_tem.figures.utils.spatial import aggregate_rate_map, clip_unit_interval, select_feature_by_spatial_variance
 
@@ -41,8 +42,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     Returns:
         Matplotlib Figure with the overview panels.
     """
-    style_ctx = _style_context(ctx)
-    with style_ctx:
+    with style_context(ctx):
         fig = plt.figure(figsize=ctx.figsize)
 
         if get_length(trace) == 0:
@@ -164,7 +164,7 @@ def _plot_mec_rate_maps(trace: TraceTree, env_idx: int, world: object, location_
 
     max_val = float(np.max(values[~np.isnan(values)])) if np.isfinite(values).any() else 1.0
     max_val = max(max_val, 0.1)
-    plot_map(world, values, ax=ax, min_val=0.0, max_val=max_val, shape="square", location_cm="cividis")
+    plot_map(ax, world, values, min_val=0.0, max_val=max_val, shape="square", location_cm="cividis")
     ax.set_title(_append_context(f"MEC g_inf f{freq_idx} (cell {cell_idx}, OVC excluded)", ctx))
 
 
@@ -195,7 +195,7 @@ def _plot_hpc_rate_maps(trace: TraceTree, env_idx: int, world: object, location_
 
     max_val = float(np.max(values[~np.isnan(values)])) if np.isfinite(values).any() else 1.0
     max_val = max(max_val, 0.1)
-    plot_map(world, values, ax=ax, min_val=0.0, max_val=0.4, shape="square", location_cm="cividis")
+    plot_map(ax, world, values, min_val=0.0, max_val=0.4, shape="square", location_cm="cividis")
     ax.set_title(_append_context(f"HPC p_inf f{freq_idx} (cell {cell_idx})", ctx))
 
 
@@ -254,32 +254,10 @@ def _append_context(title: Optional[str], ctx: FigureContext) -> str:
         return title + f" - {ctx.split_name}"
     if ctx.global_step is not None:
         return title + f" @ step {ctx.global_step}"
+    return title
 
 
 def _plot_missing(ax: plt.Axes, message: str) -> None:
     """Render a centered missing-data message."""
     ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=10)
     ax.axis("off")
-
-
-def _get_default_style():
-    try:
-        from torch_tem.figures.style import StyleConfig
-
-        return StyleConfig()
-    except ImportError:
-        return None
-
-
-def _style_context(ctx: FigureContext):
-    if getattr(ctx, "style", None):
-        return (ctx.style or _get_default_style()).apply_context()
-    return _noop_context()
-
-
-class _noop_context:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False

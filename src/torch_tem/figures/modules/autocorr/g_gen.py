@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import cm, colors
 from matplotlib.figure import Figure
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from torch_tem.diagnostics.trace_access import get_length, get_location_ids_for_env, get_multiscale, get_world, validate_env_idx, validate_freq_idx
 from torch_tem.diagnostics.traces import TraceTree
+from torch_tem.figures.figures.base import style_context
 from torch_tem.figures.plots import plot_autocorr2d, plot_time_colored_trajectory
-from torch_tem.figures.primitives import plot_map
+from torch_tem.figures.plots.map import plot_map
 from torch_tem.figures.registry import FigureContext
 from torch_tem.figures.utils.spatial import (
     aggregate_rate_map,
@@ -40,8 +40,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     Returns:
         Matplotlib Figure with spatial summary panels.
     """
-    style_ctx = _style_context(ctx)
-    with style_ctx:
+    with style_context(ctx):
         fig = plt.figure(figsize=ctx.figsize)
         grid = fig.add_gridspec(2, 3, width_ratios=[1.0, 1.0, 1.0], wspace=0.1, hspace=0.04)
         ax_traj = fig.add_subplot(grid[0, 0])
@@ -118,7 +117,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
 
         for ax_map, ax_auto, cell_idx in zip(ax_maps, ax_autos, top_cells, strict=False):
             values = clip_unit_interval(rate_map[:, int(cell_idx)])
-            plot_map(world, values, ax=ax_map, min_val=shared_min, max_val=shared_max, shape="square", location_cm="viridis")
+            plot_map(ax_map, world, values, min_val=shared_min, max_val=shared_max, shape="square", location_cm="viridis")
             ax_map.set_title(f"cell {int(cell_idx)}", pad=2)
             plot_autocorr2d(ax_auto, world, values, extent=extent)
 
@@ -151,30 +150,3 @@ def _plot_missing(ax: plt.Axes, message: str) -> None:
     """Render a centered missing-data message."""
     ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=10)
     ax.axis("off")
-
-
-def _get_default_style():
-    """Return the default style config if available."""
-    try:
-        from torch_tem.figures.style import StyleConfig
-
-        return StyleConfig()
-    except ImportError:
-        return None
-
-
-def _style_context(ctx: FigureContext):
-    """Return a style context manager when style is provided."""
-    if getattr(ctx, "style", None):
-        return (ctx.style or _get_default_style()).apply_context()
-    return _noop_context()
-
-
-class _noop_context:
-    """No-op context manager for style handling."""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False

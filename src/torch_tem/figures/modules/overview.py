@@ -51,8 +51,8 @@ class RolloutOverview(OverviewTemplate):
         self.lec_norm = build_shared_norm([self.lec_cells])
 
         self.map_cell_idx = 0
-        self.mec_cells = trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
-        self.hpc_cells = trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
+        self.mec_cells = abs(trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :])
+        self.hpc_cells = abs(trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :])
         self.map_min_val, self.map_max_val = build_shared_map_range(self.mec_cells, self.hpc_cells, self.location_ids, len(self.world.locations), self.map_cell_idx)
 
     def map_labels(self, ax: Axes) -> None:
@@ -61,12 +61,7 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_time_colored_trajectory(
-            ax,
-            self.world,
-            self.location_ids.tolist(),
-            cmap="plasma",
-        )
+        plot_time_colored_trajectory(ax, self.world, self.location_ids.tolist(), cmap="plasma")
         ax.set_title("Trajectory colored by time")
 
     def ratemap_a(self, ax: Axes) -> Axes:
@@ -75,16 +70,7 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_rate_map_cell(
-            ax,
-            self.world,
-            self.mec_cells,
-            cell_idx=self.map_cell_idx,
-            location_ids=self.location_ids.tolist(),
-            min_val=self.map_min_val,
-            max_val=self.map_max_val,
-            location_cm="viridis",
-        )
+        plot_rate_map_cell(ax, self.world, self.mec_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), min_val=self.map_min_val, max_val=self.map_max_val)
         ax.set_title(f"MEC cells f{self.freq_idx} (cell {self.map_cell_idx})")
         return ax
 
@@ -94,16 +80,7 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_rate_map_cell(
-            ax,
-            self.world,
-            self.hpc_cells,
-            cell_idx=self.map_cell_idx,
-            location_ids=self.location_ids.tolist(),
-            min_val=self.map_min_val,
-            max_val=self.map_max_val,
-            location_cm="viridis",
-        )
+        plot_rate_map_cell(ax, self.world, self.hpc_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), min_val=self.map_min_val, max_val=self.map_max_val)
         ax.set_title(f"HPC cells f{self.freq_idx} (cell {self.map_cell_idx})")
         return ax
 

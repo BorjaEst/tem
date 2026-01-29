@@ -1,40 +1,50 @@
-"""Shared utilities for figures and plots."""
+from __future__ import annotations
 
-from torch_tem.figures.utils.autocorr import RadialStats, autocorr2d, autocorr_1d, radial_profile, radial_stats_from_location_values
-from torch_tem.figures.utils.axes import format_map_axes
-from torch_tem.figures.utils.color import ensure_color_sequence, resolve_categorical_colors, to_rgba
-from torch_tem.figures.utils.data import as_1d_array, as_2d_array, validate_heatmap_data, validate_xy
-from torch_tem.figures.utils.line import resolve_line_style
-from torch_tem.figures.utils.spatial import (
-    GridIndex,
-    aggregate_by_location,
-    build_grid_index,
-    grid_from_location_values,
-    infer_location_count,
-    path_xy_from_location_ids,
-    world_xy_from_locations,
-)
+from typing import Iterable, Tuple
 
-__all__ = [
-    "as_1d_array",
-    "as_2d_array",
-    "GridIndex",
-    "RadialStats",
-    "aggregate_by_location",
-    "autocorr2d",
-    "autocorr_1d",
-    "build_grid_index",
-    "ensure_color_sequence",
-    "format_map_axes",
-    "grid_from_location_values",
-    "infer_location_count",
-    "path_xy_from_location_ids",
-    "radial_profile",
-    "radial_stats_from_location_values",
-    "resolve_categorical_colors",
-    "resolve_line_style",
-    "to_rgba",
-    "validate_heatmap_data",
-    "validate_xy",
-    "world_xy_from_locations",
-]
+import numpy as np
+
+
+def aggregate_rate_map(
+    cells: np.ndarray,
+    location_ids: Iterable[int],
+    n_locations: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Aggregate cell activity into a per-location rate map.
+
+    Args:
+            cells: Cell activity array with shape (T, C) or (T, B, C).
+            location_ids: Sequence of visited location indices per timestep.
+            n_locations: Total number of locations in the environment.
+
+    Returns:
+            Tuple of (rate_map, counts) where rate_map is (C, n_locations).
+    """
+    cell_array = np.asarray(cells, dtype=float)
+    if cell_array.ndim == 3:
+        cell_array = np.nanmean(cell_array, axis=1)
+    if cell_array.ndim == 1:
+        cell_array = cell_array[:, None]
+
+    loc_ids = np.asarray(list(location_ids), dtype=int)
+    if cell_array.shape[0] == 0 or loc_ids.size == 0:
+        rate_map = np.full((cell_array.shape[-1], n_locations), np.nan)
+        counts = np.zeros(n_locations, dtype=int)
+        return rate_map, counts
+
+    n_steps = min(cell_array.shape[0], loc_ids.shape[0])
+    cell_array = cell_array[:n_steps]
+    loc_ids = loc_ids[:n_steps]
+
+    n_cells = cell_array.shape[1]
+    rate_map = np.full((n_cells, n_locations), np.nan, dtype=float)
+    counts = np.zeros(n_locations, dtype=int)
+
+    for loc in range(n_locations):
+        mask = loc_ids == loc
+        counts[loc] = int(mask.sum())
+        if counts[loc] == 0:
+            continue
+        rate_map[:, loc] = np.nanmean(cell_array[mask], axis=0)
+
+    return rate_map, counts

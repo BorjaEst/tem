@@ -1,97 +1,76 @@
-"""Trajectory plot primitive."""
+"""Trajectory-related plotting panels."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Sequence
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.collections import LineCollection
 
-from matplotlib.axes import Axes
-from matplotlib.lines import Line2D
-
-from torch_tem.figures.plots.scatter import ScatterResult, scatter
-from torch_tem.figures.utils.data import validate_xy
+from torch_tem.figures.plots.map import plot_map
 
 
-@dataclass(frozen=True)
-class TrajectoryResult:
-    """Result for trajectory plots with composition metadata."""
-
-    scatter: ScatterResult
-    line: Line2D
-    mappable: Optional[Any]
-    legend_handle: Optional[Any]
-    label: Optional[str]
-    colorbar_group: Optional[str] = None
-    vmin: Optional[float] = None
-    vmax: Optional[float] = None
-
-
-def trajectory(
-    ax: Axes,
+def plot_time_colored_trajectory(
+    ax: plt.Axes,
+    world: object,
+    location_ids: list[int],
     *,
-    x: Sequence[float],
-    y: Sequence[float],
-    t: Optional[Sequence[float]] = None,
-    c: Optional[Sequence[float]] = None,
-    cmap: Optional[str] = None,
-    label: Optional[str] = None,
-    colorbar_group: Optional[str] = None,
-    scatter_style: Optional[Mapping[str, Any]] = None,
-    line_style: Optional[Mapping[str, Any]] = None,
-    **kwargs: Any,
-) -> TrajectoryResult:
-    """Draw a trajectory on the provided axes.
+    cmap: str = "viridis",
+    show_endpoints: bool = True,
+    background_shape: str = "square",
+    line_width: float = 1.5,
+) -> plt.Axes:
+    """Plot a trajectory colored by time on an existing axes.
 
     Args:
-        ax: Matplotlib Axes target.
-        x: X values.
-        y: Y values.
-        t: Optional time values to color by if c is not provided.
-        c: Optional color values.
-        cmap: Optional colormap name for scatter.
-        label: Optional legend label.
-        colorbar_group: Optional group name for grouped colorbars.
-        scatter_style: Optional scatter style mapping.
-        line_style: Optional line style mapping.
-        **kwargs: Additional Matplotlib scatter kwargs.
+        ax: Axes to draw into.
+        world: Environment world with location coordinates.
+        location_ids: Ordered list of visited location indices.
+        cmap: Colormap name for time coloring.
+        show_endpoints: Whether to mark start/end points.
+        background_shape: Shape for the background map markers.
+        line_width: Width of the trajectory line.
 
     Returns:
-        TrajectoryResult with artist handles and optional mappable.
+        The axes with the trajectory rendered.
     """
-    x_arr, y_arr = validate_xy(x, y)
-    color_values = c if c is not None else t
+    if not location_ids:
+        ax.text(0.5, 0.5, "No trajectory", ha="center", va="center", fontsize=10)
+        ax.axis("off")
+        return ax
 
-    resolved_scatter_style: dict[str, Any] = {}
-    if scatter_style:
-        resolved_scatter_style.update(scatter_style)
-    if color_values is not None:
-        resolved_scatter_style.pop("color", None)
+    n_locations = len(getattr(world, "locations", []))
+    values = np.full(n_locations, np.nan, dtype=float)
+    plot_map(world, values, ax=ax, shape=background_shape)
 
-    resolved_line_style: dict[str, Any] = {
-        "color": "0.5",
-        "linewidth": 1.0,
-        "alpha": 0.5,
-    }
-    if line_style:
-        resolved_line_style.update(line_style)
+    coords = _trajectory_coords(world, location_ids)
+    if coords.shape[0] == 0:
+        ax.text(0.5, 0.5, "No valid locations", ha="center", va="center", fontsize=10)
+        ax.axis("off")
+        return ax
+    if coords.shape[0] < 2:
+        ax.scatter(coords[:, 0], coords[:, 1], s=10, color="black")
+        return ax
 
-    scatter_result = scatter(
-        ax,
-        x=x_arr,
-        y=y_arr,
-        c=color_values,
-        label=label,
-        colorbar_group=colorbar_group,
-        style=resolved_scatter_style,
-        cmap=cmap,
-        **kwargs,
-    )
-    (line_artist,) = ax.plot(x_arr, y_arr, **resolved_line_style)
-    return TrajectoryResult(
-        scatter=scatter_result,
-        line=line_artist,
-        mappable=scatter_result.mappable,
-        legend_handle=scatter_result.legend_handle,
-        label=scatter_result.label,
-        colorbar_group=scatter_result.colorbar_group,
-    )
+    segments = np.stack([coords[:-1], coords[1:]], axis=1)
+    colors = np.linspace(0, 1, segments.shape[0])
+
+    lc = LineCollection(segments, cmap=cmap, array=colors, linewidths=line_width)
+    ax.add_collection(lc)
+    if show_endpoints:
+        ax.scatter(coords[0, 0], coords[0, 1], s=20, color="black", zorder=3)
+        ax.scatter(coords[-1, 0], coords[-1, 1], s=20, color="white", edgecolor="black", zorder=3)
+
+    ax.set_aspect(1)
+    ax.invert_yaxis()
+    ax.axis("off")
+    return ax
+
+
+def _trajectory_coords(world: object, location_ids: list[int]) -> np.ndarray:
+    coords = []
+    locations = getattr(world, "locations", [])
+    for loc_id in location_ids:
+        if 0 <= loc_id < len(locations):
+            loc = locations[loc_id]
+            coords.append([loc["o"], loc["y"]])
+    return np.asarray(coords, dtype=float)

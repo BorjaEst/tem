@@ -1,55 +1,44 @@
-"""Figure templates for common layout and export defaults."""
+from abc import abstractmethod
 
-from __future__ import annotations
+from matplotlib.axes import Axes
 
-from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
-
-
-@dataclass(frozen=True)
-class Template:
-    """Template bundle for themes and export settings."""
-
-    name: str
-    theme: str
-    size: Tuple[float, float]
-    dpi: int
-    constrained_layout: bool = True
+from torch_tem.figures.figures.base import BaseFigureTemplate, LayoutSpec
 
 
-_TEMPLATES: Dict[str, Template] = {
-    "default": Template(
-        name="default",
-        theme="default",
-        size=(10.0, 6.0),
-        dpi=120,
-        constrained_layout=True,
-    ),
-    "paper": Template(
-        name="paper",
-        theme="paper",
-        size=(8.0, 5.0),
-        dpi=150,
-        constrained_layout=True,
-    ),
-    "presentation": Template(
-        name="presentation",
-        theme="default",
-        size=(12.0, 7.0),
-        dpi=120,
-        constrained_layout=False,
-    ),
-}
+class OverviewTemplate(BaseFigureTemplate):
+    LAYOUT = {
+        "matrix_1": LayoutSpec(type="matrix", position=(0, 0)),
+        "map_1": LayoutSpec(type="2D_map", position=(1, 0)),
+        "temp_1a": LayoutSpec(type="time_series", position=(0, 1)),
+        "temp_1b": LayoutSpec(type="time_series", position=(0, 2)),
+        "map_2a": LayoutSpec(type="2D_map", position=(1, 1)),
+        "map_2b": LayoutSpec(type="2D_map", position=(1, 2)),
+    }
+    COLORBAR_GROUPS = {
+        "temp_1": {"panels": ["temp_1a", "temp_1b"]},
+        "map_2": {"panels": ["map_2a", "map_2b"]},
+    }
 
+    @abstractmethod
+    def matrix_1(self, ax: Axes) -> None:
+        raise NotImplementedError
 
-def get_template(name: Optional[str]) -> Template:
-    """Return a template instance.
+    @abstractmethod
+    def temp_1a(self, ax: Axes) -> None:
+        raise NotImplementedError
 
-    Args:
-            name: Template name or None for default.
+    @abstractmethod
+    def temp_1b(self, ax: Axes) -> None:
+        raise NotImplementedError
 
-    Returns:
-            Template instance.
-    """
-    key = name or "default"
-    return _TEMPLATES.get(key, _TEMPLATES["default"])
+    @abstractmethod
+    def map_1(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def map_2a(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def map_2b(self, ax: Axes) -> None:
+        raise NotImplementedError

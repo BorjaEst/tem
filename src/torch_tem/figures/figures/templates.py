@@ -1,6 +1,8 @@
 from abc import abstractmethod
+from typing import Optional
 
 from matplotlib.axes import Axes
+from matplotlib.cm import ScalarMappable
 
 from torch_tem.figures.figures.base import BaseFigureTemplate, LayoutSpec
 
@@ -15,8 +17,8 @@ class OverviewTemplate(BaseFigureTemplate):
         "map_2b": LayoutSpec(type="2D_map", position=(1, 2)),
     }
     COLORBAR_GROUPS = {
-        "temp_1": {"panels": ["temp_1a", "temp_1b"]},
-        "map_2": {"panels": ["map_2a", "map_2b"]},
+        "temp_1": {"panels": ["temp_1a", "temp_1b"], "source": "temp_1a"},
+        "map_2": {"panels": ["map_2a", "map_2b"], "source": "map_2a"},
     }
 
     @abstractmethod
@@ -24,11 +26,11 @@ class OverviewTemplate(BaseFigureTemplate):
         raise NotImplementedError
 
     @abstractmethod
-    def temp_1a(self, ax: Axes) -> None:
+    def temp_1a(self, ax: Axes) -> Optional[ScalarMappable]:
         raise NotImplementedError
 
     @abstractmethod
-    def temp_1b(self, ax: Axes) -> None:
+    def temp_1b(self, ax: Axes) -> Optional[ScalarMappable]:
         raise NotImplementedError
 
     @abstractmethod
@@ -36,9 +38,9 @@ class OverviewTemplate(BaseFigureTemplate):
         raise NotImplementedError
 
     @abstractmethod
-    def map_2a(self, ax: Axes) -> None:
+    def map_2a(self, ax: Axes) -> Optional[ScalarMappable]:
         raise NotImplementedError
 
     @abstractmethod
-    def map_2b(self, ax: Axes) -> None:
+    def map_2b(self, ax: Axes) -> Optional[ScalarMappable]:
         raise NotImplementedError

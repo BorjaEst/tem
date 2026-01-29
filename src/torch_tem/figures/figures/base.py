@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable
 from matplotlib.figure import Figure
 
 from torch_tem.diagnostics.traces import TraceTree
@@ -70,7 +71,9 @@ class BaseFigureTemplate(ABC):
             fn = getattr(self, f"fill_{name}", None) or getattr(self, name, None)
             if fn is None:
                 raise NotImplementedError(f"{self.__class__.__name__} missing fill_{name}()")
-            fn(self.axes[name])
+            result = fn(self.axes[name])
+            if self._is_mappable(result):
+                self._register_mappable(self.axes[name], result)
 
     def _apply_context_styles(self) -> None:
         color_cycle = getattr(self.ctx, "color_cycle", None)
@@ -130,21 +133,47 @@ class BaseFigureTemplate(ABC):
             if not axes:
                 warnings.warn(f"Colorbar group '{group_name}' references unknown panels", stacklevel=2)
                 continue
-            mappable = self._find_mappable(axes)
+            source = group.get("source")
+            if source is not None:
+                source_ax = self.axes.get(source)
+                if source_ax is None:
+                    warnings.warn(
+                        f"Colorbar group '{group_name}' references unknown source panel '{source}'",
+                        stacklevel=2,
+                    )
+                    continue
+                mappable = self._get_mappable(source_ax)
+            else:
+                mappable = self._find_mappable(axes)
             if mappable is None:
                 warnings.warn(f"Colorbar group '{group_name}' has no mappable artists", stacklevel=2)
                 continue
-            colorbar_kwargs = {key: value for key, value in group.items() if key != "panels"}
+            colorbar_kwargs = {key: value for key, value in group.items() if key not in {"panels", "source"}}
             self.fig.colorbar(mappable, ax=axes, **colorbar_kwargs)
+
+    def _register_mappable(self, ax: plt.Axes, mappable: ScalarMappable) -> None:
+        """Register a mappable to be used for shared colorbars."""
+        ax._tem_colorbar_mappable = mappable
+
+    def _is_mappable(self, value: Any) -> bool:
+        """Check whether the returned value is a Matplotlib mappable."""
+        return isinstance(value, ScalarMappable)
+
+    def _get_mappable(self, ax: plt.Axes) -> Any:
+        """Find the most suitable mappable for a single axes."""
+        mappable = getattr(ax, "_tem_colorbar_mappable", None)
+        if mappable is not None:
+            return mappable
+        if ax.images:
+            return ax.images[-1]
+        if ax.collections:
+            return ax.collections[-1]
+        return None
 
     def _find_mappable(self, axes: list[plt.Axes]) -> Any:
         """Find the most recent mappable from a list of axes."""
         for ax in axes:
-            mappable = getattr(ax, "_tem_colorbar_mappable", None)
+            mappable = self._get_mappable(ax)
             if mappable is not None:
                 return mappable
-            if ax.images:
-                return ax.images[-1]
-            if ax.collections:
-                return ax.collections[-1]
         return None

@@ -35,8 +35,14 @@ def plot_rate_map_cell(
     """
     rate_map, _ = aggregate_rate_map(cells, location_ids, len(world.locations))
     values = rate_map[cell_idx]
-    max_val = float(np.max(values[~np.isnan(values)])) if np.isfinite(values).any() else 1.0
-    max_val = max(max_val, 0.1)
+
+    finite_mask = np.isfinite(values)
+    if min_val is None:
+        min_val = float(np.min(values[finite_mask])) if finite_mask.any() else 0.0
+    if max_val is None:
+        max_val = float(np.max(values[finite_mask])) if finite_mask.any() else 1.0
+    if max_val <= min_val:
+        max_val = min_val + 1e-6
 
     plot_map(world, values, ax=ax, min_val=min_val, max_val=max_val, shape=shape, location_cm=location_cm)
     return ax

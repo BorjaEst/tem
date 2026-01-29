@@ -9,25 +9,24 @@ from torch_tem.figures.figures.base import BaseFigureTemplate, LayoutSpec
 
 class OverviewTemplate(BaseFigureTemplate):
     LAYOUT = {
-        "matrix_1": LayoutSpec(type="matrix", position=(0, 0)),
-        "map_1": LayoutSpec(type="2D_map", position=(1, 0)),
-        "temp_1a": LayoutSpec(type="time_series", position=(0, 1)),
-        "temp_1b": LayoutSpec(type="time_series", position=(0, 2)),
-        "map_2a": LayoutSpec(type="2D_map", position=(1, 1)),
-        "map_2b": LayoutSpec(type="2D_map", position=(1, 2)),
+        "map_labels": LayoutSpec(type="grid", position=(0, 0)),
+        "ratemap_a": LayoutSpec(type="grid", position=(0, 1)),
+        "ratemap_b": LayoutSpec(type="grid", position=(0, 2)),
+        "matrix": LayoutSpec(type="matrix", position=(1, 0)),
+        "temp_series": LayoutSpec(type="logtime_series", position=(1, 1), colspan=2),
     }
     COLORBAR_GROUPS = {
-        "temp_1": {
-            "panels": ["temp_1a", "temp_1b"],
-            "source": "temp_1a",
+        "temp_series": {
+            "panels": ["temp_series"],
+            "source": "temp_series",
             "pad": 0.02,
             "fraction": 0.046,
             "shrink": 0.9,
             "aspect": 30,
         },
-        "map_2": {
-            "panels": ["map_2a", "map_2b"],
-            "source": "map_2a",
+        "rate_maps": {
+            "panels": ["ratemap_a", "ratemap_b"],
+            "source": "ratemap_b",
             "pad": 0.02,
             "fraction": 0.046,
             "shrink": 0.9,
@@ -36,25 +35,21 @@ class OverviewTemplate(BaseFigureTemplate):
     }
 
     @abstractmethod
-    def matrix_1(self, ax: Axes) -> None:
+    def map_labels(self, ax: Axes) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def temp_1a(self, ax: Axes) -> Optional[ScalarMappable]:
+    def ratemap_a(self, ax: Axes) -> Optional[ScalarMappable]:
         raise NotImplementedError
 
     @abstractmethod
-    def temp_1b(self, ax: Axes) -> Optional[ScalarMappable]:
+    def ratemap_b(self, ax: Axes) -> Optional[ScalarMappable]:
         raise NotImplementedError
 
     @abstractmethod
-    def map_1(self, ax: Axes) -> None:
+    def matrix(self, ax: Axes) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def map_2a(self, ax: Axes) -> Optional[ScalarMappable]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def map_2b(self, ax: Axes) -> Optional[ScalarMappable]:
+    def temp_series(self, ax: Axes) -> Optional[ScalarMappable]:
         raise NotImplementedError

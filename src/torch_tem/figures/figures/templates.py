@@ -17,8 +17,22 @@ class OverviewTemplate(BaseFigureTemplate):
         "map_2b": LayoutSpec(type="2D_map", position=(1, 2)),
     }
     COLORBAR_GROUPS = {
-        "temp_1": {"panels": ["temp_1a", "temp_1b"], "source": "temp_1a"},
-        "map_2": {"panels": ["map_2a", "map_2b"], "source": "map_2a"},
+        "temp_1": {
+            "panels": ["temp_1a", "temp_1b"],
+            "source": "temp_1a",
+            "pad": 0.02,
+            "fraction": 0.046,
+            "shrink": 0.9,
+            "aspect": 30,
+        },
+        "map_2": {
+            "panels": ["map_2a", "map_2b"],
+            "source": "map_2a",
+            "pad": 0.02,
+            "fraction": 0.046,
+            "shrink": 0.9,
+            "aspect": 30,
+        },
     }
 
     @abstractmethod

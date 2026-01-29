@@ -41,8 +41,8 @@ class BaseFigureTemplate(ABC):
 
             self._apply_context_styles()
             self._fill_panels()
-            self._apply_colorbars()
             self.post_process()
+            self._apply_colorbars()
 
         return self.fig
 
@@ -55,7 +55,7 @@ class BaseFigureTemplate(ABC):
         panel_specs = self._validate_panels(list(self.LAYOUT.items()))
         n_rows, n_cols = self._grid_shape(panel_specs)
 
-        fig = plt.figure(figsize=self.ctx.figsize, dpi=self.ctx.dpi)
+        fig = plt.figure(figsize=self.ctx.figsize, dpi=self.ctx.dpi, layout="constrained")
         grid = fig.add_gridspec(n_rows, n_cols)
         axes: dict[str, plt.Axes] = {}
 
@@ -87,6 +87,9 @@ class BaseFigureTemplate(ABC):
 
     def post_process(self) -> None:
         """Subclasses may override."""
+        if getattr(self.fig, "get_constrained_layout", None):
+            if self.fig.get_constrained_layout():
+                return
         self.fig.tight_layout()
 
     def _validate_panels(self, panel_specs: list[tuple[str, LayoutSpec]]) -> list[tuple[str, LayoutSpec]]:

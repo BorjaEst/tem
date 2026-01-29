@@ -61,7 +61,6 @@ def plot_time_colored_trajectory(
         ax.scatter(coords[-1, 0], coords[-1, 1], s=20, color="white", edgecolor="black", zorder=3)
 
     ax.set_aspect(1)
-    ax.invert_yaxis()
     ax.axis("off")
     return ax
 

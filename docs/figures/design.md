@@ -1,250 +1,174 @@
-# Figures Architecture Design
+# Figures module design
 
-## Introduction
+This document describes the design of `torch_tem.figures`.
 
-This document describes the technical design for a visualization library architecture that separates axis-level plot primitives (`plots/`) from figure-level orchestration (`figures/`). The goal is to make rendering composable, testing straightforward, and multi-panel layout + styling consistent.
+The module implements a small plotting framework with:
 
-## 1. Architecture Overview
+- **Templates** (orchestrators) that define a layout and rendering lifecycle.
+- **Resolved figures** that extract data from a `TraceTree` and fill template
+  panels.
+- **Panel plots** as reusable drawing utilities.
+- **A registry** for name-based dispatch and callback integration.
+- **Sinks** to persist figures (PDF and TensorBoard).
 
-### Layered Modules
+## Goals
 
-- **plots/** (rendering primitives)
-  - Pure-ish functions that draw onto a provided target (e.g., Matplotlib `Axes`).
-  - No figure creation, no layout, no global style mutation.
-- **figures/** (orchestration)
-  - Creates/manages `Figure` and axes grids.
-  - Applies themes/templates and resolved styling.
-  - Composes primitives across panels and manages shared guides and scales.
-- **palettes/**
-  - Defines palette specifications and utilities for categorical/sequential color choices.
-- **utils/**
-  - Shared utilities: data validation and reshaping, color conversion, type helpers.
+- Provide a uniform figure entry point:
+  `plot(trace: TraceTree, ctx: FigureContext) -> matplotlib.figure.Figure`.
+- Keep figure orchestration/layout logic centralized in templates.
+- Keep reusable plotting primitives centralized under `torch_tem.figures.plots`.
+- Support training-time dispatch through a registry (name → FigureSpec).
+- Support persistence/logging via small, testable sink functions.
 
-### Dependency Graph
+## Non-goals
 
-- `figures` → may depend on `plots`, `palettes`, `utils`
-- `plots` → may depend on `palettes`, `utils` (but not `figures`)
-- `palettes` → may depend on `utils`
-- `utils` → depends on standard library and minimal third-party dependencies
+- The figures module does not define trace semantics or trace collection.
+- The figures module does not schedule figure generation; it is invoked by the
+  training callback.
+- The figures module does not define the data module or environment APIs.
 
-## 2. Responsibilities and Non-Responsibilities
+## Package structure and responsibilities
 
-### plots/ Responsibilities
+- `torch_tem.figures.figures`
+  - Template and orchestration logic.
+  - Abstract base classes that define layouts and required panel methods.
+  - Shared lifecycle: create layout → fill panels → post-process → colorbars.
 
-- Accept an explicit target object (e.g., `ax`).
-- Draw artists/traces onto that target.
-- Return structured results that support composition:
-  - artist handles for legends
-  - mappables + normalization metadata for colorbars
-  - computed limits if needed (optional)
+- `torch_tem.figures.plots`
+  - Reusable panel-level plotting functions.
+  - These functions accept an Axes and the minimal data needed to render a
+    panel and should return an Axes (or optionally a mappable).
 
-### plots/ Non-Responsibilities
+- `torch_tem.figures.modules`
+  - Resolved figures intended for direct import and interactive use.
+  - Each resolved figure exports a module-level `plot(trace, ctx)` function.
+  - Resolved figures typically encapsulate state in a class that inherits from
+    a template and implements the template’s panel methods.
 
-- Figure creation (`plt.figure`, `plt.subplots`, etc.).
-- Subplot layout decisions (`GridSpec`, constrained layout, tight layout).
-- Theme/template selection.
-- Exporting, saving, or showing figures.
-- Global styling mutation (e.g., `rcParams`).
+- `torch_tem.figures.registry` / `torch_tem.figures.register`
+  - Registry data structures and built-in registration helper.
 
-### figures/ Responsibilities
+- `torch_tem.figures.sinks`
+  - PDF saving and TensorBoard logging helpers.
 
-- Create figure and axes grids.
-- Apply a theme/template policy.
-- Resolve style tokens into concrete keyword args for primitives.
-- Compose multiple primitives into a cohesive figure.
-- Manage shared guides:
-  - legend merging and placement
-  - shared colorbars and color axis policies
-- Manage shared scale policies:
-  - shared x/y limits across facets
-  - shared color normalization across heatmaps
-- Own export/show policies (DPI, sizing, background, file writing).
+## Public API surface
 
-## 3. Public API Design (Conceptual)
+### Resolved figure modules
 
-This design intentionally keeps plot primitives simple and pushes orchestration into figure-level helpers.
+Each resolved figure module provides:
 
-### plots API
+- `plot(trace: TraceTree, ctx: FigureContext) -> Figure`
 
-Each primitive follows a consistent signature pattern:
+This is the primary public API used by:
 
-```python
-def scatter( ax, *, x, y, c=None, label=None, style=None, **kwargs):
-    """Draw scatter points on `ax` and return handles for composition."""
-    ...
-```
+- Interactive analysis: `from torch_tem.figures import overview; overview.plot(trace, ctx)`
+- Training callback dispatch through the registry.
 
-Return values:
+### Registry-based dispatch
 
-- For single-handle primitives: return the handle directly.
-- For multi-handle primitives: return a structured result object.
+Built-in figures are registered as `FigureSpec` entries.
+The training callback resolves figures by name and calls `spec.plot(trace, ctx)`.
 
-Example structured result:
+Design intent:
 
-```python
-from dataclasses import dataclass
-from typing import Any, Optional
+- The callback does not need to import individual figure modules directly.
+- Figure selection is controlled by configuration via names and tags.
 
-@dataclass(frozen=True)
-class ScatterResult:
-    collection: Any
-    mappable: Optional[Any] = None
-```
+### Panel plots
 
-### figures API
+Plot helpers in `torch_tem.figures.plots` provide reusable building blocks.
+They should be treated as stable APIs once exported via `plots.__init__`.
 
-Recommended figure-level entry points:
+## End-to-end flow
 
-- `figures.make_grid(...)` for reusable layout creation.
-- `figures.compose(...)` to assemble panels and manage shared guides.
-- `figures.apply_theme(...)` and `figures.templates.*` for theming policies.
+1. Training/evaluation code produces a `TraceTree` (rollout trace).
+2. A `FigureContext` is created (env index, frequency index, step metadata).
+3. A `FigureSpec` is resolved from the registry by name.
+4. The callback calls `spec.plot(trace, ctx)` to obtain a Matplotlib Figure.
+5. Sinks persist the figure (PDF and/or TensorBoard).
+6. The callback closes the figure to avoid leaks.
 
-Conceptual interface:
+## Template Method pattern
 
-```python
-def make_grid(*, nrows, ncols, size=None, sharex=False, sharey=False, template=None):
-    return fig, axes
+### Template lifecycle
 
-def compose(*, panels, layout, theme=None, legend="shared", colorbar="shared"):
-    """Create a figure, call panel functions with axes, then finalize guides/layout."""
-    return fig
-```
+The base template owns the algorithm:
 
-`panels` should be a sequence of callables that accept an Axes and call plot primitives.
+- Create figure + axes from a declarative layout (`LAYOUT`).
+- Invoke panel methods to populate each axes.
+- Apply global styling from context where present.
+- Apply shared colorbars (`COLORBAR_GROUPS`).
 
-## 4. Style System Design
+Concrete templates:
 
-### Style Tokens vs Resolved Style
+- Define `LAYOUT` mapping panel names to grid positions and spans.
+- Define `COLORBAR_GROUPS` to declare shared colorbars.
+- Define an abstract interface for required panel methods.
 
-- **Style tokens** (theme/template level): semantic names like `"primary"`, `"grid"`, `"font_scale"`.
-- **Resolved style** (primitive level): concrete kwargs like `color="#4C78A8"`, `lw=2`, `alpha=0.8`.
+Resolved figures:
+
+- Validate `env_idx` / `freq_idx` and extract the relevant trace slices.
+- Precompute shared ranges and normalizations.
+- Implement the template’s panel methods by delegating to plot helpers.
+
+### Panel naming convention
+
+Panels are addressed by name. For a panel name `ratemap_a`, the template fills
+it by calling either:
+
+- `fill_ratemap_a(ax)` if present, otherwise
+- `ratemap_a(ax)`
+
+This supports both “fill\_\*” naming and direct panel-method naming.
+
+## Shared colorbar strategy
+
+### Mechanism
+
+Panels may return a Matplotlib mappable, or store one on an Axes attribute.
+Templates then use mappables to generate shared colorbars for a group.
+
+### Determinism
+
+To keep shared colorbars deterministic across runs and avoid choosing an
+arbitrary axes’ artist, each group may declare a `source` panel. The group’s
+colorbar is then derived from that source panel’s mappable.
+
+## FigureContext and styling
+
+`FigureContext` is kept intentionally small and is safe to extend.
+
+Current templates optionally read additional style attributes from `ctx` using
+`getattr` (for example, `style`, `color_cycle`, and `tick_fontsize`).
 
 Design rule:
 
-- `figures/` is responsible for converting style tokens to resolved style kwargs.
-- `plots/` is responsible only for applying resolved style kwargs to artists.
+- Optional styling fields are duck-typed: templates should treat missing fields
+  as “use Matplotlib defaults”.
 
-### Recommended Modules
+## Extension guide: adding a new figure
 
-- `figures/styles.py`: theme definitions and token-to-kwargs resolution.
-- `figures/templates.py`: templates that bundle theme + layout + export defaults.
-- `palettes/*`: reusable palette definitions used by style resolution.
+To add a figure `my_figure`:
 
-## 5. Layout and Composition Design
+1. Add reusable panel plot helpers under `torch_tem.figures.plots` if needed.
+2. Define or reuse a template under `torch_tem.figures.figures.templates`.
+3. Implement a resolved figure under `torch_tem.figures.modules.my_figure`
+   exporting `plot(trace, ctx)` and the template’s panel methods.
+4. Export `my_figure` from `torch_tem.figures` to support
+   `from torch_tem.figures import my_figure`.
+5. Register the figure in the built-in registry bootstrap.
 
-### Grid Layout
+## Error handling and robustness
 
-The layout engine lives in `figures/` and is the single authority for:
+- Indexing into the trace should be validated (env/frequency selection).
+- Panel plots should handle empty arrays and NaN-only arrays gracefully.
+- Callback integration should remain robust by catching exceptions and closing
+  figures after persistence.
 
-- subplot sizing and spacing
-- shared axes policies
-- placement of figure-level annotations (suptitle, panel labels)
+## Test automation strategy (recommended)
 
-### Guide Management
-
-Guides are created and placed by `figures/` based on the structured results returned by primitives.
-
-Legend policy examples:
-
-- `legend="none"`: no legend
-- `legend="per-axes"`: legend per subplot
-- `legend="shared"`: one combined legend for the full figure
-
-Colorbar policy examples:
-
-- `colorbar="none"`
-- `colorbar="per-axes"`
-- `colorbar="shared"` (with shared normalization)
-
-### Scale Resolution
-
-For composite figures, `figures/` owns scale resolution policies:
-
-- Shared x/y limits across panels when requested.
-- Shared color normalization when requested (for heatmaps).
-
-## 6. Sequence Diagrams
-
-### Single Panel Primitive
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant F as figures (optional)
-    participant A as Axes
-    participant P as plots.primitive
-
-    U->>A: create Axes (externally) OR via figures
-    U->>P: primitive(ax, data, style)
-    P->>A: add artists
-    P-->>U: return handles/result
-```
-
-### Multi-Panel Composition
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant F as figures.compose
-    participant P as plots.*
-    participant Ax as Axes[i]
-
-    U->>F: compose(panels, layout, theme)
-    F->>F: make_grid(layout)
-    loop each panel
-        F->>Ax: select Axes
-        F->>P: call primitives on Axes
-        P-->>F: return handles/results
-    end
-    F->>F: merge legends/colorbars
-    F->>F: finalize layout spacing
-    F-->>U: Figure
-```
-
-## 7. Error Handling and Validation
-
-### plots/
-
-- Validate required inputs (e.g., `x` and `y` shapes compatible).
-- Raise clear exceptions with actionable messages.
-- Avoid partial state changes when validation fails (fail early).
-
-### figures/
-
-- Validate layout arguments (`nrows*ncols` matches panels).
-- Validate guide/scale policy combinations (e.g., shared colorbar requires compatible mappables).
-- Provide deterministic resolution when conflicts occur (documented precedence rules).
-
-## 8. Testing Strategy
-
-### Unit Tests (plots)
-
-- Create a headless Axes and call each primitive.
-- Assert artists were added and returned handles are non-null.
-- Assert global style state is unchanged.
-- Assert no figure creation is performed (e.g., no `plt.figure()` usage).
-
-### Integration Tests (figures)
-
-- Compose a small grid with multiple panels.
-- Assert axis count and layout dimensions.
-- Assert shared legend/colorbar policies produce the intended number of guides.
-- Optionally validate saved output metadata (size/DPI) without strict image comparison.
-
-## 9. Implementation Notes
-
-## Minimal Data Model
-
-- Use small immutable result objects (dataclasses with `frozen=True`) for plot results.
-- Keep style resolution separate from drawing.
-
-## 10. Trade-offs
-
-- This separation may introduce slightly more code (extra composition and result objects), but reduces duplication and enables consistent multi-panel output.
-- Some convenience wrappers might feel redundant at first; treat them as figure-level recipes rather than expanding primitive responsibilities.
-
-## 11. Open Questions
-
-- Should primitives accept a backend-agnostic target protocol, or explicitly Matplotlib `Axes` first?
-- Should style tokens be a simple dict, or a typed object for better discoverability?
-- Should the library support optional image regression testing, or rely on structural assertions only?
+- Unit tests for plot helpers: they run on synthetic inputs and return Axes.
+- Smoke tests for each resolved figure: `plot(trace, ctx)` returns a Figure for
+  a minimal trace fixture.
+- Registry tests: built-in registration is idempotent and validation errors are
+  actionable.

@@ -126,7 +126,11 @@ class BaseFigureTemplate(ABC):
         return max_row, max_col
 
     def _apply_colorbars(self) -> None:
-        """Apply shared colorbars for configured panel groups."""
+        """Apply shared colorbars for configured panel groups.
+
+        The optional "source" key pins the colorbar to a specific panel's
+        mappable, ensuring deterministic shared scaling across panels.
+        """
         for group_name, group in self.COLORBAR_GROUPS.items():
             panels = group.get("panels", [])
             if not panels:

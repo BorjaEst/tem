@@ -5,8 +5,6 @@ from __future__ import annotations
 import matplotlib.figure as mpl_figure
 import numpy as np
 from matplotlib.axes import Axes
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
 
 from torch_tem.diagnostics import trace_access
 from torch_tem.diagnostics.traces import TraceTree
@@ -15,7 +13,7 @@ from torch_tem.figures.plots.rasterplot import plot_rasterplot
 from torch_tem.figures.plots.ratemap import plot_rate_map_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
-from torch_tem.figures.utils import aggregate_rate_map
+from torch_tem.figures.utils.scales import build_shared_map_range, build_shared_norm
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
@@ -50,57 +48,12 @@ class RolloutOverview(OverviewTemplate):
 
         self.memory_matrix = trace_access.get_hpc_memory(self.trace, self.freq_idx)[0, self.env_idx]
         self.lec_cells = trace_access.get_lec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
-        self.mec_cells = trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
-        self.hpc_cells = trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
-
-        self.lec_norm = self._build_shared_norm([self.lec_cells])
+        self.lec_norm = build_shared_norm([self.lec_cells])
 
         self.map_cell_idx = 0
-        self.map_min_val, self.map_max_val = self._build_shared_map_range(
-            self.mec_cells,
-            self.hpc_cells,
-            self.location_ids,
-            len(self.world.locations),
-            self.map_cell_idx,
-        )
-
-    def _build_shared_norm(self, arrays: list[np.ndarray]) -> Normalize:
-        """Create a shared normalization for multiple arrays."""
-        if not arrays:
-            return Normalize(vmin=0.0, vmax=1.0)
-        values = np.concatenate([arr.ravel() for arr in arrays if arr.size > 0])
-        finite_mask = np.isfinite(values)
-        if not finite_mask.any():
-            return Normalize(vmin=0.0, vmax=1.0)
-        vmin = float(values[finite_mask].min())
-        vmax = float(values[finite_mask].max())
-        if vmax <= vmin:
-            vmax = vmin + 1e-6
-        return Normalize(vmin=vmin, vmax=vmax)
-
-    def _build_shared_map_range(
-        self,
-        mec_cells: np.ndarray,
-        hpc_cells: np.ndarray,
-        location_ids: np.ndarray,
-        n_locations: int,
-        cell_idx: int,
-    ) -> tuple[float, float]:
-        """Compute a shared min/max range for map comparisons."""
-        mec_rate, _ = aggregate_rate_map(mec_cells, location_ids, n_locations)
-        hpc_rate, _ = aggregate_rate_map(hpc_cells, location_ids, n_locations)
-
-        mec_values = mec_rate[cell_idx] if mec_rate.size else np.array([])
-        hpc_values = hpc_rate[cell_idx] if hpc_rate.size else np.array([])
-        combined = np.concatenate([mec_values.ravel(), hpc_values.ravel()])
-        finite_mask = np.isfinite(combined)
-        if not finite_mask.any():
-            return 0.0, 1.0
-        vmin = float(combined[finite_mask].min())
-        vmax = float(combined[finite_mask].max())
-        if vmax <= vmin:
-            vmax = vmin + 1e-6
-        return vmin, vmax
+        self.mec_cells = trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
+        self.hpc_cells = trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
+        self.map_min_val, self.map_max_val = build_shared_map_range(self.mec_cells, self.hpc_cells, self.location_ids, len(self.world.locations), self.map_cell_idx)
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.
@@ -116,7 +69,7 @@ class RolloutOverview(OverviewTemplate):
         )
         ax.set_title("Trajectory colored by time")
 
-    def ratemap_a(self, ax: Axes) -> ScalarMappable:
+    def ratemap_a(self, ax: Axes) -> Axes:
         """Plot a MEC grid-cell rate map for the selected frequency.
 
         Args:
@@ -133,9 +86,9 @@ class RolloutOverview(OverviewTemplate):
             location_cm="viridis",
         )
         ax.set_title(f"MEC cells f{self.freq_idx} (cell {self.map_cell_idx})")
-        return getattr(ax, "_tem_colorbar_mappable", None)
+        return ax
 
-    def ratemap_b(self, ax: Axes) -> ScalarMappable | None:
+    def ratemap_b(self, ax: Axes) -> Axes:
         """Plot a HPC place-cell rate map for the selected frequency.
 
         Args:
@@ -152,7 +105,7 @@ class RolloutOverview(OverviewTemplate):
             location_cm="viridis",
         )
         ax.set_title(f"HPC cells f{self.freq_idx} (cell {self.map_cell_idx})")
-        return getattr(ax, "_tem_colorbar_mappable", None)
+        return ax
 
     def matrix(self, ax: Axes) -> None:
         """Plot the hierarchical HPC memory matrix at the final step.
@@ -162,26 +115,23 @@ class RolloutOverview(OverviewTemplate):
         """
         max_val = float(np.max(np.abs(self.memory_matrix))) if np.isfinite(self.memory_matrix).any() else 1.0
         max_val = max(max_val, 1e-6)
-        ax.imshow(
-            self.memory_matrix,
-            cmap="bwr",
-            vmin=-max_val,
-            vmax=max_val,
-        )
+        ax.imshow(self.memory_matrix, cmap="bwr", vmin=-max_val, vmax=max_val)
         ax.set_title("HPC memory (hierarchical)")
         ax.set_xticks([])
         ax.set_yticks([])
 
-    def temp_series(self, ax: Axes) -> ScalarMappable | None:
+    def temp_series(self, ax: Axes) -> Axes:
         """Plot observations and LEC activations over time.
 
         Args:
             ax: Axes to draw into.
         """
-        return plot_rasterplot(
+        plot_rasterplot(
             ax,
             observations=self.observations,
             activations=[self.lec_cells],
             activation_names=[f"LEC cells f{self.freq_idx}"],
             act_norm=self.lec_norm,
         )
+        ax.set_title(f"Observations and LEC cell f{self.freq_idx} activations over time")
+        return ax

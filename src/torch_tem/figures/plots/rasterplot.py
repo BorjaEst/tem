@@ -24,8 +24,8 @@ def plot_rasterplot(
     obs_vmax: float = 1.0,
     act_norm: Normalize | None = None,
     panel_pad: float = 0.02,
-    obs_height: float = 0.3,
-) -> ScalarMappable | None:
+    obs_height: float = 0.2,
+) -> Axes:
     """Plot observations (raster) and activations (heatmaps) in a stacked panel.
 
     The container axes is used to place inset axes that share the time axis.
@@ -46,8 +46,8 @@ def plot_rasterplot(
             panel_pad: Vertical padding between panels (axes fraction).
             obs_height: Height fraction of the observation panel.
 
-    Returns:
-            The ScalarMappable for the activation heatmap colorbar, if any.
+        Returns:
+            The container axes with the rasterplot panels rendered.
     """
     activations_list = list(activations or [])
     observation_matrix = _coerce_observations(observations, n_observations)
@@ -71,16 +71,16 @@ def plot_rasterplot(
         label = activation_names[idx] if activation_names and idx < len(activation_names) else None
         act_mappable = _plot_activation(act_ax, activation, cmap=act_cmap, norm=act_norm, label=label)
         if idx < len(act_axes) - 1:
-            act_ax.set_ylabel(label or f"Activations {idx+1}")
             act_ax.set_xticklabels([])
     if act_axes:
         act_axes[-1].set_xlabel("Time step")
     if not act_axes and obs_ax is not None:
         obs_ax.set_xlabel("Time step")
 
-    if act_mappable is not None:
-        ax._tem_colorbar_mappable = act_mappable
-    return act_mappable
+    mappable_for_colorbar = act_mappable or obs_mappable
+    if mappable_for_colorbar is not None:
+        ax._tem_colorbar_mappable = mappable_for_colorbar
+    return ax
 
 
 def _coerce_observations(observations: np.ndarray, n_observations: Optional[int]) -> np.ndarray:
@@ -127,13 +127,7 @@ def _build_activation_norm(activations: Sequence[np.ndarray]) -> Normalize:
     return Normalize(vmin=vmin, vmax=vmax)
 
 
-def _create_panel_axes(
-    *,
-    ax: Axes,
-    n_activation: int,
-    obs_height: float,
-    panel_pad: float,
-) -> list[Axes]:
+def _create_panel_axes(*, ax: Axes, n_activation: int, obs_height: float, panel_pad: float) -> list[Axes]:
     """Create inset axes for observation and activation panels."""
     n_panels = 1 + n_activation
     pad_total = panel_pad * max(n_panels - 1, 0)
@@ -157,14 +151,7 @@ def _create_panel_axes(
     return axes
 
 
-def _plot_observations(
-    ax: Axes,
-    observations: np.ndarray,
-    *,
-    cmap: str,
-    vmin: float,
-    vmax: float,
-) -> ScalarMappable | None:
+def _plot_observations(ax: Axes, observations: np.ndarray, *, cmap: str, vmin: float, vmax: float) -> ScalarMappable | None:
     """Plot the observation raster panel."""
     if observations.size == 0:
         ax.text(0.5, 0.5, "No observations", ha="center", va="center", fontsize=9)
@@ -172,27 +159,13 @@ def _plot_observations(
         ax.set_yticks([])
         return None
 
-    image = ax.imshow(
-        observations.T,
-        aspect="auto",
-        cmap=cmap,
-        vmin=vmin,
-        vmax=vmax,
-        interpolation="nearest",
-    )
+    image = ax.imshow(observations.T, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
     ax.set_yticks([])
     ax.set_xticks([])
     return image
 
 
-def _plot_activation(
-    ax: Axes,
-    activation: np.ndarray,
-    *,
-    cmap: str,
-    norm: Normalize,
-    label: str | None,
-) -> ScalarMappable | None:
+def _plot_activation(ax: Axes, activation: np.ndarray, *, cmap: str, norm: Normalize, label: str | None) -> ScalarMappable | None:
     """Plot a single activation heatmap panel."""
     if activation.size == 0:
         ax.text(0.5, 0.5, "No activations", ha="center", va="center", fontsize=9)
@@ -200,12 +173,9 @@ def _plot_activation(
         ax.set_yticks([])
         return None
 
-    image = ax.imshow(
-        activation.T,
-        aspect="auto",
-        cmap=cmap,
-        norm=norm,
-        interpolation="nearest",
-    )
+    image = ax.imshow(activation.T, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+    if label:
+        # Titles keep labels legible without shrinking panel height.
+        ax.set_ylabel(label)
     ax.set_yticks([])
     return image

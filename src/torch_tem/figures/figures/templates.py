@@ -2,7 +2,6 @@ from abc import abstractmethod
 from typing import Optional
 
 from matplotlib.axes import Axes
-from matplotlib.cm import ScalarMappable
 
 from torch_tem.figures.figures.base import BaseFigureTemplate, LayoutSpec
 
@@ -39,11 +38,11 @@ class OverviewTemplate(BaseFigureTemplate):
         raise NotImplementedError
 
     @abstractmethod
-    def ratemap_a(self, ax: Axes) -> Optional[ScalarMappable]:
+    def ratemap_a(self, ax: Axes) -> Axes:
         raise NotImplementedError
 
     @abstractmethod
-    def ratemap_b(self, ax: Axes) -> Optional[ScalarMappable]:
+    def ratemap_b(self, ax: Axes) -> Axes:
         raise NotImplementedError
 
     @abstractmethod
@@ -51,5 +50,5 @@ class OverviewTemplate(BaseFigureTemplate):
         raise NotImplementedError
 
     @abstractmethod
-    def temp_series(self, ax: Axes) -> Optional[ScalarMappable]:
+    def temp_series(self, ax: Axes) -> Axes:
         raise NotImplementedError

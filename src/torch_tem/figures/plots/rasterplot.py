@@ -24,7 +24,7 @@ def plot_rasterplot(
     obs_vmax: float = 1.0,
     act_norm: Normalize | None = None,
     panel_pad: float = 0.02,
-    obs_height: float = 0.2,
+    obs_height: float = 0.3,
 ) -> Axes:
     """Plot observations (raster) and activations (heatmaps) in a stacked panel.
 

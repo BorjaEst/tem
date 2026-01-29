@@ -115,7 +115,7 @@ class RolloutOverview(OverviewTemplate):
         """
         max_val = float(np.max(np.abs(self.memory_matrix))) if np.isfinite(self.memory_matrix).any() else 1.0
         max_val = max(max_val, 1e-6)
-        ax.imshow(self.memory_matrix, cmap="bwr", vmin=-max_val, vmax=max_val)
+        ax.matshow(self.memory_matrix, cmap="bwr", vmin=-max_val, vmax=max_val)
         ax.set_title("HPC memory (hierarchical)")
         ax.set_xticks([])
         ax.set_yticks([])
@@ -126,12 +126,11 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_rasterplot(
-            ax,
-            observations=self.observations,
-            activations=[self.lec_cells],
-            activation_names=[f"LEC cells f{self.freq_idx}"],
-            act_norm=self.lec_norm,
-        )
-        ax.set_title(f"Observations and LEC cell f{self.freq_idx} activations over time")
+        ax.set_axis_off()
+        raster_ax = ax.inset_axes([0.040, 0.070, 0.950, 0.870])
+        plot_rasterplot(raster_ax, observations=self.observations, activations=[self.lec_cells], activation_names=[f"LEC cells f{self.freq_idx}"], act_norm=self.lec_norm)
+        mappable = getattr(raster_ax, "_tem_colorbar_mappable", None)
+        if mappable is not None:
+            ax._tem_colorbar_mappable = mappable
+        raster_ax.set_title(f"Observations and LEC cell f{self.freq_idx} activations over time")
         return ax

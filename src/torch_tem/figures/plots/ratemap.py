@@ -22,7 +22,7 @@ def plot_rate_map_cell(
     Args:
         ax: Axes to draw into.
         world: Environment world with location coordinates.
-        cells: Array of shape (n_steps, n_cells, n_locations) with cell activations.
+        cells: Array of shape (T, B, C) or (T, C) with cell activations.
         cell_idx: Index of the cell to plot.
         location_ids: Ordered list of visited location indices.
         min_val: Minimum value for color scaling.

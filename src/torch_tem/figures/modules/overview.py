@@ -54,7 +54,9 @@ class RolloutOverview(OverviewTemplate):
         self.map_cell_idx = 0
         self.mec_cells = abs(trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :])
         self.hpc_cells = abs(trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :])
-        self.map_min_val, self.map_max_val = build_shared_map_range(self.mec_cells, self.hpc_cells, self.location_ids, len(self.world.locations), self.map_cell_idx)
+
+        n_locations = len(getattr(self.world, "locations", []))
+        self.map_minmax = build_shared_map_range([self.mec_cells, self.hpc_cells], self.location_ids, n_locations, self.map_cell_idx)
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.
@@ -72,7 +74,8 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_rate_map_cell(ax, self.world, self.mec_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), min_val=self.map_min_val, max_val=self.map_max_val)
+        options = {"min_val": self.map_minmax[0], "max_val": self.map_minmax[1]}
+        plot_rate_map_cell(ax, self.world, self.mec_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), **options)
         ax.set_title(f"MEC cells f{self.freq_idx} (cell {self.map_cell_idx})")
 
     @colorbar(group="ratemaps", label="Firing rate")
@@ -82,7 +85,8 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_rate_map_cell(ax, self.world, self.hpc_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), min_val=self.map_min_val, max_val=self.map_max_val)
+        options = {"min_val": self.map_minmax[0], "max_val": self.map_minmax[1]}
+        plot_rate_map_cell(ax, self.world, self.hpc_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), **options)
         ax.set_title(f"HPC cells f{self.freq_idx} (cell {self.map_cell_idx})")
 
     def matrix(self, ax: Axes) -> None:

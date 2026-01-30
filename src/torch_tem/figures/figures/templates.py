@@ -9,6 +9,7 @@ from torch_tem.figures.figures.base import BaseFigureTemplate
 
 
 class OverviewTemplate(BaseFigureTemplate):
+    BASE_FIGSIZE: float = 1.00
     HEIGHT_FRAC: float = 0.45
 
     def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
@@ -43,7 +44,8 @@ class OverviewTemplate(BaseFigureTemplate):
 
 
 class SpatialMatrix4Template(BaseFigureTemplate):
-    HEIGHT_FRAC: float = 0.25
+    BASE_FIGSIZE: float = 1.50
+    HEIGHT_FRAC: float = 0.30
 
     def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
         gs = gridspec.GridSpec(2, 5, height_ratios=[1] * 2, width_ratios=[1] * 5, figure=fig)
@@ -53,14 +55,14 @@ class SpatialMatrix4Template(BaseFigureTemplate):
             "matrices_labels": fig.add_subplot(gs[1, 0]),  # matrix-labels
             # Spatial maps
             "spatial_map_a": fig.add_subplot(gs[0, 1]),  # Spatial map a
-            "": fig.add_subplot(gs[0, 2]),  # Spatial map b
-            "": fig.add_subplot(gs[0, 3]),  # Spatial map c
-            "": fig.add_subplot(gs[0, 4]),  # Spatial map d
+            "spatial_map_b": fig.add_subplot(gs[0, 2]),  # Spatial map b
+            "spatial_map_c": fig.add_subplot(gs[0, 3]),  # Spatial map c
+            "spatial_map_d": fig.add_subplot(gs[0, 4]),  # Spatial map d
             # Matrices
             "matrix_a": fig.add_subplot(gs[1, 1]),  # Matrix a
-            "": fig.add_subplot(gs[1, 2]),  # Matrix b
-            "": fig.add_subplot(gs[1, 3]),  # Matrix c
-            "": fig.add_subplot(gs[1, 4]),  # Matrix d
+            "matrix_b": fig.add_subplot(gs[1, 2]),  # Matrix b
+            "matrix_c": fig.add_subplot(gs[1, 3]),  # Matrix c
+            "matrix_d": fig.add_subplot(gs[1, 4]),  # Matrix d
         }
 
     @abstractmethod

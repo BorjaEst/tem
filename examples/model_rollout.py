@@ -244,6 +244,7 @@ def main() -> None:
     ctx = FigureContext(env_idx=0, freq_idx=FREQUENCY_INDEX, split_name="validate")
     figs: list[tuple[str, plt.Figure]] = [
         (f"01_overview.png", figures.overview.plot(trace, ctx)),
+        (f"02_grid_cells.png", figures.grid_cells.plot(trace, ctx)),
     ]
 
     print(f"Step 4: Generated {len(figs)} figure(s).")

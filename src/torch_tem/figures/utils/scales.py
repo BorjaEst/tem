@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import numpy as np
 from matplotlib.colors import Normalize
@@ -53,27 +53,40 @@ def build_shared_minmax(arrays: Iterable[np.ndarray]) -> tuple[float, float]:
 
 
 def build_shared_map_range(
-    mec_cells: np.ndarray,
-    hpc_cells: np.ndarray,
+    cells_traces: np.ndarray | Sequence[np.ndarray],
     location_ids: np.ndarray,
     n_locations: int,
-    cell_idx: int,
+    cell_indices: int | Sequence[int],
 ) -> tuple[float, float]:
-    """Compute a shared min/max range for MEC and HPC rate maps.
+    """Compute a shared min/max range for rate-map values.
 
     Args:
-        mec_cells: MEC activation array.
-        hpc_cells: HPC activation array.
+        cells_traces: One or more cell activation traces with shape
+            (T, B, C) or (T, C).
         location_ids: Location ids aligned with the time dimension.
         n_locations: Number of locations in the environment.
-        cell_idx: Index of the cell to compare.
+        cell_indices: Cell index or indices to include in the range.
 
     Returns:
-        Tuple of (vmin, vmax) for the selected cell across both maps.
+        Tuple of (vmin, vmax) for the selected cells across traces.
     """
-    mec_rate, _ = aggregate_rate_map(mec_cells, location_ids, n_locations)
-    hpc_rate, _ = aggregate_rate_map(hpc_cells, location_ids, n_locations)
+    if isinstance(cell_indices, int):
+        indices = [cell_indices]
+    else:
+        indices = list(cell_indices)
 
-    mec_values = mec_rate[cell_idx] if mec_rate.size else np.array([])
-    hpc_values = hpc_rate[cell_idx] if hpc_rate.size else np.array([])
-    return build_shared_minmax([mec_values, hpc_values])
+    if isinstance(cells_traces, np.ndarray):
+        traces = [cells_traces]
+    else:
+        traces = list(cells_traces)
+
+    values: list[np.ndarray] = []
+    for trace in traces:
+        rate_map, _ = aggregate_rate_map(trace, location_ids, n_locations)
+        if rate_map.size == 0:
+            continue
+        for idx in indices:
+            if 0 <= idx < rate_map.shape[0]:
+                values.append(rate_map[idx])
+
+    return build_shared_minmax(values)

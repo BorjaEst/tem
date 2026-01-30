@@ -1,0 +1,229 @@
+"""Spatial autocorrelogram utilities for grid-cell diagnostics."""
+
+from __future__ import annotations
+
+from typing import Sequence
+
+import matplotlib.pyplot as plt
+import numpy as np
+from numpy.typing import NDArray
+
+from torch_tem.figures.utils import aggregate_rate_map
+from torch_tem.figures.utils.rasterize import rasterize_locations
+
+
+def plot_spatial_autocorrelogram(
+    ax: plt.Axes,
+    world: object,
+    cells_trace: NDArray,
+    location_ids: Sequence[int] | NDArray,
+    cell_idx: int,
+    *,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    grid_res: float | None = None,
+    cmap: str = "viridis",
+) -> plt.Axes:
+    """Plot a 2D spatial autocorrelogram for a selected cell.
+
+    Args:
+        ax: Axes to draw into.
+        world: Environment world with location coordinates.
+        cells_trace: Cell activations (T, B, C) or (T, C).
+        location_ids: Ordered list of visited location indices.
+        cell_idx: Cell index to render.
+        vmin: Optional min value for color scaling.
+        vmax: Optional max value for color scaling.
+        grid_res: Optional grid resolution for rasterization.
+        cmap: Colormap name.
+
+    Returns:
+        The axes with the autocorrelogram rendered.
+    """
+    values = _rate_map_cell_values(cells_trace, location_ids, world, cell_idx)
+    if values.size == 0:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        ax.axis("off")
+        return ax
+
+    grid, mask, _ = rasterize_locations(world, values, grid_res=grid_res)
+    autocorr = spatial_autocorr_2d(grid, mask)
+    if autocorr.size == 0 or not np.isfinite(autocorr).any():
+        ax.text(0.5, 0.5, "No autocorr", ha="center", va="center")
+        ax.axis("off")
+        return ax
+
+    finite = np.isfinite(autocorr)
+    if vmin is None:
+        vmin = float(np.nanmin(autocorr[finite])) if finite.any() else 0.0
+    if vmax is None:
+        vmax = float(np.nanmax(autocorr[finite])) if finite.any() else 1.0
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+
+    im = ax.imshow(autocorr, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax)
+    ax._tem_colorbar_mappable = im
+    ax.set_aspect("equal")
+    ax.axis("off")
+    return ax
+
+
+def plot_radial_autocorr_cells(
+    ax: plt.Axes,
+    world: object,
+    cells_trace: NDArray,
+    location_ids: Sequence[int] | NDArray,
+    cell_indices: Sequence[int],
+    *,
+    grid_res: float | None = None,
+    n_bins: int = 32,
+    cmap: str = "viridis",
+) -> plt.Axes:
+    """Plot radial autocorrelation profiles for multiple cells.
+
+    Args:
+        ax: Axes to draw into.
+        world: Environment world with location coordinates.
+        cells_trace: Cell activations (T, B, C) or (T, C).
+        location_ids: Ordered list of visited location indices.
+        cell_indices: Cell indices to include.
+        grid_res: Optional grid resolution for rasterization.
+        n_bins: Number of radial bins.
+        cmap: Colormap name for curve colors.
+
+    Returns:
+        The axes with radial profiles rendered.
+    """
+    colors = plt.get_cmap(cmap)(np.linspace(0.2, 0.9, len(cell_indices)))
+    for color, idx in zip(colors, cell_indices, strict=False):
+        values = _rate_map_cell_values(cells_trace, location_ids, world, idx)
+        if values.size == 0:
+            continue
+        grid, mask, _ = rasterize_locations(world, values, grid_res=grid_res)
+        autocorr = spatial_autocorr_2d(grid, mask)
+        if autocorr.size == 0:
+            continue
+        radii, profile = radial_profile(autocorr, n_bins=n_bins)
+        ax.plot(radii, profile, color=color, label=f"Cell {idx}")
+
+    ax.set_xlabel("Radius (pixels)")
+    ax.set_ylabel("Autocorr")
+    ax.set_title("Radial autocorr profiles")
+    ax.legend(frameon=False, fontsize=7)
+    return ax
+
+
+def build_shared_autocorr_range(
+    world: object,
+    cells_trace: NDArray,
+    location_ids: Sequence[int] | NDArray,
+    cell_indices: Sequence[int],
+    *,
+    grid_res: float | None = None,
+) -> tuple[float, float]:
+    """Compute shared color scaling for autocorrelograms.
+
+    Args:
+        world: Environment world with location coordinates.
+        cells_trace: Cell activations (T, B, C) or (T, C).
+        location_ids: Ordered list of visited location indices.
+        cell_indices: Cell indices to include.
+        grid_res: Optional grid resolution for rasterization.
+
+    Returns:
+        Tuple of (vmin, vmax) over the selected autocorrelograms.
+    """
+    values: list[NDArray] = []
+    for idx in cell_indices:
+        rate_values = _rate_map_cell_values(cells_trace, location_ids, world, idx)
+        if rate_values.size == 0:
+            continue
+        grid, mask, _ = rasterize_locations(world, rate_values, grid_res=grid_res)
+        autocorr = spatial_autocorr_2d(grid, mask)
+        if autocorr.size == 0:
+            continue
+        values.append(autocorr)
+
+    if not values:
+        return 0.0, 1.0
+    flat = np.concatenate([v.ravel() for v in values])
+    finite = np.isfinite(flat)
+    if not finite.any():
+        return 0.0, 1.0
+    vmin = float(np.nanmin(flat[finite]))
+    vmax = float(np.nanmax(flat[finite]))
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+    return vmin, vmax
+
+
+def spatial_autocorr_2d(grid: NDArray, mask: NDArray) -> NDArray:
+    """Compute a 2D spatial autocorrelogram via FFT.
+
+    Args:
+        grid: Rasterized values with NaNs for missing pixels.
+        mask: Boolean mask indicating valid pixels.
+
+    Returns:
+        2D autocorrelogram with center at the grid midpoint.
+    """
+    if grid.size == 0:
+        return np.zeros((0, 0), dtype=float)
+
+    values = np.where(mask, grid, 0.0)
+    mask_f = mask.astype(float)
+
+    fft_vals = np.fft.fft2(values)
+    fft_mask = np.fft.fft2(mask_f)
+    corr = np.fft.ifft2(fft_vals * np.conj(fft_vals)).real
+    norm = np.fft.ifft2(fft_mask * np.conj(fft_mask)).real
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr = np.where(norm > 0, corr / norm, np.nan)
+
+    return np.fft.fftshift(corr)
+
+
+def radial_profile(autocorr: NDArray, *, n_bins: int = 32) -> tuple[NDArray, NDArray]:
+    """Compute a radial profile from a 2D autocorrelogram.
+
+    Args:
+        autocorr: 2D autocorrelogram array.
+        n_bins: Number of radial bins.
+
+    Returns:
+        Tuple of (radii, profile) for the autocorrelogram.
+    """
+    if autocorr.size == 0:
+        empty = np.zeros((0,), dtype=float)
+        return empty, empty
+
+    yy, xx = np.indices(autocorr.shape)
+    center_y = (autocorr.shape[0] - 1) / 2.0
+    center_x = (autocorr.shape[1] - 1) / 2.0
+    radii = np.sqrt((xx - center_x) ** 2 + (yy - center_y) ** 2)
+
+    max_radius = float(np.nanmax(radii)) if radii.size else 0.0
+    if max_radius <= 0:
+        empty = np.zeros((0,), dtype=float)
+        return empty, empty
+
+    bins = np.linspace(0.0, max_radius, n_bins + 1)
+    profile = np.full((n_bins,), np.nan, dtype=float)
+    for idx in range(n_bins):
+        mask = (radii >= bins[idx]) & (radii < bins[idx + 1])
+        mask &= np.isfinite(autocorr)
+        if mask.any():
+            profile[idx] = float(np.nanmean(autocorr[mask]))
+
+    bin_centers = 0.5 * (bins[:-1] + bins[1:])
+    return bin_centers, profile
+
+
+def _rate_map_cell_values(cells_trace: NDArray, location_ids: Sequence[int] | NDArray, world: object, cell_idx: int) -> NDArray:
+    location_ids = np.asarray(location_ids, dtype=int)
+    n_locations = len(getattr(world, "locations", []))
+    rate_map, _ = aggregate_rate_map(cells_trace, location_ids, n_locations)
+    if rate_map.size == 0 or cell_idx >= rate_map.shape[0]:
+        return np.zeros((0,), dtype=float)
+    return rate_map[cell_idx]

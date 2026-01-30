@@ -51,6 +51,11 @@ The figures stack is responsible for:
   3.  Run post-processing.
   4.  Apply configured shared colorbars.
 
+- **REQ-013 (No auto-layout for deterministic geometry)**: WHEN a template
+  renders a figure intended for journal-quality static export, THE SYSTEM SHALL
+  NOT rely on text-measurement-driven layout mechanisms (including
+  `tight_layout()` and `constrained_layout`) to position axes.
+
 - **REQ-011 (Panel method contract)**: WHEN a template declares a panel name,
   THE SYSTEM SHALL require the concrete implementation to provide a
   corresponding method (`fill_<panel>(ax)` or `<panel>(ax)`).
@@ -108,6 +113,16 @@ The figures stack is responsible for:
   compatible logger is provided, THE SYSTEM SHALL log the figure to a tag under
   `figures/<default_filename>`.
 
+- **REQ-052 (Export DPI as resolution-only control)**: WHEN a client exports a
+  figure at different DPI values (e.g., 100, 200, 300), THE SYSTEM SHALL allow
+  the export DPI to be selected independently of figure layout and SHALL
+  ensure that only pixel density changes for raster outputs.
+
+- **REQ-053 (No tight bounding-box cropping for reproducibility)**: WHEN saving
+  a figure for reproducible journal-quality output, THE SYSTEM SHALL NOT use
+  tight bounding-box cropping (`bbox_inches="tight"`) because it depends on
+  renderer text extents and may vary across backends/fonts.
+
 ### Non-functional requirements
 
 - **REQ-060 (Training robustness)**: IF any figure generation step raises an
@@ -117,6 +132,16 @@ The figures stack is responsible for:
 - **REQ-061 (Resource hygiene)**: WHEN figures are generated repeatedly in a
   loop, THE SYSTEM SHALL allow callers to close figures after saving/logging to
   prevent memory leaks.
+
+- **REQ-070 (DPI-invariant perceived typography)**: WHEN `FigureContext.figsize`
+  is held constant in inches and a figure is exported at multiple DPI values,
+  THE SYSTEM SHALL ensure that text, tick labels, and line widths remain
+  visually consistent relative to axes geometry (i.e., do not change perceived
+  size or spacing), except for increased/decreased pixel density.
+
+- **REQ-071 (Point-based typography contract)**: WHEN templates and plot helpers
+  apply typography, THE SYSTEM SHALL specify sizes in points (pt) (e.g., font
+  sizes, tick padding, line widths) to ensure stable physical sizing across DPI.
 
 ## Acceptance criteria
 
@@ -135,3 +160,15 @@ The figures stack is responsible for:
 - **AC-004**: Given a trace with an empty trajectory or non-finite arrays,
   when a figure is rendered, then the figure renders without raising due to
   normalization or scaling errors.
+
+- **AC-005 (DPI invariance)**: Given a resolved figure and a fixed
+  `FigureContext.figsize` in inches, when exporting the same figure at 100, 200,
+  and 300 DPI, then the panel geometry and typography are visually identical
+  (no new overlaps or reflow), differing only in raster resolution.
+
+- **AC-006 (No auto layout)**: Given a resolved figure, when rendering,
+  then neither `tight_layout()` nor `constrained_layout` is used to reposition
+  axes.
+
+- **AC-007 (No tight cropping)**: Given a saved figure for reproducible output,
+  when saving to disk, then `bbox_inches="tight"` is not used.

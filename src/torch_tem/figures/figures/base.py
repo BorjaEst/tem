@@ -17,7 +17,6 @@ from torch_tem.figures.registry import FigureContext
 class LayoutSpec:
     """Lightweight panel placement descriptor (legacy template support)."""
 
-    type: str
     position: tuple[int, int]
     rowspan: int = 1
     colspan: int = 1
@@ -26,6 +25,7 @@ class LayoutSpec:
 class BaseFigureTemplate(ABC):
     LAYOUT: dict[str, LayoutSpec] = {}  # subclasses override
     COLORBAR_GROUPS: dict[str, dict[str, Any]] = {}  # subclasses override
+    SUBPLOTS_ADJUST: dict[str, float] | None = None  # subclasses may override
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         self.trace = trace
@@ -55,7 +55,12 @@ class BaseFigureTemplate(ABC):
         panel_specs = self._validate_panels(list(self.LAYOUT.items()))
         n_rows, n_cols = self._grid_shape(panel_specs)
 
-        fig = plt.figure(figsize=self.ctx.figsize, dpi=self.ctx.dpi, layout="constrained")
+        fig_kwargs: dict[str, Any] = {}
+        if self.ctx.figsize is not None:
+            fig_kwargs["figsize"] = self.ctx.figsize
+        if self.ctx.dpi is not None:
+            fig_kwargs["dpi"] = self.ctx.dpi
+        fig = plt.figure(**fig_kwargs)
         grid = fig.add_gridspec(n_rows, n_cols)
         axes: dict[str, plt.Axes] = {}
 
@@ -77,20 +82,17 @@ class BaseFigureTemplate(ABC):
 
     def _apply_context_styles(self) -> None:
         color_cycle = getattr(self.ctx, "color_cycle", None)
-        if color_cycle:
-            plt.rcParams["axes.prop_cycle"] = plt.cycler(color=self.ctx.color_cycle)
-
         tick_fontsize = getattr(self.ctx, "tick_fontsize", None)
         for ax in self.axes.values():
+            if color_cycle:
+                ax.set_prop_cycle(color=color_cycle)
             if tick_fontsize is not None:
                 ax.tick_params(labelsize=tick_fontsize)
 
     def post_process(self) -> None:
         """Subclasses may override."""
-        if getattr(self.fig, "get_constrained_layout", None):
-            if self.fig.get_constrained_layout():
-                return
-        self.fig.tight_layout()
+        if self.SUBPLOTS_ADJUST:
+            self.fig.subplots_adjust(**self.SUBPLOTS_ADJUST)
 
     def _validate_panels(self, panel_specs: list[tuple[str, LayoutSpec]]) -> list[tuple[str, LayoutSpec]]:
         """Validate layout specs for collisions and invalid spans."""

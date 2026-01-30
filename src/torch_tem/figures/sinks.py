@@ -35,7 +35,20 @@ def save_pdf(fig: mpl_figure.Figure, path: Path) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=fig.dpi, bbox_inches="tight")
+    fig.savefig(path)
+
+
+def save_png(fig: mpl_figure.Figure, path: Path, *, dpi: int) -> None:
+    """Save a figure as a PNG with an explicit export DPI.
+
+    Args:
+        fig: Matplotlib figure.
+        path: Output path.
+        dpi: Export DPI for rasterization.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi)
 
 
 def log_tensorboard_figure(

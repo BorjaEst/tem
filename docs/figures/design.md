@@ -20,6 +20,30 @@ The module implements a small plotting framework with:
 - Support training-time dispatch through a registry (name → FigureSpec).
 - Support persistence/logging via small, testable sink functions.
 
+## DPI-invariant rendering (journal-quality static figures)
+
+This module targets **journal-quality static figures** where:
+
+- Panel geometry (axes positions, margins, spacings) is **100% stable**.
+- Changing DPI changes only **pixel density** (sharpness), not the visual
+  relative size of text within panels.
+
+### Design principle
+
+Matplotlib’s stable unit system for this use case is:
+
+- **Figure size in inches** (physical size): the canonical invariant.
+- **Text sizes in points (pt)**: constant in physical units.
+- **Axes layout in normalized figure coordinates** (GridSpec +
+  `subplots_adjust`): deterministic placement.
+- **DPI is an export parameter** for rasterization (e.g., PNG) and should not
+  participate in layout decisions.
+
+Implication:
+
+- Figures exported at 100/200/300 DPI must have identical layout and perceived
+  typography; only the pixel density differs.
+
 ## Non-goals
 
 - The figures module does not define trace semantics or trace collection.
@@ -99,6 +123,22 @@ The base template owns the algorithm:
 - Apply global styling from context where present.
 - Apply shared colorbars (`COLORBAR_GROUPS`).
 
+#### Layout determinism rules
+
+Templates and resolved figures MUST avoid any layout system that depends on
+renderer-specific text measurements.
+
+- Do not use `tight_layout()` or `constrained_layout`.
+- Do not save with `bbox_inches="tight"` (tight bounding-box cropping depends
+  on text extents and can vary by backend/fonts).
+- Do use GridSpec for axes geometry and explicit `subplots_adjust` margins.
+
+Recommended split:
+
+- **Design-time DPI**: the DPI attached to the in-memory figure.
+  It must be treated as a constant (or at least irrelevant) for layout.
+- **Export DPI**: the DPI passed to `savefig(..., dpi=...)` for raster output.
+
 Concrete templates:
 
 - Define `LAYOUT` mapping panel names to grid positions and spans.
@@ -146,6 +186,16 @@ Design rule:
 - Optional styling fields are duck-typed: templates should treat missing fields
   as “use Matplotlib defaults”.
 
+### Typography and offsets
+
+To keep typography visually stable across DPI and backends:
+
+- Use point-based font sizes (pt) for titles/labels/ticks.
+- Use point-based tick padding (pt).
+- For small anchored annotations (e.g., panel labels “A”, “B”), prefer a
+  point-offset transform (e.g., `ScaledTranslation`) rather than pixel offsets
+  or tight-layout-driven placement.
+
 ## Extension guide: adding a new figure
 
 To add a figure `my_figure`:
@@ -165,6 +215,18 @@ To add a figure `my_figure`:
 - Callback integration should remain robust by catching exceptions and closing
   figures after persistence.
 
+## Persistence and export
+
+Sinks SHOULD follow these rules for reproducible outputs:
+
+- Treat `FigureContext.figsize` (inches) as canonical.
+- For raster formats (PNG), vary only `savefig(dpi=...)` across exports.
+- Avoid tight bounding-box operations (`bbox_inches="tight"`). If whitespace
+  must be controlled, it must be controlled via explicit margins in the
+  template layout.
+
+For vector formats (PDF/SVG), DPI should not affect text rendering.
+
 ## Test automation strategy (recommended)
 
 - Unit tests for plot helpers: they run on synthetic inputs and return Axes.
@@ -172,3 +234,7 @@ To add a figure `my_figure`:
   a minimal trace fixture.
 - Registry tests: built-in registration is idempotent and validation errors are
   actionable.
+
+- DPI-invariance regression tests (recommended): for a fixed `figsize` and
+  fixed style, exporting at 100/200/300 DPI should yield identical visual
+  composition (panel geometry and typography) aside from resolution.

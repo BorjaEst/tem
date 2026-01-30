@@ -8,7 +8,7 @@ from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 def register_builtin_figures() -> None:
     """Register built-in figure specifications."""
-    if "overview" not in REGISTRY.list():
+    if not REGISTRY.has("overview"):
         REGISTRY.register(
             FigureSpec(
                 name="overview",

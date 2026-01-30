@@ -8,11 +8,11 @@ from torch_tem.figures.figures.base import BaseFigureTemplate, LayoutSpec
 
 class OverviewTemplate(BaseFigureTemplate):
     LAYOUT = {
-        "map_labels": LayoutSpec(type="grid", position=(0, 0)),
-        "ratemap_a": LayoutSpec(type="grid", position=(0, 1)),
-        "ratemap_b": LayoutSpec(type="grid", position=(0, 2)),
-        "matrix": LayoutSpec(type="matrix", position=(1, 0)),
-        "temp_series": LayoutSpec(type="logtime_series", position=(1, 1), colspan=2),
+        "map_labels": LayoutSpec(position=(0, 0)),
+        "ratemap_a": LayoutSpec(position=(0, 1)),
+        "ratemap_b": LayoutSpec(position=(0, 2)),
+        "matrix": LayoutSpec(position=(1, 0)),
+        "temp_series": LayoutSpec(position=(1, 1), colspan=2),
     }
     COLORBAR_GROUPS = {
         "temp_series": {
@@ -31,6 +31,14 @@ class OverviewTemplate(BaseFigureTemplate):
             "shrink": 0.9,
             "aspect": 30,
         },
+    }
+    SUBPLOTS_ADJUST = {
+        "left": 0.07,
+        "right": 0.95,
+        "top": 0.93,
+        "bottom": 0.07,
+        "hspace": 0.3,
+        "wspace": 0.3,
     }
 
     @abstractmethod

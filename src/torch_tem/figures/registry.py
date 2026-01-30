@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional, Set
+from typing import Any, Callable, Iterable, Optional, Set, Union
 
 import matplotlib.figure as mpl_figure
 
@@ -18,6 +18,9 @@ class FigureContext:
     freq_idx: int = 0
     figsize: Optional[tuple[float, float]] = None
     dpi: Optional[int] = None
+    style: Optional[Union[str, dict[str, Any]]] = None
+    tick_fontsize: Optional[int] = None
+    color_cycle: Optional[list[str]] = None
     global_step: Optional[int] = None
     split_name: Optional[str] = None
 
@@ -51,6 +54,15 @@ class Registry:
         if spec.name in self._specs:
             raise ValueError(f"Figure '{spec.name}' already registered")
         self._specs[spec.name] = spec
+
+    def has(self, name: str) -> bool:
+        """Return whether a figure name is registered."""
+        return name in self._specs
+
+    def __contains__(self, name: object) -> bool:
+        if not isinstance(name, str):
+            return False
+        return name in self._specs
 
     def get(self, name: str) -> FigureSpec:
         """Return a registered figure spec."""

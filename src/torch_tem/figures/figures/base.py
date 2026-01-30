@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from contextlib import ExitStack
-from typing import Any, Optional, Sequence
+from typing import Any, Dict, Optional
 
 import matplotlib.pyplot as plt
 import pub_ready_plots as prp
@@ -20,9 +20,8 @@ class BaseFigureTemplate(ABC):
     Subclasses implement `_create_layout()` and panel methods named in PANEL_NAMES.
     """
 
-    PANEL_NAMES: Sequence[str] = ()
-    BASE_FIGSIZE: float = 1.2  # Base figure size multiplier
-    HEIGHT_FRAC: float = 0.2  # Fraction of textheight for figure height
+    BASE_FIGSIZE: float = 1.00  # Base figure size multiplier
+    HEIGHT_FRAC: float = 0.25  # Fraction of textheight for figure height
 
     def __init__(self, trace: Any, ctx: FigureContext) -> None:
         self.trace = trace
@@ -31,7 +30,7 @@ class BaseFigureTemplate(ABC):
         self.axdict: dict[str, Axes] = {}
 
     @abstractmethod
-    def _create_layout(self, fig: Figure) -> Sequence[Axes]:
+    def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
         """Create the figure layout and return axes in the order of PANEL_NAMES."""
         raise NotImplementedError
 
@@ -52,8 +51,7 @@ class BaseFigureTemplate(ABC):
                 dpi=self.ctx.dpi,
                 constrained_layout=True,
             )
-            axs = list(self._create_layout(self.fig))
-            self.axdict = {name: ax for name, ax in zip(self.PANEL_NAMES, axs)}
+            self.axdict = self._create_layout(self.fig)
 
             # render each panel
             for name, ax in self.axdict.items():

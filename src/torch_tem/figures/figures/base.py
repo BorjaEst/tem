@@ -1,188 +1,116 @@
 from __future__ import annotations
 
-import warnings
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any
+from contextlib import ExitStack
+from typing import Any, Optional, Sequence
 
 import matplotlib.pyplot as plt
+import pub_ready_plots as prp
+import scienceplots  # noqa: F401 (registers "science", "nature", ...)
+from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
 from matplotlib.figure import Figure
 
-from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.registry import FigureContext
 
 
-@dataclass(frozen=True)
-class LayoutSpec:
-    """Lightweight panel placement descriptor (legacy template support)."""
-
-    position: tuple[int, int]
-    rowspan: int = 1
-    colspan: int = 1
-
-
 class BaseFigureTemplate(ABC):
-    LAYOUT: dict[str, LayoutSpec] = {}  # subclasses override
-    COLORBAR_GROUPS: dict[str, dict[str, Any]] = {}  # subclasses override
-    SUBPLOTS_ADJUST: dict[str, float] | None = None  # subclasses may override
+    """Base class for multi-panel figure templates.
 
-    def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
+    Subclasses implement `_create_layout()` and panel methods named in PANEL_NAMES.
+    """
+
+    PANEL_NAMES: Sequence[str] = ()
+    BASE_FIGSIZE: float = 1.2  # Base figure size multiplier
+    HEIGHT_FRAC: float = 0.2  # Fraction of textheight for figure height
+
+    def __init__(self, trace: Any, ctx: FigureContext) -> None:
         self.trace = trace
         self.ctx = ctx
+        self.fig: Optional[Figure] = None
+        self.axdict: dict[str, Axes] = {}
+
+    @abstractmethod
+    def _create_layout(self, fig: Figure) -> Sequence[Axes]:
+        """Create the figure layout and return axes in the order of PANEL_NAMES."""
+        raise NotImplementedError
 
     def plot(self) -> Figure:
-        """Public entry point."""
-        style = getattr(self.ctx, "style", None) or "default"
-        with plt.style.context(style):
-            fig, axes = self._create_layout()
-            self.fig = fig
-            self.axes = axes
+        """Create, render, and return the final Matplotlib figure."""
+        colorbar_groups: dict[str, dict[str, Any]] = {}
+        rc_params, prp_w, prp_h = prp.get_mpl_rcParams(self.ctx.layout, height_frac=self.HEIGHT_FRAC)
+        rc_params = dict(rc_params)
 
-            self._apply_context_styles()
-            self._fill_panels()
-            self.post_process()
-            self._apply_colorbars()
+        with ExitStack() as stack:
+            # scienceplots aesthetics and prp + registry overrides
+            stack.enter_context(plt.style.context(list(self.ctx.styles)))
+            stack.enter_context(plt.rc_context(rc_params))
 
-        return self.fig
+            # figure size from context or prp defaults
+            self.fig = plt.figure(
+                figsize=(prp_w * self.BASE_FIGSIZE, prp_h * self.BASE_FIGSIZE),
+                dpi=self.ctx.dpi,
+                constrained_layout=True,
+            )
+            axs = list(self._create_layout(self.fig))
+            self.axdict = {name: ax for name, ax in zip(self.PANEL_NAMES, axs)}
 
-    def _create_layout(self) -> tuple[Figure, dict[str, plt.Axes]]:
-        """Create figure and axes based on the layout specification.
+            # render each panel
+            for name, ax in self.axdict.items():
+                self._render_panel(name, ax, colorbar_groups)
 
-        Returns:
-            A tuple of (figure, axes_by_name).
-        """
-        panel_specs = self._validate_panels(list(self.LAYOUT.items()))
-        n_rows, n_cols = self._grid_shape(panel_specs)
+            self._apply_colorbars(colorbar_groups)
+            return self.fig
 
-        fig_kwargs: dict[str, Any] = {}
-        if self.ctx.figsize is not None:
-            fig_kwargs["figsize"] = self.ctx.figsize
-        if self.ctx.dpi is not None:
-            fig_kwargs["dpi"] = self.ctx.dpi
-        fig = plt.figure(**fig_kwargs)
-        grid = fig.add_gridspec(n_rows, n_cols)
-        axes: dict[str, plt.Axes] = {}
+    def _render_panel(self, name: str, ax: Axes, colorbar_groups: dict[str, dict[str, Any]]) -> None:
+        panel_fn = getattr(self, name)
+        panel_fn(ax)  # Rendering function is expected to modify ax in-place
+        meta = getattr(panel_fn, "_tem_colorbar", None)
+        if not meta:
+            return
 
-        for name, spec in panel_specs:
-            row, col = spec.position
-            ax = fig.add_subplot(grid[row : row + spec.rowspan, col : col + spec.colspan])
-            axes[name] = ax
+        group = meta["group"]
+        label = meta.get("label", None)
+        group_state = colorbar_groups.setdefault(group, {"axes": [], "mappable": None, "label": label})
+        group_state["axes"].append(ax)
 
-        return fig, axes
+        # Keep first non-empty label (avoid overwriting)
+        if group_state.get("label") is None and label is not None:
+            group_state["label"] = label
 
-    def _fill_panels(self) -> None:
-        for name, _spec in self._validate_panels(list(self.LAYOUT.items())):
-            fn = getattr(self, f"fill_{name}", None) or getattr(self, name, None)
-            if fn is None:
-                raise NotImplementedError(f"{self.__class__.__name__} missing fill_{name}()")
-            result = fn(self.axes[name])
-            if self._is_mappable(result):
-                self._register_mappable(self.axes[name], result)
+        # Discover a mappable (host axis first, then inset axes, then fallback)
+        mappable = self._find_panel_mappable(ax)
 
-    def _apply_context_styles(self) -> None:
-        color_cycle = getattr(self.ctx, "color_cycle", None)
-        tick_fontsize = getattr(self.ctx, "tick_fontsize", None)
-        for ax in self.axes.values():
-            if color_cycle:
-                ax.set_prop_cycle(color=color_cycle)
-            if tick_fontsize is not None:
-                ax.tick_params(labelsize=tick_fontsize)
+        if group_state["mappable"] is None and mappable is not None:
+            group_state["mappable"] = mappable
 
-    def post_process(self) -> None:
-        """Subclasses may override."""
-        if self.SUBPLOTS_ADJUST:
-            self.fig.subplots_adjust(**self.SUBPLOTS_ADJUST)
-
-    def _validate_panels(self, panel_specs: list[tuple[str, LayoutSpec]]) -> list[tuple[str, LayoutSpec]]:
-        """Validate layout specs for collisions and invalid spans."""
-        seen = set()
-        occupied: set[tuple[int, int]] = set()
-        for name, spec in panel_specs:
-            if name in seen:
-                raise ValueError(f"Duplicate panel name: {name}")
-            seen.add(name)
-            row, col = spec.position
-            if row < 0 or col < 0:
-                raise ValueError(f"Invalid layout position for {name}: {spec.position}")
-            if spec.rowspan <= 0 or spec.colspan <= 0:
-                raise ValueError(f"Invalid layout span for {name}: {spec.rowspan}x{spec.colspan}")
-            for row_idx in range(row, row + spec.rowspan):
-                for col_idx in range(col, col + spec.colspan):
-                    cell = (row_idx, col_idx)
-                    if cell in occupied:
-                        raise ValueError(f"Layout panels overlap at {cell} (panel {name})")
-                    occupied.add(cell)
-        return panel_specs
-
-    def _grid_shape(self, panel_specs: list[tuple[str, LayoutSpec]]) -> tuple[int, int]:
-        """Compute the grid size for the layout specification."""
-        max_row = 0
-        max_col = 0
-        for _name, spec in panel_specs:
-            row, col = spec.position
-            max_row = max(max_row, row + spec.rowspan)
-            max_col = max(max_col, col + spec.colspan)
-        if max_row <= 0 or max_col <= 0:
-            raise ValueError("Layout must contain at least one panel")
-        return max_row, max_col
-
-    def _apply_colorbars(self) -> None:
-        """Apply shared colorbars for configured panel groups.
-
-        The optional "source" key pins the colorbar to a specific panel's
-        mappable, ensuring deterministic shared scaling across panels.
-        """
-        for group_name, group in self.COLORBAR_GROUPS.items():
-            panels = group.get("panels", [])
-            if not panels:
-                warnings.warn(f"Colorbar group '{group_name}' has no panels", stacklevel=2)
+    def _apply_colorbars(self, colorbar_groups: dict[str, dict[str, Any]]) -> None:
+        """Attach grouped colorbars to the figure."""
+        for group_state in colorbar_groups.values():
+            mappable = group_state.get("mappable")
+            axes = group_state.get("axes", [])
+            if mappable is None or not axes:
                 continue
-            axes = [self.axes[name] for name in panels if name in self.axes]
-            if not axes:
-                warnings.warn(f"Colorbar group '{group_name}' references unknown panels", stacklevel=2)
-                continue
-            source = group.get("source")
-            if source is not None:
-                source_ax = self.axes.get(source)
-                if source_ax is None:
-                    warnings.warn(
-                        f"Colorbar group '{group_name}' references unknown source panel '{source}'",
-                        stacklevel=2,
-                    )
-                    continue
-                mappable = self._get_mappable(source_ax)
-            else:
-                mappable = self._find_mappable(axes)
-            if mappable is None:
-                warnings.warn(f"Colorbar group '{group_name}' has no mappable artists", stacklevel=2)
-                continue
-            colorbar_kwargs = {key: value for key, value in group.items() if key not in {"panels", "source"}}
-            self.fig.colorbar(mappable, ax=axes, **colorbar_kwargs)
+            label = group_state.get("label", None)
+            self.fig.colorbar(mappable, ax=axes, label=label)
 
-    def _register_mappable(self, ax: plt.Axes, mappable: ScalarMappable) -> None:
-        """Register a mappable to be used for shared colorbars."""
-        ax._tem_colorbar_mappable = mappable
-
-    def _is_mappable(self, value: Any) -> bool:
-        """Check whether the returned value is a Matplotlib mappable."""
-        return isinstance(value, ScalarMappable)
-
-    def _get_mappable(self, ax: plt.Axes) -> Any:
-        """Find the most suitable mappable for a single axes."""
+    def _find_panel_mappable(self, ax: Axes) -> ScalarMappable | None:
+        # A) Preferred: explicit convention used by your plot functions
         mappable = getattr(ax, "_tem_colorbar_mappable", None)
         if mappable is not None:
             return mappable
-        if ax.images:
-            return ax.images[-1]
-        if ax.collections:
-            return ax.collections[-1]
-        return None
 
-    def _find_mappable(self, axes: list[plt.Axes]) -> Any:
-        """Find the most recent mappable from a list of axes."""
-        for ax in axes:
-            mappable = self._get_mappable(ax)
+        # B) Inset axes created via ax.inset_axes(...) end up here
+        for child in getattr(ax, "child_axes", []):
+            mappable = getattr(child, "_tem_colorbar_mappable", None)
             if mappable is not None:
                 return mappable
+
+        # C) Optional fallback: common Matplotlib artists
+        # matrix/matshow creates an AxesImage stored in ax.images
+        if getattr(ax, "images", None):
+            return ax.images[-1]
+        if getattr(ax, "collections", None):
+            return ax.collections[-1]
+
         return None

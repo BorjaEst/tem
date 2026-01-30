@@ -1,56 +1,39 @@
 from abc import abstractmethod
 from typing import Optional
 
+import matplotlib.gridspec as gridspec
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
-from torch_tem.figures.figures.base import BaseFigureTemplate, LayoutSpec
+from torch_tem.figures.figures.base import BaseFigureTemplate
 
 
 class OverviewTemplate(BaseFigureTemplate):
-    LAYOUT = {
-        "map_labels": LayoutSpec(position=(0, 0)),
-        "ratemap_a": LayoutSpec(position=(0, 1)),
-        "ratemap_b": LayoutSpec(position=(0, 2)),
-        "matrix": LayoutSpec(position=(1, 0)),
-        "temp_series": LayoutSpec(position=(1, 1), colspan=2),
-    }
-    COLORBAR_GROUPS = {
-        "temp_series": {
-            "panels": ["temp_series"],
-            "source": "temp_series",
-            "pad": 0.02,
-            "fraction": 0.046,
-            "shrink": 0.9,
-            "aspect": 30,
-        },
-        "rate_maps": {
-            "panels": ["ratemap_a", "ratemap_b"],
-            "source": "ratemap_b",
-            "pad": 0.02,
-            "fraction": 0.046,
-            "shrink": 0.9,
-            "aspect": 30,
-        },
-    }
-    SUBPLOTS_ADJUST = {
-        "left": 0.07,
-        "right": 0.95,
-        "top": 0.93,
-        "bottom": 0.07,
-        "hspace": 0.3,
-        "wspace": 0.3,
-    }
+    PANEL_NAMES = ["map_labels", "ratemap_a", "ratemap_b", "matrix", "temp_series"]
+    BASE_FIGSIZE: float = 1.2
+    HEIGHT_FRAC: float = 0.4
+
+    def _create_layout(self, fig: Figure) -> list[Axes]:
+        gs = gridspec.GridSpec(2, 3, height_ratios=[1, 1], width_ratios=[1, 1, 1], figure=fig)
+
+        ax_map = fig.add_subplot(gs[0, 0])
+        ax_ratemap_a = fig.add_subplot(gs[0, 1])
+        ax_ratemap_b = fig.add_subplot(gs[0, 2])
+        ax_matrix = fig.add_subplot(gs[1, 0])
+        ax_temp_series = fig.add_subplot(gs[1, 1:3])
+
+        return [ax_map, ax_ratemap_a, ax_ratemap_b, ax_matrix, ax_temp_series]
 
     @abstractmethod
     def map_labels(self, ax: Axes) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def ratemap_a(self, ax: Axes) -> Axes:
+    def ratemap_a(self, ax: Axes) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def ratemap_b(self, ax: Axes) -> Axes:
+    def ratemap_b(self, ax: Axes) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -58,5 +41,5 @@ class OverviewTemplate(BaseFigureTemplate):
         raise NotImplementedError
 
     @abstractmethod
-    def temp_series(self, ax: Axes) -> Axes:
+    def temp_series(self, ax: Axes) -> None:
         raise NotImplementedError

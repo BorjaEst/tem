@@ -171,7 +171,7 @@ def main() -> None:
     dataset = datamodule.get_dataset("validate")
     environments = dataset.environments
     trace = collect_world_trace_tree(walk, environments, visited, meta={"split": "validate"})
-    ctx = FigureContext(env_idx=0, figsize=(12, 8), split_name="validate")
+    ctx = FigureContext(env_idx=0, split_name="validate")
 
     figs: list[tuple[str, plt.Figure]] = [
         ("01_environment_layout.png", figures.environment.layout.plot(trace, ctx)),

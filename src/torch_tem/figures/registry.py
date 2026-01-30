@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Optional, Set, Union
+from typing import Any, Callable, Iterable, Optional, Sequence, Set, Union
 
 import matplotlib.figure as mpl_figure
+import pub_ready_plots as prp
+import scienceplots  # noqa: F401 (registers "science", "nature", ...)
 
 from torch_tem.diagnostics.traces import TraceTree
 
@@ -14,13 +16,16 @@ from torch_tem.diagnostics.traces import TraceTree
 class FigureContext:
     """Context information passed to figure plot functions."""
 
+    # Indices for selecting data from multi-environment, multi-frequency traces
     env_idx: int = 0
     freq_idx: int = 0
-    figsize: Optional[tuple[float, float]] = None
+
+    # Optional figure customization parameters
+    styles: Sequence[str] = field(default_factory=lambda: ["science"])
+    layout: prp.Layout = prp.Layout.ICML
     dpi: Optional[int] = None
-    style: Optional[Union[str, dict[str, Any]]] = None
-    tick_fontsize: Optional[int] = None
-    color_cycle: Optional[list[str]] = None
+
+    # Optional training context
     global_step: Optional[int] = None
     split_name: Optional[str] = None
 

@@ -2,38 +2,38 @@
 
 from __future__ import annotations
 
-from torch_tem.figures.modules import grid_cells, overview, place_cells
+from torch_tem.figures.modules import grid_cells, place_cells, tem_overview
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 
 def register_builtin_figures() -> None:
     """Register built-in figure specifications."""
-    if not REGISTRY.has("overview"):
+    if not REGISTRY.has("tem-overview"):
         REGISTRY.register(
             FigureSpec(
-                name="overview",
-                plot=overview.plot,
-                default_filename="overview",
+                name="tem-overview",
+                plot=tem_overview.plot,
+                default_filename="tem-overview",
                 tags={"episode"},
                 description="Overview of rollout observations",
             )
         )
-    if not REGISTRY.has("grid_cells"):
+    if not REGISTRY.has("grid-cells"):
         REGISTRY.register(
             FigureSpec(
-                name="grid_cells",
+                name="grid-cells",
                 plot=grid_cells.plot,
-                default_filename="grid_cells",
+                default_filename="grid-cells",
                 tags={"episode"},
                 description="MEC grid-cell overview",
             )
         )
-    if not REGISTRY.has("place_cells"):
+    if not REGISTRY.has("place-cells"):
         REGISTRY.register(
             FigureSpec(
-                name="place_cells",
+                name="place-cells",
                 plot=place_cells.plot,
-                default_filename="place_cells",
+                default_filename="place-cells",
                 tags={"episode"},
                 description="HPC place-cell overview",
             )

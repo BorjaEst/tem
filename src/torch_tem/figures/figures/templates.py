@@ -124,3 +124,23 @@ class RasterX2Template(BaseFigureTemplate):
     @abstractmethod
     def raster_2(self, ax: Axes) -> None:
         raise NotImplementedError
+
+
+class ParamRasterTemplate(BaseFigureTemplate):
+    BASE_FIGSIZE: float = 1.40
+    HEIGHT_FRAC: float = 0.35
+
+    def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
+        gs = gridspec.GridSpec(1, 2, height_ratios=[1], width_ratios=[1, 4], figure=fig)
+        return {
+            "params": fig.add_subplot(gs[0, 0]),
+            "raster": fig.add_subplot(gs[0, 1]),
+        }
+
+    @abstractmethod
+    def params(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def raster(self, ax: Axes) -> None:
+        raise NotImplementedError

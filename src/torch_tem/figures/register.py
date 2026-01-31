@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from torch_tem.figures.modules import feature_cells, grid_cells, place_cells, tem_overview
+from torch_tem.figures.modules import feature_cells, grid_cells, lec_overview, place_cells, tem_overview
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 
@@ -18,6 +18,16 @@ def register_builtin_figures() -> None:
                 default_filename="tem-overview",
                 tags={"episode"},
                 description="Overview of rollout observations",
+            )
+        )
+    if not REGISTRY.has("lec-overview"):
+        REGISTRY.register(
+            FigureSpec(
+                name="lec-overview",
+                plot=lec_overview.plot,
+                default_filename="lec-overview",
+                tags={"episode"},
+                description="LEC model overview with observations and activations",
             )
         )
 

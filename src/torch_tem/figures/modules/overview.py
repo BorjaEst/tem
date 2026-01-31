@@ -6,7 +6,6 @@ import matplotlib.figure as mpl_figure
 import numpy as np
 from matplotlib.axes import Axes
 
-from torch_tem.diagnostics import trace_access
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.colorbars import colorbar
 from torch_tem.figures.figures.templates import OverviewTemplate
@@ -14,7 +13,6 @@ from torch_tem.figures.plots.rasterplot import plot_rasterplot
 from torch_tem.figures.plots.ratemap import plot_rate_map_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
-from torch_tem.figures.utils.scales import build_shared_map_range, build_shared_norm
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
@@ -41,18 +39,18 @@ class RolloutOverview(OverviewTemplate):
             ctx: Figure context.
         """
         super().__init__(trace, ctx)
-        self.env_idx = trace_access.validate_env_idx(self.trace, self.ctx.env_idx)
-        self.freq_idx = trace_access.validate_freq_idx(self.trace, "state/lec/cells", self.ctx.freq_idx)
-        self.world = trace_access.get_world(self.trace, self.env_idx)
-        self.location_ids = trace_access.get_location_ids(self.trace)[:, self.env_idx]
-        self.observations = trace_access.get_observations(self.trace)[:, self.env_idx]
-
-        self.memory_matrix = trace_access.get_hpc_memory(self.trace, memory_idx=0)[0, self.env_idx]
-        self.lec_cells = trace_access.get_lec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
-
+        self.env_idx = self.trace.validate_env_idx(self.ctx.env_idx)
+        self.freq_idx = self.trace.validate_freq_idx("state/lec/cells", self.ctx.freq_idx)
         self.map_cell_idx = 0
-        self.mec_cells = abs(trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :])
-        self.hpc_cells = abs(trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :])
+
+        self.world = self.trace.get_world(self.env_idx)
+        self.location_ids = self.trace.get("world_step/location_ids")[:, self.env_idx]
+        self.observations = self.trace.get("world_step/observation")[:, self.env_idx]
+        self.memory_matrix = self.trace.get("state/hpc/_memory/0")[0, self.env_idx]
+
+        self.lec_cells = self.trace.get(f"state/lec/cells/{self.freq_idx}")[:, self.env_idx, :]
+        self.mec_cells = abs(self.trace.get(f"state/mec/location/mean/{self.freq_idx}")[:, self.env_idx, :])
+        self.hpc_cells = abs(self.trace.get(f"state/hpc/location/mean/{self.freq_idx}")[:, self.env_idx, :])
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.

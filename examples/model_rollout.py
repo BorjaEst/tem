@@ -26,7 +26,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from torch_tem import data, figures
 from torch_tem.data.datamodule import DataConfig
-from torch_tem.diagnostics.trace_access import get_batch_size, get_environments, get_length
 from torch_tem.diagnostics.trace_collectors import collect_rollout_trace_tree
 from torch_tem.figures.registry import FigureContext
 from torch_tem.model import Model as TEMModel
@@ -231,9 +230,9 @@ def main() -> None:
     )
 
     print("Step 3: Collecting rollout trace complete.")
-    print(f" - Batch size: {get_batch_size(trace)}")
-    print(f" - Time steps: {get_length(trace)}")
-    print(f" - Environments: {len(get_environments(trace))}")
+    print(f" - Batch size: {int(trace.batch_size or 0)}")
+    print(f" - Time steps: {trace.length}")
+    print(f" - Environments: {len(trace.get_environments())}")
     print()
 
     # ------------------------------------------------------------------

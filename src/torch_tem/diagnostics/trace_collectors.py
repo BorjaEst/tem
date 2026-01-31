@@ -12,7 +12,7 @@ from typing import Any, Iterable, Optional, Sequence
 import numpy as np
 import torch
 
-from torch_tem.diagnostics.traces import Event, MetaUpdate, TraceConfig, TraceNode, TraceTree
+from torch_tem.diagnostics.traces import TraceConfig, TraceNode, TraceTree
 from torch_tem.model import Model, RolloutStep, RolloutStream, TEMOutput, TEMState
 
 
@@ -304,31 +304,9 @@ def _downsample_node(node: TraceNode, stride: int) -> TraceNode:
     down = TraceNode()
     down.data = {key: value[::stride] for key, value in node.data.items()}
     down.meta_static = dict(node.meta_static)
-    down.meta_sparse = _downsample_meta_sparse(node.meta_sparse, stride)
-    down.events = _downsample_events(node.events, stride)
     for name, child in node.children.items():
         down.children[name] = _downsample_node(child, stride)
     return down
-
-
-def _downsample_meta_sparse(meta_sparse: dict[str, list[MetaUpdate]], stride: int) -> dict[str, list[MetaUpdate]]:
-    """Downsample sparse metadata updates by stride."""
-    downsampled: dict[str, list[MetaUpdate]] = {}
-    for key, updates in meta_sparse.items():
-        kept = [MetaUpdate(t=upd.t // stride, value=upd.value) for upd in updates if upd.t % stride == 0]
-        if kept:
-            downsampled[key] = kept
-    return downsampled
-
-
-def _downsample_events(events: dict[str, list[Event]], stride: int) -> dict[str, list[Event]]:
-    """Downsample events by stride."""
-    downsampled: dict[str, list[Event]] = {}
-    for key, entries in events.items():
-        kept = [Event(t=evt.t // stride, payload=evt.payload) for evt in entries if evt.t % stride == 0]
-        if kept:
-            downsampled[key] = kept
-    return downsampled
 
 
 def _downsample_length(length: int, stride: int) -> int:
@@ -371,8 +349,6 @@ def _concat_nodes(nodes: Sequence[TraceNode], offsets: Sequence[int]) -> TraceNo
     merged = TraceNode()
     merged.meta_static = dict(base.meta_static)
     merged.data = _concat_data(nodes)
-    merged.meta_sparse = _merge_meta_sparse(nodes, offsets)
-    merged.events = _merge_events(nodes, offsets)
 
     child_names = set(base.children.keys())
     for name in child_names:
@@ -393,24 +369,4 @@ def _concat_data(nodes: Sequence[TraceNode]) -> dict[str, np.ndarray]:
         if any(key not in node.data for node in nodes):
             raise ValueError(f"Data key '{key}' missing in some traces")
         merged[key] = np.concatenate([node.data[key] for node in nodes], axis=0)
-    return merged
-
-
-def _merge_meta_sparse(nodes: Sequence[TraceNode], offsets: Sequence[int]) -> dict[str, list[MetaUpdate]]:
-    """Merge sparse metadata updates with offsets."""
-    merged: dict[str, list[MetaUpdate]] = {}
-    for node, offset in zip(nodes, offsets):
-        for key, updates in node.meta_sparse.items():
-            merged.setdefault(key, [])
-            merged[key].extend([MetaUpdate(t=upd.t + offset, value=upd.value) for upd in updates])
-    return merged
-
-
-def _merge_events(nodes: Sequence[TraceNode], offsets: Sequence[int]) -> dict[str, list[Event]]:
-    """Merge events with offsets."""
-    merged: dict[str, list[Event]] = {}
-    for node, offset in zip(nodes, offsets):
-        for key, entries in node.events.items():
-            merged.setdefault(key, [])
-            merged[key].extend([Event(t=evt.t + offset, payload=evt.payload) for evt in entries])
     return merged

@@ -1,7 +1,7 @@
 """Trace Tree implementation for batched simulation rollouts.
 
 This module provides a clean, minimal implementation of the Trace Tree
-Pattern with explicit handling of dense data, sparse metadata, and events.
+Pattern with explicit handling of dense data and static metadata.
 """
 
 from __future__ import annotations
@@ -13,49 +13,27 @@ from typing import Any, Iterable, Iterator, List, Optional
 import numpy as np
 
 
-@dataclass(frozen=True)
-class MetaUpdate:
-    """Time-stamped metadata update."""
-
-    t: int
-    value: Any
-
-
-@dataclass(frozen=True)
-class Event:
-    """Time-stamped event payload."""
-
-    t: int
-    payload: Any
-
-
 @dataclass
 class TraceConfig:
     """Configuration for trace construction and validation.
 
     Attributes:
         strict: Whether to raise errors on invariant violations.
-        allow_events: Whether to record events for irregular data.
-        allow_meta_sparse: Whether to promote changing metadata to sparse.
         global_paths: Paths treated as global (no batch axis enforced).
         rebase_time_on_slice: Whether to rebase time to zero on slices.
     """
 
     strict: bool = True
-    allow_events: bool = True
-    allow_meta_sparse: bool = True
     global_paths: set[str] = field(default_factory=set)
     rebase_time_on_slice: bool = True
 
 
 @dataclass
 class TraceNode:
-    """Node in a trace tree with dense data, metadata, and events."""
+    """Node in a trace tree with dense data and static metadata."""
 
     data: dict[str, np.ndarray] = field(default_factory=dict)
     meta_static: dict[str, Any] = field(default_factory=dict)
-    meta_sparse: dict[str, list[MetaUpdate]] = field(default_factory=dict)
-    events: dict[str, list[Event]] = field(default_factory=dict)
     children: dict[str, "TraceNode"] = field(default_factory=dict)
     _buffers: dict[str, list[np.ndarray]] = field(default_factory=dict, repr=False)
 
@@ -65,31 +43,6 @@ class TraceNode:
         if name not in self.children:
             self.children[name] = TraceNode()
         return self.children[name]
-
-    def record_event(self, key: str, t: int, payload: Any) -> None:
-        """Record a time-stamped event payload."""
-
-        self.events.setdefault(key, []).append(Event(t=t, payload=payload))
-
-    def record_meta(self, key: str, t: int, value: Any, *, allow_sparse: bool) -> None:
-        """Record metadata, promoting to sparse updates if the value changes."""
-
-        if key in self.meta_sparse:
-            updates = self.meta_sparse[key]
-            if updates[-1].value != value:
-                updates.append(MetaUpdate(t=t, value=value))
-            return
-
-        if key in self.meta_static:
-            if self.meta_static[key] != value:
-                if allow_sparse:
-                    old = self.meta_static.pop(key)
-                    self.meta_sparse[key] = [MetaUpdate(t=0, value=old), MetaUpdate(t=t, value=value)]
-                else:
-                    self.record_event(key, t, value)
-            return
-
-        self.meta_static[key] = value
 
     def append_data(self, key: str, value: np.ndarray) -> None:
         """Append a dense value to the buffer for a given key."""
@@ -117,8 +70,6 @@ class TraceNode:
             sliced.data[key] = arr[t0:t1]
 
         sliced.meta_static = dict(self.meta_static)
-        sliced.meta_sparse = _filter_meta_sparse(self.meta_sparse, t0, t1, rebase)
-        sliced.events = _filter_events(self.events, t0, t1, rebase)
 
         for name, child in self.children.items():
             sliced.children[name] = child.slice_time(t0, t1, rebase=rebase)
@@ -158,6 +109,84 @@ class TraceTree:
         sliced.batch_size = self.batch_size
         return sliced
 
+    def node(self, path: str) -> TraceNode:
+        """Return the TraceNode at the given slash-delimited path."""
+        return _get_node(self.root, path)
+
+    def get(self, path: str) -> np.ndarray:
+        """Return a dense array at a slash-delimited path.
+
+        Args:
+            path: Slash-delimited path to a dense array or indexed child.
+
+        Returns:
+            Dense NumPy array stored at the requested path.
+        """
+        node_path, key = _split_path(path)
+        node = _get_node(self.root, node_path)
+        return _resolve_dense_value(node, key, strict=self.config.strict)
+
+    def export_dense_tree(self) -> Any:
+        """Export dense trace data as a nested dict/list pytree."""
+        return _export_dense_node(self.root, strict=self.config.strict)
+
+    def export_meta_tree(self) -> dict[str, Any]:
+        """Export static metadata as a nested dict tree."""
+        return _export_meta_node(self.root, strict=self.config.strict)
+
+    def export(self, *, flatten: bool = False, sep: str = "/") -> Any:
+        """Export dense trace data, optionally flattening to a path map."""
+        dense = self.export_dense_tree()
+        if not flatten:
+            return dense
+        return flatten_pytree(dense, sep=sep)
+
+    def get_meta(self) -> dict[str, Any]:
+        """Return root metadata dictionary, if available."""
+        meta = self.root.meta_static.get("meta")
+        return dict(meta) if isinstance(meta, dict) else {}
+
+    def get_environments(self) -> list[Any]:
+        """Return environments stored in the trace metadata."""
+        envs = self.root.meta_static.get("environments")
+        return list(envs) if envs is not None else []
+
+    def get_visited(self) -> Any:
+        """Return visited masks stored in the trace metadata."""
+        return self.root.meta_static.get("visited")
+
+    def get_world(self, env_idx: int) -> Any:
+        """Return the World object for a selected environment index."""
+        envs = self.get_environments()
+        if not envs:
+            raise ValueError("TraceTree has no environments")
+        if not (0 <= env_idx < len(envs)):
+            raise IndexError(f"env_idx {env_idx} out of range [0, {len(envs)})")
+        return envs[env_idx]
+
+    def n_freq(self, base_path: str) -> int:
+        """Return number of indexed children at a multiscale path."""
+        node = self.node(base_path)
+        if _is_indexed_children(node.children):
+            return len(_sorted_indices(node.children.keys()))
+        if _is_indexed_data(node.data):
+            return len(_sorted_indices(node.data.keys()))
+        return 0
+
+    def validate_env_idx(self, env_idx: int) -> int:
+        """Validate and return environment index."""
+        batch_size = int(self.batch_size or 0)
+        if not (0 <= env_idx < batch_size):
+            raise IndexError(f"env_idx {env_idx} out of range [0, {batch_size})")
+        return env_idx
+
+    def validate_freq_idx(self, base_path: str, freq_idx: int) -> int:
+        """Validate and return frequency index."""
+        n_freq = self.n_freq(base_path)
+        if not (0 <= freq_idx < n_freq):
+            raise IndexError(f"freq_idx {freq_idx} out of range [0, {n_freq})")
+        return freq_idx
+
 
 def _append_state(*, node: TraceNode, state: Any, t: int, path: tuple[str, ...], tree: TraceTree) -> None:
     """Append a state tree into the trace tree (recursive)."""
@@ -186,9 +215,8 @@ def _append_value(*, node: TraceNode, name: str, value: Any, t: int, path: tuple
         container = node.child(name)
         container.meta_static.setdefault("length", len(value))
         for idx, elem in enumerate(value):
-            idx_node = container.child(str(idx))
             arr = _to_numeric_array(elem)
-            _append_dense(node=idx_node, key="value", arr=arr, t=t, path=current_path + (str(idx), "value"), tree=tree)
+            _append_dense(node=container, key=str(idx), arr=arr, t=t, path=current_path + (str(idx),), tree=tree)
         return
 
     arr = _to_numeric_array(value)
@@ -196,14 +224,15 @@ def _append_value(*, node: TraceNode, name: str, value: Any, t: int, path: tuple
         _append_dense(node=node, key=name, arr=arr, t=t, path=current_path + (name,), tree=tree)
         return
 
-    node.record_meta(key=name, t=t, value=value, allow_sparse=tree.config.allow_meta_sparse)
+    _record_static_meta(node, name, value, strict=tree.config.strict)
 
 
 def _append_dense(*, node: TraceNode, key: str, arr: np.ndarray, t: int, path: tuple[str, ...], tree: TraceTree) -> None:
     """Append a dense numeric array with validation."""
 
     if arr.dtype == object:
-        _handle_irregular(node=node, key=key, t=t, value=arr, tree=tree)
+        if tree.config.strict:
+            raise ValueError(f"Irregular value for key {key!r} at t={t}")
         return
 
     _validate_batch(arr, path=path, tree=tree)
@@ -239,16 +268,6 @@ def _validate_shape(node: TraceNode, key: str, arr: np.ndarray, *, path: tuple[s
     if prev.shape != arr.shape or prev.dtype != arr.dtype:
         full_path = "/".join(path)
         _raise_or_event(tree, ValueError("Shape/dtype mismatch at " f"{full_path}: expected {prev.shape}/{prev.dtype}, " f"got {arr.shape}/{arr.dtype}"))
-
-
-def _handle_irregular(*, node: TraceNode, key: str, t: int, value: Any, tree: TraceTree) -> None:
-    """Handle irregular data by recording events or raising errors."""
-
-    if tree.config.allow_events:
-        node.record_event(key, t, value)
-        return
-
-    raise ValueError(f"Irregular value for key {key!r} at t={t}")
 
 
 def _raise_or_event(tree: TraceTree, exc: Exception) -> None:
@@ -303,30 +322,152 @@ def _is_dataclass_instance(value: Any) -> bool:
     return is_dataclass(value) and not isinstance(value, type)
 
 
-def _filter_events(events: dict[str, list[Event]], t0: int, t1: int, rebase: bool) -> dict[str, list[Event]]:
-    """Filter events by time range and optionally rebase timestamps."""
-
-    filtered: dict[str, list[Event]] = {}
-    for key, entries in events.items():
-        subset = [e for e in entries if t0 <= e.t < t1]
-        if rebase:
-            subset = [Event(t=e.t - t0, payload=e.payload) for e in subset]
-        if subset:
-            filtered[key] = subset
-    return filtered
+def _iter_path_parts(path: str) -> Iterable[str]:
+    """Yield path parts for non-empty segments."""
+    for part in path.split("/"):
+        if part:
+            yield part
 
 
-def _filter_meta_sparse(updates: dict[str, list[MetaUpdate]], t0: int, t1: int, rebase: bool) -> dict[str, list[MetaUpdate]]:
-    """Filter sparse metadata updates by time range."""
+def _split_path(path: str) -> tuple[str, str]:
+    """Split a path into node path and final key."""
+    parts = list(_iter_path_parts(path))
+    if len(parts) < 2:
+        raise ValueError("Path must include a node and data key")
+    node_path = "/".join(parts[:-1])
+    return node_path, parts[-1]
 
-    filtered: dict[str, list[MetaUpdate]] = {}
-    for key, entries in updates.items():
-        subset = [u for u in entries if t0 <= u.t < t1]
-        if rebase:
-            subset = [MetaUpdate(t=u.t - t0, value=u.value) for u in subset]
-        if subset:
-            filtered[key] = subset
-    return filtered
+
+def _get_node(root: TraceNode, path: str) -> TraceNode:
+    """Return the TraceNode for a slash-delimited path."""
+    current = root
+    for part in _iter_path_parts(path):
+        if part not in current.children:
+            raise ValueError(f"Trace path '{path}' is missing '{part}'")
+        current = current.children[part]
+    return current
+
+
+def _resolve_dense_value(node: TraceNode, key: str, *, strict: bool) -> np.ndarray:
+    """Resolve a dense value from a node by key."""
+    has_child = key in node.children
+    has_data = key in node.data
+    if has_child and has_data and strict:
+        raise ValueError(f"Dense key '{key}' conflicts with child node")
+    if has_data:
+        return node.data[key]
+    if has_child:
+        raise ValueError(f"No dense value at path ending '{key}'")
+    raise ValueError(f"Dense key '{key}' missing at node")
+
+
+def _export_dense_node(node: TraceNode, *, strict: bool) -> Any:
+    """Export dense data for a node into a nested dict/list pytree."""
+    _validate_child_data_conflicts(node, strict=strict)
+    if _is_indexed_data(node.data) and not node.children:
+        indices = _sorted_indices(node.data.keys())
+        if strict and indices != list(range(len(indices))):
+            raise ValueError("Indexed data keys missing sequential indices")
+        return [node.data[str(idx)] for idx in indices]
+    if _is_indexed_children(node.children) and not node.data:
+        indices = _sorted_indices(node.children.keys())
+        if strict and indices != list(range(len(indices))):
+            raise ValueError("Indexed children missing sequential indices")
+        return [_export_dense_child(node.children[str(idx)], strict=strict) for idx in indices]
+
+    exported: dict[str, Any] = {key: value for key, value in node.data.items()}
+    for name, child in node.children.items():
+        if name in exported:
+            if strict:
+                raise ValueError(f"Child/data conflict at key '{name}'")
+            continue
+        exported[name] = _export_dense_child(child, strict=strict)
+    return exported
+
+
+def _export_dense_child(node: TraceNode, *, strict: bool) -> Any:
+    """Export a child node."""
+    return _export_dense_node(node, strict=strict)
+
+
+def _export_meta_node(node: TraceNode, *, strict: bool) -> dict[str, Any]:
+    """Export static metadata into a nested dict tree with __meta__ keys."""
+    _validate_child_data_conflicts(node, strict=strict)
+    exported: dict[str, Any] = {}
+    if node.meta_static:
+        exported["__meta__"] = dict(node.meta_static)
+    for name, child in node.children.items():
+        if name in node.data:
+            if strict:
+                raise ValueError(f"Child/data conflict at key '{name}'")
+            continue
+        exported[name] = _export_meta_node(child, strict=strict)
+    return exported
+
+
+def flatten_pytree(tree: Any, *, sep: str = "/") -> dict[str, np.ndarray]:
+    """Flatten a nested dict/list pytree into a path map."""
+    flattened: dict[str, np.ndarray] = {}
+
+    def _walk(value: Any, prefix: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "__meta__":
+                    continue
+                next_prefix = f"{prefix}{sep}{key}" if prefix else key
+                _walk(child, next_prefix)
+            return
+        if isinstance(value, list):
+            for idx, child in enumerate(value):
+                next_prefix = f"{prefix}{sep}{idx}" if prefix else str(idx)
+                _walk(child, next_prefix)
+            return
+        flattened[prefix] = value
+
+    _walk(tree, "")
+    return flattened
+
+
+def _is_indexed_children(children: dict[str, TraceNode]) -> bool:
+    """Return True if all children keys are numeric strings."""
+    if not children:
+        return False
+    return all(key.isdigit() for key in children.keys())
+
+
+def _is_indexed_data(data: dict[str, np.ndarray]) -> bool:
+    """Return True if all data keys are numeric strings."""
+    if not data:
+        return False
+    return all(key.isdigit() for key in data.keys())
+
+
+def _sorted_indices(keys: Iterable[str]) -> list[int]:
+    """Return numeric indices sorted ascending."""
+    indices = []
+    for key in keys:
+        try:
+            indices.append(int(key))
+        except ValueError:
+            continue
+    return sorted(indices)
+
+
+def _validate_child_data_conflicts(node: TraceNode, *, strict: bool) -> None:
+    """Validate that no child name conflicts with dense data keys."""
+    conflicts = set(node.children.keys()) & set(node.data.keys())
+    if conflicts and strict:
+        joined = ", ".join(sorted(conflicts))
+        raise ValueError(f"Child/data conflict at keys: {joined}")
+
+
+def _record_static_meta(node: TraceNode, key: str, value: Any, *, strict: bool) -> None:
+    """Record static metadata, rejecting changes in strict mode."""
+    if key in node.meta_static:
+        if node.meta_static[key] != value and strict:
+            raise ValueError(f"Metadata value changed for key '{key}'")
+        return
+    node.meta_static[key] = value
 
 
 def iter_nodes(root: TraceNode) -> Iterator[TraceNode]:

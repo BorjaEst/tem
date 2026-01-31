@@ -5,7 +5,6 @@ from __future__ import annotations
 import matplotlib.figure as mpl_figure
 from matplotlib.axes import Axes
 
-from torch_tem.diagnostics import trace_access
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.colorbars import colorbar
 from torch_tem.figures.figures.templates import SpatialMatrix4Template
@@ -39,11 +38,11 @@ class PlaceCellsAutocorr(SpatialMatrix4Template):
             ctx: Figure context.
         """
         super().__init__(trace, ctx)
-        self.env_idx = trace_access.validate_env_idx(self.trace, self.ctx.env_idx)
-        self.freq_idx = trace_access.validate_freq_idx(self.trace, "output/inference/p_inf", self.ctx.freq_idx)
-        self.world = trace_access.get_world(self.trace, self.env_idx)
-        self.location_ids = trace_access.get_location_ids(self.trace)[:, self.env_idx]
-        self.cells = trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
+        self.env_idx = self.trace.validate_env_idx(self.ctx.env_idx)
+        self.freq_idx = self.trace.validate_freq_idx("state/hpc/location/mean", self.ctx.freq_idx)
+        self.world = self.trace.get_world(self.env_idx)
+        self.location_ids = self.trace.get("world_step/location_ids")[:, self.env_idx]
+        self.cells = self.trace.get(f"state/hpc/location/mean/{self.freq_idx}")[:, self.env_idx, :]
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.

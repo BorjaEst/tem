@@ -13,7 +13,6 @@ from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells, plot_sp
 from torch_tem.figures.plots.ratemap import plot_rate_map_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
-from torch_tem.figures.utils.scales import build_shared_minmax
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:

@@ -192,7 +192,8 @@ class FiguresCallback(pl.Callback):
             aggregate_trace = self._build_rollout_trace_from_batches(trainer, datamodule, model, self._aggregate_batches, split_name)
 
         # Generate and persist each figure
-        context = self.figure_context(trainer, split_name)
+        extras = self._build_context_extras(model)
+        context = self.figure_context(trainer, split_name, extras=extras)
 
         aggregate_names = self._aggregate_figure_names(self.settings.figures)
         episode_names = [name for name in self.settings.figures if name not in aggregate_names]
@@ -315,14 +316,21 @@ class FiguresCallback(pl.Callback):
             spec = REGISTRY.get(figure_name)
             self.generate_figure(trainer, trace, context, spec)
 
-    def figure_context(self, trainer: Trainer, split_name: Optional[str]) -> FigureContext:
+    def figure_context(self, trainer: Trainer, split_name: Optional[str], *, extras: Optional[dict[str, Any]] = None) -> FigureContext:
         """Build FigureContext from settings and trainer state."""
         return FigureContext(
             env_idx=self.settings.env_idx,
             freq_idx=self.settings.freq_idx,
             global_step=trainer.global_step,
             split_name=split_name,
+            extras=extras or {},
         )
+
+    def _build_context_extras(self, model: Any) -> dict[str, Any]:
+        extras = {}
+        if lec := getattr(model, "lec", None):
+            extras["lec"] = lec
+        return extras
 
     def generate_figure(self, trainer: Trainer, trace: Any, ctx: FigureContext, spec: Any) -> None:
         fig = spec.plot(trace, ctx)  # Generate figure

@@ -104,3 +104,43 @@ class SpatialMatrix4Template(BaseFigureTemplate):
     @abstractmethod
     def matrix_d(self, ax: Axes) -> None:
         raise NotImplementedError
+
+
+class LECOverviewTemplate(BaseFigureTemplate):
+    BASE_FIGSIZE: float = 1.00
+    HEIGHT_FRAC: float = 0.45
+
+    def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
+        gs = gridspec.GridSpec(2, 3, height_ratios=[1, 1], width_ratios=[1, 1, 1], figure=fig)
+        return {
+            "trajectory": fig.add_subplot(gs[0, 0]),
+            "features": fig.add_subplot(gs[0, 1]),
+            "filtered": fig.add_subplot(gs[0, 2]),
+            "cells": fig.add_subplot(gs[1, 0]),
+            "raster": fig.add_subplot(gs[1, 1]),
+            "params": fig.add_subplot(gs[1, 2]),
+        }
+
+    @abstractmethod
+    def trajectory(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def features(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def filtered(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def cells(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def raster(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def params(self, ax: Axes) -> None:
+        raise NotImplementedError

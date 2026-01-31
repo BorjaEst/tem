@@ -162,6 +162,7 @@ class TEMOutput:
 
     inference: TEMInference
     generative: TEMGenerative
+    features: torch.Tensor
     reconstruction: TEMReconstruction
 
 
@@ -289,7 +290,7 @@ class Model(nn.Module):
 
         features = self.autoencoder.encode(observation)  # Encode observation to compressed format
         inference, generative, state = self.step(features, locations, actions, state)
-        output = self.compute_output(inference, generative)
+        output = self.compute_output(features, inference, generative)
 
         # Build full output, state and return
         return output, state
@@ -372,10 +373,11 @@ class Model(nn.Module):
         state.hpc = self.hpc.update(p_inf, p_gen_gi, p_xi, state.hpc)
         return inference, generative, TEMState(state.lec, state.mec, state.hpc)
 
-    def compute_output(self, inference: TEMInference, generative: TEMGenerative) -> TEMOutput:
+    def compute_output(self, features: Tensor, inference: TEMInference, generative: TEMGenerative) -> TEMOutput:
         """Decode observation predictions from inferred/generated grounded codes.
 
         Args:
+            features: LEC features for the current timestep.
             inference: Inference-branch outputs.
             generative: Generative-branch outputs.
 
@@ -402,7 +404,7 @@ class Model(nn.Module):
 
         # Return all generated observations and their corresponding logits
         reconstructions = TEMReconstruction(y_p_inf, y_gen_gi, y_gen_gg)
-        return TEMOutput(inference, generative, reconstructions)
+        return TEMOutput(inference, generative, features, reconstructions)
 
 
 @dataclass

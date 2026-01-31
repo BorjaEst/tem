@@ -29,6 +29,9 @@ class FigureContext:
     global_step: Optional[int] = None
     split_name: Optional[str] = None
 
+    # Optional extra metadata for figures (e.g., model parameters)
+    extras: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class FigureSpec:

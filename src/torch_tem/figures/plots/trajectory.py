@@ -14,7 +14,7 @@ def plot_time_colored_trajectory(
     world: object,
     location_ids: list[int],
     *,
-    cmap: str = "viridis",
+    cmap: str = "plasma",
     show_endpoints: bool = True,
     background_shape: str = "square",
     line_width: float = 1.5,

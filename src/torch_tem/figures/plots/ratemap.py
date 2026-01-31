@@ -15,7 +15,7 @@ def plot_rate_map_cell(
     vmin: float | None = None,
     vmax: float | None = None,
     shape: str = "square",
-    location_cm: str = "winter_r",
+    location_cm: str = "copper_r",
 ) -> plt.Axes:
     """Plot a single cell's rate map on an existing axes.
 

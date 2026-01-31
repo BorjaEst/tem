@@ -49,14 +49,10 @@ class RolloutOverview(OverviewTemplate):
 
         self.memory_matrix = trace_access.get_hpc_memory(self.trace, memory_idx=0)[0, self.env_idx]
         self.lec_cells = trace_access.get_lec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
-        self.lec_norm = build_shared_norm([self.lec_cells])
 
         self.map_cell_idx = 0
         self.mec_cells = abs(trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :])
         self.hpc_cells = abs(trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :])
-
-        n_locations = len(getattr(self.world, "locations", []))
-        self.map_minmax = build_shared_map_range([self.mec_cells, self.hpc_cells], self.location_ids, n_locations, self.map_cell_idx)
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.
@@ -64,7 +60,7 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_time_colored_trajectory(ax, self.world, self.location_ids.tolist(), cmap="plasma")
+        plot_time_colored_trajectory(ax, self.world, self.location_ids.tolist())
         ax.set_title("Trajectory colored by time")
 
     @colorbar(group="ratemaps", label="Firing rate")
@@ -74,7 +70,7 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        options = {"vmin": self.map_minmax[0], "vmax": self.map_minmax[1]}
+        options = {"vmin": 0.0, "vmax": 1.0}
         plot_rate_map_cell(ax, self.world, self.mec_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), **options)
         ax.set_title(f"MEC cells f{self.freq_idx} (cell {self.map_cell_idx})")
 
@@ -85,7 +81,7 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        options = {"vmin": self.map_minmax[0], "vmax": self.map_minmax[1]}
+        options = {"vmin": 0.0, "vmax": 1.0}
         plot_rate_map_cell(ax, self.world, self.hpc_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), **options)
         ax.set_title(f"HPC cells f{self.freq_idx} (cell {self.map_cell_idx})")
 
@@ -97,7 +93,7 @@ class RolloutOverview(OverviewTemplate):
         """
         vmax = float(np.max(np.abs(self.memory_matrix))) if np.isfinite(self.memory_matrix).any() else 1.0
         vmax = max(vmax, 1e-6)
-        ax.matshow(self.memory_matrix, cmap="bwr", vmin=-vmax, vmax=vmax)
+        ax.matshow(self.memory_matrix, cmap="coolwarm", vmin=-vmax, vmax=vmax)
         ax.set_title("HPC memory (hierarchical)")
         ax.set_xticks([])
         ax.set_yticks([])
@@ -110,6 +106,7 @@ class RolloutOverview(OverviewTemplate):
             ax: Axes to draw into.
         """
         ax.set_axis_off()
-        raster_ax = ax.inset_axes([0.040, 0.070, 0.950, 0.870])
-        plot_rasterplot(raster_ax, observations=self.observations, activations=[self.lec_cells], activation_names=[f"LEC cells f{self.freq_idx}"], act_norm=self.lec_norm)
+        raster_ax = ax.inset_axes([0.0, 0.0, 1.0, 1.0])
+        options = {"vmin": 0.0, "vmax": 1.0, "activation_names": [f"LEC cells f{self.freq_idx}"]}
+        plot_rasterplot(raster_ax, observations=self.observations, activations=[self.lec_cells], **options)
         raster_ax.set_title(f"Observations and LEC cell f{self.freq_idx} activations over time")

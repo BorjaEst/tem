@@ -107,22 +107,6 @@ def _validate_time_lengths(n_steps: int, activations: Sequence[np.ndarray]) -> N
             raise ValueError("activations must share the same time length as observations")
 
 
-def _build_activation_norm(activations: Sequence[np.ndarray]) -> Normalize:
-    """Compute a shared Normalize for activation heatmaps."""
-    values: list[np.ndarray] = [act.ravel() for act in activations if act.size]
-    if not values:
-        return Normalize(vmin=0.0, vmax=1.0)
-    combined = np.concatenate(values)
-    finite_mask = np.isfinite(combined)
-    if not finite_mask.any():
-        return Normalize(vmin=0.0, vmax=1.0)
-    vmin = float(np.min(combined[finite_mask]))
-    vmax = float(np.max(combined[finite_mask]))
-    if vmax <= vmin:
-        vmax = vmin + 1e-6
-    return Normalize(vmin=vmin, vmax=vmax)
-
-
 def _create_panel_axes(*, ax: Axes, n_activation: int, obs_height: float, panel_pad: float) -> list[Axes]:
     """Create inset axes for observation and activation panels."""
     n_panels = 1 + n_activation

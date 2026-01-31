@@ -58,14 +58,10 @@ class RolloutOverview(SpatialMatrix4Template):
         plot_time_colored_trajectory(ax, self.world, self.location_ids.tolist(), cmap="plasma")
         ax.set_title("Trajectory colored by time")
 
-    def matrices_labels(self, ax: Axes) -> None:
-        """Plot radial autocorrelation matrix labels for all cells.
-
-        Args:
-            ax: Axes to draw into.
-        """
-        plot_radial_autocorr_cells(ax, self.world, self.cells, self.location_ids, range(4))
-        ax.set_title("Radial autocorr profiles")
+    def _plot_rate_map(self, ax: Axes, cell_idx: int) -> None:
+        options = {"min_val": self.map_minmax[0], "max_val": self.map_minmax[1]}
+        plot_rate_map_cell(ax, self.world, self.cells, cell_idx, location_ids=self.location_ids.tolist(), **options)
+        ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} rate map")
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_a(self, ax: Axes) -> None:
@@ -76,15 +72,6 @@ class RolloutOverview(SpatialMatrix4Template):
         """
         self._plot_rate_map(ax, 0)
 
-    @colorbar(group="autocorr", label="Autocorr")
-    def matrix_a(self, ax: Axes) -> None:
-        """Plot a spatial autocorrelogram for cell 0.
-
-        Args:
-            ax: Axes to draw into.
-        """
-        self._plot_autocorr(ax, 0)
-
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_b(self, ax: Axes) -> None:
         """Plot a MEC rate map for cell 1.
@@ -93,15 +80,6 @@ class RolloutOverview(SpatialMatrix4Template):
             ax: Axes to draw into.
         """
         self._plot_rate_map(ax, 1)
-
-    @colorbar(group="autocorr", label="Autocorr")
-    def matrix_b(self, ax: Axes) -> None:
-        """Plot a spatial autocorrelogram for cell 1.
-
-        Args:
-            ax: Axes to draw into.
-        """
-        self._plot_autocorr(ax, 1)
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_c(self, ax: Axes) -> None:
@@ -112,15 +90,6 @@ class RolloutOverview(SpatialMatrix4Template):
         """
         self._plot_rate_map(ax, 2)
 
-    @colorbar(group="autocorr", label="Autocorr")
-    def matrix_c(self, ax: Axes) -> None:
-        """Plot a spatial autocorrelogram for cell 2.
-
-        Args:
-            ax: Axes to draw into.
-        """
-        self._plot_autocorr(ax, 2)
-
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_d(self, ax: Axes) -> None:
         """Plot a MEC rate map for cell 3.
@@ -130,6 +99,47 @@ class RolloutOverview(SpatialMatrix4Template):
         """
         self._plot_rate_map(ax, 3)
 
+    def matrices_labels(self, ax: Axes) -> None:
+        """Plot radial autocorrelation matrix labels for all cells.
+
+        Args:
+            ax: Axes to draw into.
+        """
+        plot_radial_autocorr_cells(ax, self.world, self.cells, self.location_ids)
+        ax.set_title("Radial autocorr profiles")
+
+    def _plot_autocorr(self, ax: Axes, cell_idx: int) -> None:
+        options = {"vmin": self.corr_minmax[0], "vmax": self.corr_minmax[1]}
+        plot_spatial_autocorrelogram(ax, self.world, self.cells, self.location_ids, cell_idx, **options)
+        ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} autocorr")
+
+    @colorbar(group="autocorr", label="Autocorr")
+    def matrix_a(self, ax: Axes) -> None:
+        """Plot a spatial autocorrelogram for cell 0.
+
+        Args:
+            ax: Axes to draw into.
+        """
+        self._plot_autocorr(ax, 0)
+
+    @colorbar(group="autocorr", label="Autocorr")
+    def matrix_b(self, ax: Axes) -> None:
+        """Plot a spatial autocorrelogram for cell 1.
+
+        Args:
+            ax: Axes to draw into.
+        """
+        self._plot_autocorr(ax, 1)
+
+    @colorbar(group="autocorr", label="Autocorr")
+    def matrix_c(self, ax: Axes) -> None:
+        """Plot a spatial autocorrelogram for cell 2.
+
+        Args:
+            ax: Axes to draw into.
+        """
+        self._plot_autocorr(ax, 2)
+
     @colorbar(group="autocorr", label="Autocorr")
     def matrix_d(self, ax: Axes) -> None:
         """Plot a spatial autocorrelogram for cell 3.
@@ -138,13 +148,3 @@ class RolloutOverview(SpatialMatrix4Template):
             ax: Axes to draw into.
         """
         self._plot_autocorr(ax, 3)
-
-    def _plot_rate_map(self, ax: Axes, cell_idx: int) -> None:
-        options = {"min_val": self.map_minmax[0], "max_val": self.map_minmax[1]}
-        plot_rate_map_cell(ax, self.world, self.cells, cell_idx, location_ids=self.location_ids.tolist(), **options)
-        ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} rate map")
-
-    def _plot_autocorr(self, ax: Axes, cell_idx: int) -> None:
-        options = {"vmin": self.corr_minmax[0], "vmax": self.corr_minmax[1]}
-        plot_spatial_autocorrelogram(ax, self.world, self.cells, self.location_ids, cell_idx, **options)
-        ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} autocorr")

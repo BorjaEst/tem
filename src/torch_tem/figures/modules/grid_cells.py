@@ -30,6 +30,9 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
 class GridCellsAutocorr(SpatialMatrix4Template):
     """Encapsulate state and rendering logic for the grid-cell overview."""
 
+    COLORBAR_VMAX = 1.00
+    CELLS = {"a": 0, "b": 1, "c": 2, "d": 3}
+
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         """Initialize the figure state from a trace and rendering context.
 
@@ -54,7 +57,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         ax.set_title("Trajectory colored by time")
 
     def _plot_rate_map(self, ax: Axes, cell_idx: int) -> None:
-        options = {"vmin": 0.0, "vmax": 1.0}
+        options = {"vmin": 0.0, "vmax": self.COLORBAR_VMAX}
         plot_rate_map_cell(ax, self.world, self.cells, cell_idx, location_ids=self.location_ids.tolist(), **options)
         ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} rate map")
 
@@ -65,7 +68,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         Args:
             ax: Axes to draw into.
         """
-        self._plot_rate_map(ax, 0)
+        self._plot_rate_map(ax, self.CELLS["a"])
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_b(self, ax: Axes) -> None:
@@ -74,7 +77,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         Args:
             ax: Axes to draw into.
         """
-        self._plot_rate_map(ax, 1)
+        self._plot_rate_map(ax, self.CELLS["b"])
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_c(self, ax: Axes) -> None:
@@ -83,7 +86,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         Args:
             ax: Axes to draw into.
         """
-        self._plot_rate_map(ax, 2)
+        self._plot_rate_map(ax, self.CELLS["c"])
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_d(self, ax: Axes) -> None:
@@ -92,7 +95,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         Args:
             ax: Axes to draw into.
         """
-        self._plot_rate_map(ax, 3)
+        self._plot_rate_map(ax, self.CELLS["d"])
 
     def matrices_labels(self, ax: Axes) -> None:
         """Plot radial autocorrelation matrix labels for all cells.
@@ -104,7 +107,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         ax.set_title("Mean radial autocorr (±1 std)")
 
     def _plot_autocorr(self, ax: Axes, cell_idx: int) -> None:
-        options = {"vmin": -1.0, "vmax": 1.0}
+        options = {"vmin": -self.COLORBAR_VMAX, "vmax": self.COLORBAR_VMAX}
         plot_spatial_autocorrelogram(ax, self.world, self.cells, self.location_ids, cell_idx, **options)
         ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} autocorr")
 
@@ -115,7 +118,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         Args:
             ax: Axes to draw into.
         """
-        self._plot_autocorr(ax, 0)
+        self._plot_autocorr(ax, self.CELLS["a"])
 
     @colorbar(group="autocorr", label="Autocorr")
     def matrix_b(self, ax: Axes) -> None:
@@ -124,7 +127,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         Args:
             ax: Axes to draw into.
         """
-        self._plot_autocorr(ax, 1)
+        self._plot_autocorr(ax, self.CELLS["b"])
 
     @colorbar(group="autocorr", label="Autocorr")
     def matrix_c(self, ax: Axes) -> None:
@@ -133,7 +136,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         Args:
             ax: Axes to draw into.
         """
-        self._plot_autocorr(ax, 2)
+        self._plot_autocorr(ax, self.CELLS["c"])
 
     @colorbar(group="autocorr", label="Autocorr")
     def matrix_d(self, ax: Axes) -> None:
@@ -142,4 +145,4 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         Args:
             ax: Axes to draw into.
         """
-        self._plot_autocorr(ax, 3)
+        self._plot_autocorr(ax, self.CELLS["d"])

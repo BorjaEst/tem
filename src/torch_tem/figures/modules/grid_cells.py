@@ -106,7 +106,7 @@ class RolloutOverview(SpatialMatrix4Template):
             ax: Axes to draw into.
         """
         plot_radial_autocorr_cells(ax, self.world, self.cells, self.location_ids)
-        ax.set_title("Radial autocorr profiles")
+        ax.set_title("Mean radial autocorr (±1 std)")
 
     def _plot_autocorr(self, ax: Axes, cell_idx: int) -> None:
         options = {"vmin": self.corr_minmax[0], "vmax": self.corr_minmax[1]}

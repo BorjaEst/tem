@@ -1,4 +1,4 @@
-"""Grid-cell diagnostic figure with spatial maps and autocorrelograms."""
+"""Place-cell diagnostic figure with spatial maps and autocorrelograms."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from torch_tem.figures.registry import FigureContext
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
-    """Plot a 2x5 MEC grid-cell overview for a single frequency module.
+    """Plot a 2x5 HPC place-cell overview for a single frequency module.
 
     Args:
         trace: TraceTree with rollout data.
@@ -25,11 +25,11 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
     Returns:
         Matplotlib Figure instance.
     """
-    return GridCellsAutocorr(trace, ctx).plot()
+    return PlaceCellsAutocorr(trace, ctx).plot()
 
 
-class GridCellsAutocorr(SpatialMatrix4Template):
-    """Encapsulate state and rendering logic for the grid-cell overview."""
+class PlaceCellsAutocorr(SpatialMatrix4Template):
+    """Encapsulate state and rendering logic for the place-cell overview."""
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         """Initialize the figure state from a trace and rendering context.
@@ -40,10 +40,10 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         """
         super().__init__(trace, ctx)
         self.env_idx = trace_access.validate_env_idx(self.trace, self.ctx.env_idx)
-        self.freq_idx = trace_access.validate_freq_idx(self.trace, "output/inference/g_inf", self.ctx.freq_idx)
+        self.freq_idx = trace_access.validate_freq_idx(self.trace, "output/inference/p_inf", self.ctx.freq_idx)
         self.world = trace_access.get_world(self.trace, self.env_idx)
         self.location_ids = trace_access.get_location_ids(self.trace)[:, self.env_idx]
-        self.cells = trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
+        self.cells = trace_access.get_hpc_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.
@@ -57,11 +57,11 @@ class GridCellsAutocorr(SpatialMatrix4Template):
     def _plot_rate_map(self, ax: Axes, cell_idx: int) -> None:
         options = {"vmin": 0.0, "vmax": 1.0}
         plot_rate_map_cell(ax, self.world, self.cells, cell_idx, location_ids=self.location_ids.tolist(), **options)
-        ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} rate map")
+        ax.set_title(f"HPC f{self.freq_idx} cell {cell_idx} rate map")
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_a(self, ax: Axes) -> None:
-        """Plot a MEC rate map for cell 0.
+        """Plot a HPC rate map for cell 0.
 
         Args:
             ax: Axes to draw into.
@@ -70,7 +70,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_b(self, ax: Axes) -> None:
-        """Plot a MEC rate map for cell 1.
+        """Plot a HPC rate map for cell 1.
 
         Args:
             ax: Axes to draw into.
@@ -79,7 +79,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_c(self, ax: Axes) -> None:
-        """Plot a MEC rate map for cell 2.
+        """Plot a HPC rate map for cell 2.
 
         Args:
             ax: Axes to draw into.
@@ -88,7 +88,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
 
     @colorbar(group="ratemaps", label="Firing rate")
     def spatial_map_d(self, ax: Axes) -> None:
-        """Plot a MEC rate map for cell 3.
+        """Plot a HPC rate map for cell 3.
 
         Args:
             ax: Axes to draw into.
@@ -107,7 +107,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
     def _plot_autocorr(self, ax: Axes, cell_idx: int) -> None:
         options = {"vmin": -1.0, "vmax": 1.0}
         plot_spatial_autocorrelogram(ax, self.world, self.cells, self.location_ids, cell_idx, **options)
-        ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} autocorr")
+        ax.set_title(f"HPC f{self.freq_idx} cell {cell_idx} autocorr")
 
     @colorbar(group="autocorr", label="Autocorr")
     def matrix_a(self, ax: Axes) -> None:

@@ -106,41 +106,21 @@ class SpatialMatrix4Template(BaseFigureTemplate):
         raise NotImplementedError
 
 
-class LECOverviewTemplate(BaseFigureTemplate):
-    BASE_FIGSIZE: float = 1.00
-    HEIGHT_FRAC: float = 0.45
+class RasterX2Template(BaseFigureTemplate):
+    BASE_FIGSIZE: float = 1.40
+    HEIGHT_FRAC: float = 0.35
 
     def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
-        gs = gridspec.GridSpec(2, 3, height_ratios=[1, 1], width_ratios=[1, 1, 1], figure=fig)
+        gs = gridspec.GridSpec(2, 1, height_ratios=[3, 2], width_ratios=[1], figure=fig)
         return {
-            "trajectory": fig.add_subplot(gs[0, 0]),
-            "features": fig.add_subplot(gs[0, 1]),
-            "filtered": fig.add_subplot(gs[0, 2]),
-            "cells": fig.add_subplot(gs[1, 0]),
-            "raster": fig.add_subplot(gs[1, 1]),
-            "params": fig.add_subplot(gs[1, 2]),
+            "raster_1": fig.add_subplot(gs[0, 0]),
+            "raster_2": fig.add_subplot(gs[1, 0]),
         }
 
     @abstractmethod
-    def trajectory(self, ax: Axes) -> None:
+    def raster_1(self, ax: Axes) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def features(self, ax: Axes) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def filtered(self, ax: Axes) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def cells(self, ax: Axes) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def raster(self, ax: Axes) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def params(self, ax: Axes) -> None:
+    def raster_2(self, ax: Axes) -> None:
         raise NotImplementedError

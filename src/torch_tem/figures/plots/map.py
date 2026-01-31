@@ -16,8 +16,8 @@ def plot_map(
     environment,
     values: NDArray,
     ax: Optional[plt.Axes] = None,
-    min_val: Optional[float] = None,
-    max_val: Optional[float] = None,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
     num_cols: int = 100,
     location_cm: str = "viridis",
     action_cm: str = "Pastel1",
@@ -34,8 +34,8 @@ def plot_map(
         environment: Environment object with .locations list and .n_locations, .n_actions.
         values: Per-location scalar values (shape: n_locations,).
         ax: Axes to draw on. If None, initializes new axes.
-        min_val: Minimum value for colormap normalization (None = auto from values).
-        max_val: Maximum value for colormap normalization (None = auto from values).
+        vmin: Minimum value for colormap normalization (None = auto from values).
+        vmax: Maximum value for colormap normalization (None = auto from values).
         num_cols: Number of discrete colors in the colormap.
         location_cm: Colormap name for location coloring.
         action_cm: Colormap name for action arrows.
@@ -50,8 +50,8 @@ def plot_map(
     has_finite = values.size > 0 and np.isfinite(values).any()
 
     # Handle NaN values by using nanmin/nanmax when possible
-    min_val = (np.nanmin(values) if has_finite else 0.0) if min_val is None else min_val
-    max_val = (np.nanmax(values) if has_finite else 1.0) if max_val is None else max_val
+    vmin = (np.nanmin(values) if has_finite else 0.0) if vmin is None else vmin
+    vmax = (np.nanmax(values) if has_finite else 1.0) if vmax is None else vmax
 
     location_cm = cm.get_cmap(location_cm, num_cols)
     action_cm = cm.get_cmap(action_cm, max(getattr(environment, "n_actions", 0), 1))
@@ -61,8 +61,8 @@ def plot_map(
         plotvals = np.zeros(values.shape)
         nan_mask = np.zeros(values.shape, dtype=bool)
     else:
-        if max_val != min_val:
-            plotvals = np.floor((values - min_val) / (max_val - min_val) * num_cols)
+        if vmax != vmin:
+            plotvals = np.floor((values - vmin) / (vmax - vmin) * num_cols)
         else:
             plotvals = np.zeros(values.shape)
 
@@ -78,7 +78,7 @@ def plot_map(
 
     # Store a mappable for colorbar grouping when using patch-based maps.
     ax._tem_colorbar_mappable = cm.ScalarMappable(
-        norm=Normalize(vmin=min_val, vmax=max_val),
+        norm=Normalize(vmin=vmin, vmax=vmax),
         cmap=location_cm,
     )
 

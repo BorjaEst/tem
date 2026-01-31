@@ -119,8 +119,8 @@ ax.set_title("Accuracy from location")
 ax = figures.plot_map(
     environments[env_to_plot],
     np.array(occupation[env_to_plot]) / sum(occupation[env_to_plot]) * environments[env_to_plot].n_locations,
-    min_val=0,
-    max_val=2,
+    vmin=0,
+    vmax=2,
     ax=None,
     shape="square",
     radius=1 / np.sqrt(environments[env_to_plot].n_locations),

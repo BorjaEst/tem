@@ -74,7 +74,7 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        options = {"min_val": self.map_minmax[0], "max_val": self.map_minmax[1]}
+        options = {"vmin": self.map_minmax[0], "vmax": self.map_minmax[1]}
         plot_rate_map_cell(ax, self.world, self.mec_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), **options)
         ax.set_title(f"MEC cells f{self.freq_idx} (cell {self.map_cell_idx})")
 
@@ -85,7 +85,7 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        options = {"min_val": self.map_minmax[0], "max_val": self.map_minmax[1]}
+        options = {"vmin": self.map_minmax[0], "vmax": self.map_minmax[1]}
         plot_rate_map_cell(ax, self.world, self.hpc_cells, cell_idx=self.map_cell_idx, location_ids=self.location_ids.tolist(), **options)
         ax.set_title(f"HPC cells f{self.freq_idx} (cell {self.map_cell_idx})")
 
@@ -95,9 +95,9 @@ class RolloutOverview(OverviewTemplate):
         Args:
             ax: Axes to draw into.
         """
-        max_val = float(np.max(np.abs(self.memory_matrix))) if np.isfinite(self.memory_matrix).any() else 1.0
-        max_val = max(max_val, 1e-6)
-        ax.matshow(self.memory_matrix, cmap="bwr", vmin=-max_val, vmax=max_val)
+        vmax = float(np.max(np.abs(self.memory_matrix))) if np.isfinite(self.memory_matrix).any() else 1.0
+        vmax = max(vmax, 1e-6)
+        ax.matshow(self.memory_matrix, cmap="bwr", vmin=-vmax, vmax=vmax)
         ax.set_title("HPC memory (hierarchical)")
         ax.set_xticks([])
         ax.set_yticks([])

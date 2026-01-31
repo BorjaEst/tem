@@ -44,10 +44,7 @@ class RolloutOverview(SpatialMatrix4Template):
         self.freq_idx = trace_access.validate_freq_idx(self.trace, "output/inference/g_inf", self.ctx.freq_idx)
         self.world = trace_access.get_world(self.trace, self.env_idx)
         self.location_ids = trace_access.get_location_ids(self.trace)[:, self.env_idx]
-
         self.cells = trace_access.get_mec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
-        self.map_minmax = build_shared_minmax(self.cells[..., :4])
-        self.corr_minmax = build_shared_minmax(self.cells[..., :4])
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.
@@ -59,7 +56,7 @@ class RolloutOverview(SpatialMatrix4Template):
         ax.set_title("Trajectory colored by time")
 
     def _plot_rate_map(self, ax: Axes, cell_idx: int) -> None:
-        options = {"min_val": self.map_minmax[0], "max_val": self.map_minmax[1]}
+        options = {"vmin": 0.0, "vmax": 1.0}
         plot_rate_map_cell(ax, self.world, self.cells, cell_idx, location_ids=self.location_ids.tolist(), **options)
         ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} rate map")
 
@@ -109,7 +106,7 @@ class RolloutOverview(SpatialMatrix4Template):
         ax.set_title("Mean radial autocorr (±1 std)")
 
     def _plot_autocorr(self, ax: Axes, cell_idx: int) -> None:
-        options = {"vmin": self.corr_minmax[0], "vmax": self.corr_minmax[1]}
+        options = {"vmin": -1.0, "vmax": 1.0}
         plot_spatial_autocorrelogram(ax, self.world, self.cells, self.location_ids, cell_idx, **options)
         ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} autocorr")
 

@@ -12,8 +12,8 @@ def plot_rate_map_cell(
     cell_idx: int,
     location_ids: list[int],
     *,
-    min_val: float | None = None,
-    max_val: float | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
     shape: str = "square",
     location_cm: str = "winter_r",
 ) -> plt.Axes:
@@ -25,8 +25,8 @@ def plot_rate_map_cell(
         cells: Array of shape (T, B, C) or (T, C) with cell activations.
         cell_idx: Index of the cell to plot.
         location_ids: Ordered list of visited location indices.
-        min_val: Minimum value for color scaling.
-        max_val: Maximum value for color scaling.
+        vmin: Minimum value for color scaling.
+        vmax: Maximum value for color scaling.
         shape: Shape for the background map markers.
         location_cm: Colormap name for the rate map.
 
@@ -37,12 +37,12 @@ def plot_rate_map_cell(
     values = rate_map[cell_idx]
 
     finite_mask = np.isfinite(values)
-    if min_val is None:
-        min_val = float(np.min(values[finite_mask])) if finite_mask.any() else 0.0
-    if max_val is None:
-        max_val = float(np.max(values[finite_mask])) if finite_mask.any() else 1.0
-    if max_val <= min_val:
-        max_val = min_val + 1e-6
+    if vmin is None:
+        vmin = float(np.min(values[finite_mask])) if finite_mask.any() else 0.0
+    if vmax is None:
+        vmax = float(np.max(values[finite_mask])) if finite_mask.any() else 1.0
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
 
-    plot_map(world, values, ax=ax, min_val=min_val, max_val=max_val, shape=shape, location_cm=location_cm)
+    plot_map(world, values, ax=ax, vmin=vmin, vmax=vmax, shape=shape, location_cm=location_cm)
     return ax

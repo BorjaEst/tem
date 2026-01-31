@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,7 +22,7 @@ def plot_spatial_autocorrelogram(
     vmin: float | None = None,
     vmax: float | None = None,
     grid_res: float | None = None,
-    cmap: str = "viridis",
+    cmap: str = "bwr",
 ) -> plt.Axes:
     """Plot a 2D spatial autocorrelogram for a selected cell.
 
@@ -73,44 +73,97 @@ def plot_radial_autocorr_cells(
     world: object,
     cells_trace: NDArray,
     location_ids: Sequence[int] | NDArray,
-    cell_indices: Sequence[int],
     *,
+    cell_indices: Optional[Sequence[int]] = None,
     grid_res: float | None = None,
     n_bins: int = 32,
-    cmap: str = "viridis",
+    color: Optional[str] = None,
 ) -> plt.Axes:
-    """Plot radial autocorrelation profiles for multiple cells.
+    """Plot mean radial autocorrelation profile with std across cells.
 
     Args:
         ax: Axes to draw into.
         world: Environment world with location coordinates.
         cells_trace: Cell activations (T, B, C) or (T, C).
         location_ids: Ordered list of visited location indices.
-        cell_indices: Cell indices to include.
+        cell_indices: Optional cell indices to include. If None, use all cells.
         grid_res: Optional grid resolution for rasterization.
         n_bins: Number of radial bins.
         cmap: Colormap name for curve colors.
 
     Returns:
-        The axes with radial profiles rendered.
+        The axes with the mean profile rendered.
     """
-    colors = plt.get_cmap(cmap)(np.linspace(0.2, 0.9, len(cell_indices)))
-    for color, idx in zip(colors, cell_indices, strict=False):
-        values = _rate_map_cell_values(cells_trace, location_ids, world, idx)
+    options = {"cell_indices": cell_indices, "grid_res": grid_res, "n_bins": n_bins}
+    radii, mean, std, n_profiles = _radial_autocorr_summary(world, cells_trace, location_ids, **options)
+    if radii.size == 0 or not np.isfinite(mean).any():
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        ax.axis("off")
+        return ax
+
+    color = color or plt.get_cmap("viridis")(0.6)
+    ax.plot(radii, mean, color=color, label=f"Mean (N={n_profiles})")
+    ax.fill_between(radii, mean - std, mean + std, color=color, alpha=0.25, label="±1 std")
+    ax.set_xlabel("Radius (pixels)")
+    ax.set_ylabel("Autocorr")
+    ax.set_title("Mean radial autocorr (±1 std)")
+    ax.legend(frameon=False, fontsize=7)
+    return ax
+
+
+def _radial_autocorr_summary(
+    world: object,
+    cells_trace: NDArray,
+    location_ids: Sequence[int] | NDArray,
+    *,
+    cell_indices: Optional[Sequence[int]] = None,
+    grid_res: float | None = None,
+    n_bins: int = 32,
+) -> tuple[NDArray, NDArray, NDArray, int]:
+    location_ids = np.asarray(location_ids, dtype=int)
+    n_locations = len(getattr(world, "locations", []))
+    rate_map, _ = aggregate_rate_map(cells_trace, location_ids, n_locations)
+    if rate_map.size == 0:
+        empty = np.zeros((0,), dtype=float)
+        return empty, empty, empty, 0
+
+    if cell_indices is None:
+        indices = range(rate_map.shape[0])
+    else:
+        indices = [int(idx) for idx in cell_indices]
+
+    profiles: list[NDArray] = []
+    ref_radii: NDArray | None = None
+    for idx in indices:
+        if idx < 0 or idx >= rate_map.shape[0]:
+            continue
+        values = rate_map[idx]
         if values.size == 0:
             continue
         grid, mask, _ = rasterize_locations(world, values, grid_res=grid_res)
         autocorr = spatial_autocorr_2d(grid, mask)
-        if autocorr.size == 0:
+        if autocorr.size == 0 or not np.isfinite(autocorr).any():
             continue
         radii, profile = radial_profile(autocorr, n_bins=n_bins)
-        ax.plot(radii, profile, color=color, label=f"Cell {idx}")
+        if radii.size == 0 or profile.size == 0:
+            continue
+        if ref_radii is None:
+            ref_radii = radii
+        elif not np.allclose(radii, ref_radii, equal_nan=True):
+            finite = np.isfinite(profile)
+            if finite.sum() < 2:
+                continue
+            profile = np.interp(ref_radii, radii[finite], profile[finite], left=np.nan, right=np.nan)
+        profiles.append(profile)
 
-    ax.set_xlabel("Radius (pixels)")
-    ax.set_ylabel("Autocorr")
-    ax.set_title("Radial autocorr profiles")
-    ax.legend(frameon=False, fontsize=7)
-    return ax
+    if not profiles or ref_radii is None:
+        empty = np.zeros((0,), dtype=float)
+        return empty, empty, empty, 0
+
+    stack = np.vstack(profiles)
+    mean = np.nanmean(stack, axis=0)
+    std = np.nanstd(stack, axis=0)
+    return ref_radii, mean, std, stack.shape[0]
 
 
 def build_shared_autocorr_range(

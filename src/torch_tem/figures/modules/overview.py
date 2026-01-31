@@ -47,7 +47,7 @@ class RolloutOverview(OverviewTemplate):
         self.location_ids = trace_access.get_location_ids(self.trace)[:, self.env_idx]
         self.observations = trace_access.get_observations(self.trace)[:, self.env_idx]
 
-        self.memory_matrix = trace_access.get_hpc_memory(self.trace, self.freq_idx)[0, self.env_idx]
+        self.memory_matrix = trace_access.get_hpc_memory(self.trace, memory_idx=0)[0, self.env_idx]
         self.lec_cells = trace_access.get_lec_cells(self.trace, self.freq_idx)[:, self.env_idx, :]
         self.lec_norm = build_shared_norm([self.lec_cells])
 

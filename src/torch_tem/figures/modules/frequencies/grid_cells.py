@@ -30,6 +30,13 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
 class GridCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the grid-cell overview."""
 
+    HEIGHT_FRAC: float = 0.40
+    MOSAIC_KWARGS = {"width_ratios": [2.0, 2.0, 2.0, 2.0, 2.0]}
+    MOSAIC = [
+        ["map_labels", "spatial_map_a", "spatial_map_b", "spatial_map_c", "spatial_map_d"],
+        ["matrices_labels", "matrix_a", "matrix_b", "matrix_c", "matrix_d"],
+    ]
+
     COLORBAR_VMAX = 1.00
     CELLS = {"a": 0, "b": 1, "c": 2, "d": 3}
 
@@ -53,12 +60,12 @@ class GridCellsAutocorr(BaseFigureTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_time_colored_trajectory(ax, self.world, self.location_ids.tolist(), cmap="plasma")
+        plot_time_colored_trajectory(ax, self.world, self.location_ids.tolist())
         ax.set_title("Trajectory colored by time")
 
     def _plot_rate_map(self, ax: Axes, cell_idx: int) -> None:
         options = {"vmin": 0.0, "vmax": self.COLORBAR_VMAX}
-        plot_rate_map_cell(ax, self.world, self.cells, cell_idx, location_ids=self.location_ids.tolist(), **options)
+        plot_rate_map_cell(ax, self.world, self.cells, self.location_ids.tolist(), cell_idx, **options)
         ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} rate map")
 
     @colorbar(group="ratemaps", label="Firing rate")

@@ -32,6 +32,13 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
 class GridCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the grid-cell overview."""
 
+    HEIGHT_FRAC: float = 0.40
+    MOSAIC_KWARGS = {"width_ratios": [1.0, 4.0]}
+    MOSAIC = [
+        ["map_labels", "spatial_panels"],
+        ["matrices_labels", "spatial_panels"],
+    ]
+
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         """Initialize the figure state from a trace and rendering context.
 

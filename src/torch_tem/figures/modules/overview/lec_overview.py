@@ -21,6 +21,13 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
 class LECOverview(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the LEC overview."""
 
+    HEIGHT_FRAC: float = 0.40
+    MOSAIC_KWARGS = {"width_ratios": [1.0, 2.5]}
+    MOSAIC = [
+        ["params", "raster"],
+        ["params", "raster"],
+    ]
+
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         super().__init__(trace, ctx)
         self.n_freq = trace.n_freq("state/lec/cells")

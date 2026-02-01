@@ -12,7 +12,7 @@ from matplotlib.gridspec import SubplotSpec
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.base import BaseFigureTemplate
 from torch_tem.figures.figures.panels import colorbar, panel
-from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells, plot_spatial_autocorrelogram
+from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells
 from torch_tem.figures.plots.ratemap import plot_rate_map_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
@@ -33,6 +33,13 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
 
 class PlaceCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the place-cell overview."""
+
+    HEIGHT_FRAC: float = 0.40
+    MOSAIC_KWARGS = {"width_ratios": [1.0, 6.0, 1.0]}
+    MOSAIC = [
+        ["map_labels", "spatial_panels", "memory_panel_a"],
+        ["matrices_labels", "spatial_panels", "memory_panel_b"],
+    ]
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         """Initialize the figure state from a trace and rendering context.
@@ -100,6 +107,7 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
             self._plot_frequency_block(fig, outer[f, 0], f, n_cells, nrows, ncols)
 
     @colorbar(group="memory", label="Memory")
+    @panel()
     def memory_panel_a(self, ax: Axes) -> None:
         """Plot HPC memory matrices at the final timestep.
 
@@ -111,6 +119,7 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
         ax.set_yticklabels([])
 
     @colorbar(group="memory", label="Memory")
+    @panel()
     def memory_panel_b(self, ax: Axes) -> None:
         """Plot HPC memory matrices at the final timestep.
 

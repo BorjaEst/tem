@@ -19,6 +19,9 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
 class FeatCellsTimeseries(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the LEC overview."""
 
+    HEIGHT_FRAC: float = 0.40
+    MOSAIC = [["raster_1"], ["raster_2"]]
+
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         super().__init__(trace, ctx)
         self.env_idx = self.trace.validate_env_idx(self.ctx.env_idx)

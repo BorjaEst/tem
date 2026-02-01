@@ -22,7 +22,7 @@ class FigureContext:
 
     # Optional figure customization parameters
     styles: Sequence[str] = field(default_factory=lambda: ["science"])
-    layout: prp.Layout = prp.Layout.ICML
+    layout: Optional[prp.Layout] = None
     dpi: Optional[int] = None
 
     # Optional training context

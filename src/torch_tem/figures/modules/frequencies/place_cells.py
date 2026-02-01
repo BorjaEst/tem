@@ -30,6 +30,13 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
 class PlaceCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the place-cell overview."""
 
+    HEIGHT_FRAC: float = 0.40
+    MOSAIC_KWARGS = {"width_ratios": [1.0, 1.0, 1.0, 1.0, 1.0]}
+    MOSAIC = [
+        ["map_labels", "spatial_map_a", "spatial_map_b", "spatial_map_c", "spatial_map_d"],
+        ["matrices_labels", "matrix_a", "matrix_b", "matrix_c", "matrix_d"],
+    ]
+
     COLORBAR_VMAX = 1.00
     CELLS = {"a": 0, "b": 1, "c": 2, "d": 3}
 
@@ -58,7 +65,7 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
 
     def _plot_rate_map(self, ax: Axes, cell_idx: int) -> None:
         options = {"vmin": 0.0, "vmax": self.COLORBAR_VMAX}
-        plot_rate_map_cell(ax, self.world, self.cells, cell_idx, location_ids=self.location_ids.tolist(), **options)
+        plot_rate_map_cell(ax, self.world, self.cells, self.location_ids.tolist(), cell_idx, **options)
         ax.set_title(f"HPC f{self.freq_idx} cell {cell_idx} rate map")
 
     @colorbar(group="ratemaps", label="Firing rate")

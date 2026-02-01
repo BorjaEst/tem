@@ -9,7 +9,7 @@ from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.base import BaseFigureTemplate
 from torch_tem.figures.figures.panels import colorbar, panel
 from torch_tem.figures.plots.autocorr import plot_autocorr_mosaic, plot_radial_autocorr_cells
-from torch_tem.figures.plots.ratemap import plot_ratemap_mosaic
+from torch_tem.figures.plots.ratemap import plot_ratematx_mosaic
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
 
@@ -31,7 +31,7 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the place-cell overview."""
 
     HEIGHT_FRAC: float = 0.40
-    MOSAIC_KWARGS = {"width_ratios": [1.0, 4.0]}
+    MOSAIC_KWARGS = {"width_ratios": [1.0, 2.5]}
     MOSAIC = [
         ["map_labels", "spatial_maps"],
         ["matrices_labels", "spatial_matrices"],
@@ -69,7 +69,7 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_ratemap_mosaic(ax, self.world, self.cells, self.location_ids.tolist())
+        plot_ratematx_mosaic(ax, self.world, self.cells, self.location_ids.tolist(), vmin=0.0, vmax=0.10)
         # ax.set_title(f"HPC f{self.freq_idx} rate map")
 
     @panel()  # Here some arguments to configure the pannel, position, etc.
@@ -90,5 +90,5 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_autocorr_mosaic(ax, self.world, self.cells, self.location_ids)
+        plot_autocorr_mosaic(ax, self.world, self.cells, self.location_ids, vmin=-0.10, vmax=0.10)
         # ax.set_title(f"HPC f{self.freq_idx} spatial autocorr")

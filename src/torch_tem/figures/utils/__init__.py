@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Iterable, Tuple
 
 import numpy as np
@@ -48,3 +49,62 @@ def aggregate_rate_map(
         rate_map[:, loc] = np.nanmean(cell_array[mask], axis=0)
 
     return rate_map, counts
+
+
+def select_mosaic_grid(
+    n_cells: int,
+    slot_width: float,
+    slot_height: float,
+    *,
+    min_cols: int = 2,
+    max_cols: int = 36,
+    wspace: float = 0.0,
+    hspace: float = 0.0,
+) -> tuple[int, int]:
+    """Select a grid shape that minimizes unused space in the slot.
+
+    Args:
+        n_cells: Number of cells to plot.
+        slot_width: Slot width in inches.
+        slot_height: Slot height in inches.
+        min_cols: Minimum number of columns.
+        max_cols: Maximum number of columns.
+
+    Returns:
+        Tuple of (nrows, ncols) for the mosaic grid.
+    """
+    if n_cells <= 0:
+        return 1, 1
+
+    max_cols = max(1, min(int(max_cols), n_cells))
+    min_cols = max(1, min(int(min_cols), max_cols))
+
+    if slot_width <= 0.0 or slot_height <= 0.0:
+        ncols = max(
+            min_cols,
+            min(max_cols, int(math.ceil(math.sqrt(n_cells)))),
+        )
+        nrows = int(math.ceil(n_cells / ncols))
+        return nrows, ncols
+
+    aspect = slot_width / slot_height
+    best_score: float | None = None
+    best_shape = (1, 1)
+    for ncols in range(min_cols, max_cols + 1):
+        nrows = int(math.ceil(n_cells / ncols))
+        denom_cols = ncols + max(ncols - 1, 0) * wspace
+        denom_rows = nrows + max(nrows - 1, 0) * hspace
+        if denom_cols <= 0 or denom_rows <= 0:
+            continue
+        cell_aspect = aspect * (denom_rows / denom_cols)
+        if cell_aspect > 0:
+            square_penalty = abs(math.log(cell_aspect))
+        else:
+            square_penalty = 0.0
+        waste_penalty = (nrows * ncols - n_cells) / n_cells
+        score = square_penalty + 0.25 * waste_penalty
+        if best_score is None or score < best_score:
+            best_score = score
+            best_shape = (nrows, ncols)
+
+    return best_shape

@@ -27,10 +27,10 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     Returns:
         Matplotlib Figure instance.
     """
-    return GridCellsAutocorr(trace, ctx).plot()
+    return PlaceCellsAutocorr(trace, ctx).plot()
 
 
-class GridCellsAutocorr(SpatialMapsTemplate):
+class PlaceCellsAutocorr(SpatialMapsTemplate):
     """Encapsulate state and rendering logic for the place-cell overview."""
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
@@ -75,21 +75,29 @@ class GridCellsAutocorr(SpatialMapsTemplate):
 
         # Create outer place for frequencies
         n_freq = len(self.cells)
-        outer = panel_spec.subgridspec(n_freq, 1, hspace=0.25, wspace=0.00)
+        freq_layout: list[tuple[int, int, int]] = []
+        height_ratios: list[float] = []
+        title_weight = 0.75
+        for f in range(n_freq):
+            n_cells = int(self.cells[f].shape[1]) if getattr(self.cells[f], "ndim", 0) >= 2 else 0
+            nrows, ncols = self._determine_grid_shape(n_cells)
+            freq_layout.append((n_cells, nrows, ncols))
+            height_ratios.append(title_weight + max(1, nrows))
+        outer = panel_spec.subgridspec(n_freq, 1, height_ratios=height_ratios, hspace=0.25, wspace=0.00)
 
         # Plot each frequency block
         for f in range(n_freq):
-            self._plot_frequency_block(fig, outer[f, 0], f)
+            n_cells, nrows, ncols = freq_layout[f]
+            self._plot_frequency_block(fig, outer[f, 0], f, n_cells, nrows, ncols)
 
-    def _plot_frequency_block(self, fig: Figure, slot: SubplotSpec, f: int) -> None:
-        n_cells = int(self.cells[f].shape[1]) if getattr(self.cells[f], "ndim", 0) >= 2 else 0
+    def _plot_frequency_block(self, fig: Figure, slot: SubplotSpec, f: int, n_cells: int, nrows: int, ncols: int) -> None:
         freq_spec = slot.subgridspec(2, 1, height_ratios=[0.24, 0.83], hspace=0.02)
 
         # Title axis for frequency
         self._plot_frequency_title(fig, freq_spec[0, 0], f, n_cells)
 
         # Autocorr place axis
-        self._plot_cell_ratemap_grid(fig, freq_spec[1, 0], self.cells[f])
+        self._plot_cell_ratemap_grid(fig, freq_spec[1, 0], self.cells[f], nrows, ncols)
 
     def _plot_frequency_title(self, fig: Figure, slot: SubplotSpec, f: int, n_cells: int) -> None:
         title_ax = fig.add_subplot(slot)
@@ -97,20 +105,20 @@ class GridCellsAutocorr(SpatialMapsTemplate):
         title = f"Frequency {f} firing rate maps (n={n_cells})"
         title_ax.text(0.0, 0.5, title, ha="left", va="center", fontsize=9)
 
-    def _plot_cell_ratemap_grid(self, fig: Figure, slot: SubplotSpec, cells_f) -> None:
+    def _plot_cell_ratemap_grid(self, fig: Figure, slot: SubplotSpec, cells_f, nrows: int, ncols: int) -> None:
         n_cells = int(cells_f.shape[1])
-        nrows, ncols = self._determine_grid_shape()
         inner = slot.subgridspec(nrows, ncols, wspace=0.0, hspace=0.0)
+        capacity = max(1, nrows * ncols)
 
-        for cell_idx in range(n_cells):
+        for cell_idx in range(min(n_cells, capacity)):
             r = cell_idx // ncols
             c = cell_idx % ncols
             subax = fig.add_subplot(inner[r, c])
             plot_rate_map_cell(subax, self.world, cells_f, self.location_ids, cell_idx)
 
-    def _determine_grid_shape(self, min_cols: int = 2, max_cols: int = 32) -> tuple[int, int]:
+    def _determine_grid_shape(self, n_cells: int, min_cols: int = 2, max_cols: int = 32) -> tuple[int, int]:
         a = 2 * self.n_freq  # more freq => wider grid
-        n_cells = max(1, max(int(cells.shape[1]) for cells in self.cells))
+        n_cells = max(1, n_cells)
         ncols = max(min_cols, min(max_cols, round(math.sqrt(n_cells * a))))
         nrows = max(1, math.ceil(n_cells / ncols))
         return nrows, ncols

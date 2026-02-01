@@ -1,4 +1,4 @@
-"""Grid-cell diagnostic figure with spatial maps and autocorrelograms."""
+"""Place-cell diagnostic figure with spatial maps and autocorrelograms."""
 
 from __future__ import annotations
 
@@ -9,14 +9,16 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import SubplotSpec
 
 from torch_tem.diagnostics.traces import TraceTree
+from torch_tem.figures.figures.colorbars import colorbar
 from torch_tem.figures.figures.templates import SpatialMapsTemplate
 from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells, plot_spatial_autocorrelogram
+from torch_tem.figures.plots.ratemap import plot_rate_map_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
-    """Plot a 2x5 MEC grid-cell overview for a single frequency module.
+    """Plot a 2x5 HPC place-cell overview for a single frequency module.
 
     Args:
         trace: TraceTree with rollout data.
@@ -29,7 +31,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
 
 
 class GridCellsAutocorr(SpatialMapsTemplate):
-    """Encapsulate state and rendering logic for the grid-cell overview."""
+    """Encapsulate state and rendering logic for the place-cell overview."""
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         """Initialize the figure state from a trace and rendering context.
@@ -39,13 +41,13 @@ class GridCellsAutocorr(SpatialMapsTemplate):
             ctx: Figure context.
         """
         super().__init__(trace, ctx)
-        self.n_freq = trace.n_freq("state/mec/location/mean")
+        self.n_freq = trace.n_freq("state/hpc/location/mean")
         self.env_idx = self.trace.validate_env_idx(self.ctx.env_idx)
-        self.freq_idxs = [self.trace.validate_freq_idx("state/mec/location/mean", f) for f in range(self.n_freq)]
+        self.freq_idxs = [self.trace.validate_freq_idx("state/hpc/location/mean", f) for f in range(self.n_freq)]
 
         self.world = self.trace.get_world(self.env_idx)
         self.location_ids = self.trace.get("world_step/location_ids")[:, self.env_idx]
-        self.cells = [self.trace.get(f"state/mec/location/mean/{f}")[:, self.env_idx, :] for f in range(self.n_freq)]
+        self.cells = [self.trace.get(f"state/hpc/location/mean/{f}")[:, self.env_idx, :] for f in range(self.n_freq)]
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.
@@ -71,7 +73,7 @@ class GridCellsAutocorr(SpatialMapsTemplate):
         fig.set_constrained_layout_pads(w_pad=0.01, h_pad=0.01, wspace=0.1, hspace=0.06)
         ax.remove()
 
-        # Create outer grid for frequencies
+        # Create outer place for frequencies
         n_freq = len(self.cells)
         outer = panel_spec.subgridspec(n_freq, 1, hspace=0.25, wspace=0.00)
 
@@ -86,16 +88,16 @@ class GridCellsAutocorr(SpatialMapsTemplate):
         # Title axis for frequency
         self._plot_frequency_title(fig, freq_spec[0, 0], f, n_cells)
 
-        # Autocorr grid axis
-        self._plot_cell_autocorr_grid(fig, freq_spec[1, 0], self.cells[f])
+        # Autocorr place axis
+        self._plot_cell_ratemap_grid(fig, freq_spec[1, 0], self.cells[f])
 
     def _plot_frequency_title(self, fig: Figure, slot: SubplotSpec, f: int, n_cells: int) -> None:
         title_ax = fig.add_subplot(slot)
         title_ax.axis("off")
-        title = f"Frequency {f} autocorrelations (n={n_cells})"
+        title = f"Frequency {f} firing rate maps (n={n_cells})"
         title_ax.text(0.0, 0.5, title, ha="left", va="center", fontsize=9)
 
-    def _plot_cell_autocorr_grid(self, fig: Figure, slot: SubplotSpec, cells_f) -> None:
+    def _plot_cell_ratemap_grid(self, fig: Figure, slot: SubplotSpec, cells_f) -> None:
         n_cells = int(cells_f.shape[1])
         nrows, ncols = self._determine_grid_shape()
         inner = slot.subgridspec(nrows, ncols, wspace=0.0, hspace=0.0)
@@ -104,7 +106,7 @@ class GridCellsAutocorr(SpatialMapsTemplate):
             r = cell_idx // ncols
             c = cell_idx % ncols
             subax = fig.add_subplot(inner[r, c])
-            plot_spatial_autocorrelogram(subax, self.world, cells_f, self.location_ids, cell_idx)
+            plot_rate_map_cell(subax, self.world, cells_f, self.location_ids, cell_idx)
 
     def _determine_grid_shape(self, min_cols: int = 2, max_cols: int = 32) -> tuple[int, int]:
         a = 2 * self.n_freq  # more freq => wider grid

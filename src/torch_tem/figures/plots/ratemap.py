@@ -9,8 +9,8 @@ def plot_rate_map_cell(
     ax: plt.Axes,
     world: object,
     cells: np.ndarray,
-    cell_idx: int,
     location_ids: list[int],
+    cell_idx: int,
     *,
     vmin: float | None = None,
     vmax: float | None = None,
@@ -23,8 +23,8 @@ def plot_rate_map_cell(
         ax: Axes to draw into.
         world: Environment world with location coordinates.
         cells: Array of shape (T, B, C) or (T, C) with cell activations.
-        cell_idx: Index of the cell to plot.
         location_ids: Ordered list of visited location indices.
+        cell_idx: Index of the cell to plot.
         vmin: Minimum value for color scaling.
         vmax: Maximum value for color scaling.
         shape: Shape for the background map markers.

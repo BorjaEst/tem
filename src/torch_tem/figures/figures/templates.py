@@ -146,7 +146,7 @@ class ParamRasterTemplate(BaseFigureTemplate):
         raise NotImplementedError
 
 
-class SpatialAutocorrTemplate(BaseFigureTemplate):
+class SpatialMapsTemplate(BaseFigureTemplate):
     BASE_FIGSIZE: float = 1.50
     HEIGHT_FRAC: float = 0.38
 
@@ -155,7 +155,7 @@ class SpatialAutocorrTemplate(BaseFigureTemplate):
         return {
             "map_labels": fig.add_subplot(gs[0, 0]),  # map-labels
             "matrices_labels": fig.add_subplot(gs[1, 0]),  # matrix-labels
-            "autocorrelations": fig.add_subplot(gs[:, 1]),  # autocorrelations
+            "spatial_panels": fig.add_subplot(gs[:, 1]),  # autocorrelations
         }
 
     @abstractmethod
@@ -167,5 +167,5 @@ class SpatialAutocorrTemplate(BaseFigureTemplate):
         raise NotImplementedError
 
     @abstractmethod
-    def autocorrelations(self, ax: Axes) -> None:
+    def spatial_panels(self, ax: Axes) -> None:
         raise NotImplementedError

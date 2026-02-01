@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from torch_tem.figures.modules.frequencies import feature_cells, grid_cells, place_cells
-from torch_tem.figures.modules.overview import lec_overview, mec_overview, tem_overview
+from torch_tem.figures.modules.overview import hpc_overview, lec_overview, mec_overview, tem_overview
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 
@@ -39,6 +39,16 @@ def register_builtin_figures() -> None:
                 default_filename="mec-overview",
                 tags={"episode"},
                 description="MEC model overview with grid-cell autocorrelations",
+            )
+        )
+    if not REGISTRY.has("hpc-overview"):
+        REGISTRY.register(
+            FigureSpec(
+                name="hpc-overview",
+                plot=hpc_overview.plot,
+                default_filename="hpc-overview",
+                tags={"episode"},
+                description="HPC model overview with place-cell autocorrelations",
             )
         )
 

@@ -107,7 +107,7 @@ def plot_radial_autocorr_cells(
     ax.set_xlabel("Radius (pixels)")
     ax.set_ylabel("Autocorrelation")
     ax.set_title("Radial autocorrelation (±1 std)")
-    ax.legend(frameon=False, fontsize=6, loc="lower left", handlelength=1.0)
+    ax.legend(frameon=False, fontsize=6, ncol=2, loc="upper left", handlelength=1.0)
     return ax
 
 

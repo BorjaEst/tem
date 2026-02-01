@@ -57,7 +57,7 @@ class TEMConfig(BaseModel):
         description="Autoencoder module settings.",
     )
     f_initial: List[float] = Field(
-        default_factory=lambda: [0.99, 0.3, 0.09, 0.03, 0.01],
+        default_factory=lambda: [0.99, 0.3, 0.09, 0.5, 0.4],
         frozen=True,
         description="Initial spatial frequencies for multi-scale modules.",
     )
@@ -75,12 +75,12 @@ class TEMConfig(BaseModel):
         description="LEC projection module settings.",
     )
     n_grids: List[int] = Field(
-        default_factory=lambda: [30, 30, 24, 18, 18],
+        default_factory=lambda: [30, 24, 18],
         frozen=True,
         description="Number of MEC neurons per frequency module.",
     )
     n_ovc: Union[Literal["off", "merged"], List[int]] = Field(
-        default="merged",
+        default=[24, 18],
         frozen=True,
         description="Number of OVC neurons per frequency module. 'merged' to merge with n_grids.",
     )

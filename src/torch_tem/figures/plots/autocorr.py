@@ -101,13 +101,13 @@ def plot_radial_autocorr_cells(
         ax.axis("off")
         return ax
 
-    color = color or plt.get_cmap("viridis")(0.6)
-    ax.plot(radii, mean, color=color, label=f"Mean (N={n_profiles})")
-    ax.fill_between(radii, mean - std, mean + std, color=color, alpha=0.25, label="±1 std")
+    ax.plot(radii, mean, color=color, label=f"N={n_profiles}")
+    color = ax.get_lines()[-1].get_color() if color is None else color
+    ax.fill_between(radii, mean - std, mean + std, color=color, alpha=0.25)
     ax.set_xlabel("Radius (pixels)")
-    ax.set_ylabel("Autocorr")
-    ax.set_title("Mean radial autocorr (±1 std)")
-    ax.legend(frameon=False, fontsize=7)
+    ax.set_ylabel("Autocorrelation")
+    ax.set_title("Radial autocorrelation (±1 std)")
+    ax.legend(frameon=False, fontsize=6, loc="lower left", handlelength=1.0)
     return ax
 
 

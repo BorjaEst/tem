@@ -144,3 +144,28 @@ class ParamRasterTemplate(BaseFigureTemplate):
     @abstractmethod
     def raster(self, ax: Axes) -> None:
         raise NotImplementedError
+
+
+class SpatialAutocorrTemplate(BaseFigureTemplate):
+    BASE_FIGSIZE: float = 1.50
+    HEIGHT_FRAC: float = 0.38
+
+    def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
+        gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1], width_ratios=[1, 4], figure=fig)
+        return {
+            "map_labels": fig.add_subplot(gs[0, 0]),  # map-labels
+            "matrices_labels": fig.add_subplot(gs[1, 0]),  # matrix-labels
+            "autocorrelations": fig.add_subplot(gs[:, 1]),  # autocorrelations
+        }
+
+    @abstractmethod
+    def map_labels(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def matrices_labels(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def autocorrelations(self, ax: Axes) -> None:
+        raise NotImplementedError

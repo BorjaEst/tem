@@ -117,7 +117,7 @@ class ExampleArguments(BaseSettings):
 
     # Checkpoint
     checkpoint: Path | None = Field(
-        default=Path("models/tem_model_20260128-step=10000.ckpt"),
+        default=Path("models/tem-g3ovc2-step=20000.ckpt"),
         description="Path to model checkpoint (optional). If None, uses random init.",
     )
 
@@ -239,7 +239,7 @@ def main() -> None:
     # Step 4: Generate diagnostic visualizations.
     # ------------------------------------------------------------------
 
-    FREQUENCY_INDEX = 1  # Select frequency index for multi-scale signals
+    FREQUENCY_INDEX = 0  # Select frequency index for multi-scale signals
     extras = {"lec": model.lec}
     ctx = FigureContext(env_idx=0, freq_idx=FREQUENCY_INDEX, split_name="validate", extras=extras)
     figs: list[tuple[str, plt.Figure]] = [

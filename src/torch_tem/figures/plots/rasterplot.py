@@ -8,10 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
-
-# TODO: THIS MODULE DIRTY CODE WHERE ACCESS CUSTOM PROPERTY FROM AXES FOR COLORBAR USAGE
-# REFECTOR LATER TO AVOID THIS HACK
 
 
 def plot_rasterplot(
@@ -73,9 +69,6 @@ def plot_rasterplot(
     if not act_axes and obs_ax is not None:
         obs_ax.set_xlabel("Time step")
 
-    mappable_for_colorbar = act_mappable or obs_mappable
-    if mappable_for_colorbar is not None:  # DIRTY CODE: ACCESS PROPERTY FROM CUSTOM TORCH_TEM FIGURES
-        ax._tem_colorbar_mappable = mappable_for_colorbar
     return ax
 
 

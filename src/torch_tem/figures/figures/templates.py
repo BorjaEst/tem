@@ -169,3 +169,38 @@ class SpatialMapsTemplate(BaseFigureTemplate):
     @abstractmethod
     def spatial_panels(self, ax: Axes) -> None:
         raise NotImplementedError
+
+
+class SpatialMapsMemoryTemplate(BaseFigureTemplate):
+    BASE_FIGSIZE: float = 2.00
+    HEIGHT_FRAC: float = 0.20
+
+    def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
+        gs = gridspec.GridSpec(2, 3, height_ratios=[1, 1], width_ratios=[1, 5, 1], figure=fig)
+        return {
+            "map_labels": fig.add_subplot(gs[0, 0]),
+            "matrices_labels": fig.add_subplot(gs[1, 0]),
+            "spatial_panels": fig.add_subplot(gs[:, 1]),
+            "memory_panel_a": fig.add_subplot(gs[0, 2]),
+            "memory_panel_b": fig.add_subplot(gs[1, 2]),
+        }
+
+    @abstractmethod
+    def map_labels(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def matrices_labels(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def spatial_panels(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def memory_panel_a(self, ax: Axes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def memory_panel_b(self, ax: Axes) -> None:
+        raise NotImplementedError

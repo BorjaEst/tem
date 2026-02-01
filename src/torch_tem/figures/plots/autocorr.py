@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional, Sequence
 
 import matplotlib.pyplot as plt
@@ -61,8 +62,7 @@ def plot_spatial_autocorrelogram(
     if vmax <= vmin:
         vmax = vmin + 1e-6
 
-    im = ax.imshow(autocorr, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax)
-    ax._tem_colorbar_mappable = im
+    ax.imshow(autocorr, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax)
     ax.set_aspect("equal")
     ax.axis("off")
     return ax
@@ -273,10 +273,159 @@ def radial_profile(autocorr: NDArray, *, n_bins: int = 32) -> tuple[NDArray, NDA
     return bin_centers, profile
 
 
-def _rate_map_cell_values(cells_trace: NDArray, location_ids: Sequence[int] | NDArray, world: object, cell_idx: int) -> NDArray:
+def _rate_map_cell_values(
+    cells_trace: NDArray,
+    location_ids: Sequence[int] | NDArray,
+    world: object,
+    cell_idx: int,
+) -> NDArray:
     location_ids = np.asarray(location_ids, dtype=int)
     n_locations = len(getattr(world, "locations", []))
     rate_map, _ = aggregate_rate_map(cells_trace, location_ids, n_locations)
     if rate_map.size == 0 or cell_idx >= rate_map.shape[0]:
         return np.zeros((0,), dtype=float)
     return rate_map[cell_idx]
+
+
+def _select_mosaic_grid(
+    n_cells: int,
+    slot_width: float,
+    slot_height: float,
+    *,
+    min_cols: int = 2,
+    max_cols: int = 36,
+) -> tuple[int, int]:
+    """Select a grid shape that minimizes unused space in the slot.
+
+    Args:
+        n_cells: Number of cells to plot.
+        slot_width: Slot width in inches.
+        slot_height: Slot height in inches.
+        min_cols: Minimum number of columns.
+        max_cols: Maximum number of columns.
+
+    Returns:
+        Tuple of (nrows, ncols) for the mosaic grid.
+    """
+    if n_cells <= 0:
+        return 1, 1
+
+    max_cols = max(1, min(int(max_cols), n_cells))
+    min_cols = max(1, min(int(min_cols), max_cols))
+
+    if slot_width <= 0.0 or slot_height <= 0.0:
+        ncols = max(
+            min_cols,
+            min(max_cols, int(math.ceil(math.sqrt(n_cells)))),
+        )
+        nrows = int(math.ceil(n_cells / ncols))
+        return nrows, ncols
+
+    aspect = slot_width / slot_height
+    best_score: float | None = None
+    best_shape = (1, 1)
+    for ncols in range(min_cols, max_cols + 1):
+        nrows = int(math.ceil(n_cells / ncols))
+        cell_aspect = aspect * (nrows / ncols)
+        if cell_aspect > 0:
+            square_penalty = abs(math.log(cell_aspect))
+        else:
+            square_penalty = 0.0
+        waste_penalty = (nrows * ncols - n_cells) / n_cells
+        score = square_penalty + 0.25 * waste_penalty
+        if best_score is None or score < best_score:
+            best_score = score
+            best_shape = (nrows, ncols)
+
+    return best_shape
+
+
+def plot_mosaic(
+    ax: plt.Axes,
+    world: object,
+    cells_trace: NDArray,
+    location_ids: Sequence[int] | NDArray,
+    *,
+    cell_indices: Optional[Sequence[int]] = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    grid_res: float | None = None,
+    cmap: str = "bwr",
+    min_cols: int = 2,
+    max_cols: int = 36,
+    wspace: float = 0.0,
+    hspace: float = 0.0,
+) -> plt.Axes:
+    """Plot a mosaic of spatial autocorrelograms for one frequency.
+
+    Args:
+        ax: Axes to draw into (mosaic is rendered inside its subplot slot).
+        world: Environment world with location coordinates.
+        cells_trace: Cell activations (T, B, C) or (T, C).
+        location_ids: Ordered list of visited location indices.
+        cell_indices: Optional cell indices to include.
+        vmin: Optional min value for shared color scaling.
+        vmax: Optional max value for shared color scaling.
+        grid_res: Optional grid resolution for rasterization.
+        cmap: Colormap name.
+        min_cols: Minimum number of columns in the mosaic grid.
+        max_cols: Maximum number of columns in the mosaic grid.
+        wspace: Horizontal spacing between mini-plots.
+        hspace: Vertical spacing between mini-plots.
+
+    Returns:
+        The parent axes. The created mini-axes are stored on
+        `ax._tem_mosaic_axes`.
+    """
+    cell_array = np.asarray(cells_trace)
+    if cell_array.ndim < 2 or cell_array.shape[-1] == 0:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        ax.axis("off")
+        return ax
+
+    n_cells_total = int(cell_array.shape[-1])
+    if cell_indices is None:
+        indices = list(range(n_cells_total))
+    else:
+        indices = []
+        for idx in cell_indices:
+            idx_int = int(idx)
+            if 0 <= idx_int < n_cells_total:
+                indices.append(idx_int)
+
+    if not indices:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        ax.axis("off")
+        return ax
+
+    fig = ax.figure
+    bbox = ax.get_position()
+    fig_w, fig_h = fig.get_size_inches()
+    slot_w = float(bbox.width * fig_w)
+    slot_h = float(bbox.height * fig_h)
+    nrows, ncols = _select_mosaic_grid(
+        len(indices),
+        slot_w,
+        slot_h,
+        min_cols=min_cols,
+        max_cols=max_cols,
+    )
+
+    slot = ax.get_subplotspec()
+    if slot is None:
+        ax.text(0.5, 0.5, "No slot", ha="center", va="center")
+        ax.axis("off")
+        return ax
+
+    ax.remove()
+    inner = slot.subgridspec(nrows, ncols, wspace=wspace, hspace=hspace)
+    axes: list[plt.Axes] = []
+    for plot_idx, cell_idx in enumerate(indices):
+        r = plot_idx // ncols
+        c = plot_idx % ncols
+        subax = fig.add_subplot(inner[r, c])
+        plot_spatial_autocorrelogram(subax, world, cells_trace, location_ids, cell_idx, vmin=vmin, vmax=vmax, grid_res=grid_res, cmap=cmap)
+        axes.append(subax)
+
+    ax._tem_mosaic_axes = axes
+    return ax

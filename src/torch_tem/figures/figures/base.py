@@ -99,10 +99,14 @@ class BaseFigureTemplate(ABC):
             return mappable
 
         # B) Inset axes created via ax.inset_axes(...) end up here
-        for child in getattr(ax, "child_axes", []):
+        for child in reversed(getattr(ax, "child_axes", [])):
             mappable = getattr(child, "_tem_colorbar_mappable", None)
             if mappable is not None:
                 return mappable
+            if getattr(child, "images", None):
+                return child.images[-1]
+            if getattr(child, "collections", None):
+                return child.collections[-1]
 
         # C) Optional fallback: common Matplotlib artists
         # matrix/matshow creates an AxesImage stored in ax.images

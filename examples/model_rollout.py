@@ -245,7 +245,7 @@ def main() -> None:
     figs: list[tuple[str, plt.Figure]] = [
         # (f"01.0_tem_overview.png", figures.tem_overview.plot(trace, ctx)),
         # (f"01.1_lec_overview.png", figures.lec_overview.plot(trace, ctx)),
-        (f"01.2_mec_overview.png", figures.mec_overview.plot(trace, ctx)),
+        # (f"01.2_mec_overview.png", figures.mec_overview.plot(trace, ctx)),
         (f"01.3_hpc_overview.png", figures.hpc_overview.plot(trace, ctx)),
         # (f"02.1_feature_cells.png", figures.feature_cells.plot(trace, ctx)),
         # (f"02.2_grid_cells.png", figures.grid_cells.plot(trace, ctx)),

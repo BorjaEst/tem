@@ -106,7 +106,7 @@ class GridCellsAutocorr(SpatialMapsTemplate):
             subax = fig.add_subplot(inner[r, c])
             plot_spatial_autocorrelogram(subax, self.world, cells_f, self.location_ids, cell_idx)
 
-    def _determine_grid_shape(self, min_cols: int = 2, max_cols: int = 32) -> tuple[int, int]:
+    def _determine_grid_shape(self, min_cols: int = 2, max_cols: int = 36) -> tuple[int, int]:
         a = 2 * self.n_freq  # more freq => wider grid
         n_cells = max(1, max(int(cells.shape[1]) for cells in self.cells))
         ncols = max(min_cols, min(max_cols, round(math.sqrt(n_cells * a))))

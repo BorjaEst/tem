@@ -5,6 +5,7 @@ from typing import List, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import cm
+from matplotlib.collections import PatchCollection
 from matplotlib.colors import Normalize
 from numpy.typing import NDArray
 
@@ -56,19 +57,11 @@ def plot_map(
     location_cm = cm.get_cmap(location_cm, num_cols)
     action_cm = cm.get_cmap(action_cm, max(getattr(environment, "n_actions", 0), 1))
 
-    # Normalize values to colormap indices, handling NaN
+    # Track NaNs for dedicated styling
     if values.size == 0:
-        plotvals = np.zeros(values.shape)
         nan_mask = np.zeros(values.shape, dtype=bool)
     else:
-        if vmax != vmin:
-            plotvals = np.floor((values - vmin) / (vmax - vmin) * num_cols)
-        else:
-            plotvals = np.zeros(values.shape)
-
-        # Replace NaN with a sentinel for visualization (use 0 for blank/first color)
         nan_mask = np.isnan(values)
-        plotvals = np.where(nan_mask, 0, plotvals)
 
     # Auto-scale radius based on environment density
     if radius is None:
@@ -76,47 +69,30 @@ def plot_map(
 
     ax = initialise_axes(ax, environment=environment, radius=radius)
 
-    # Store a mappable for colorbar grouping when using patch-based maps.
-    ax._tem_colorbar_mappable = cm.ScalarMappable(
-        norm=Normalize(vmin=vmin, vmax=vmax),
-        cmap=location_cm,
-    )
-
     location_patches: List = []
+    nan_patches: List = []
     action_patches: List = []
+    outline_patches: List = []
 
     # Draw locations
     for i, location in enumerate(environment.locations):
         is_nan = nan_mask[i] if nan_mask.size else False
-        if is_nan:
-            color = "#d9d9d9"
-            edgecolor = "#444444"
-            alpha = 1.0
-        else:
-            color = location_cm(int(plotvals[i]))
-            edgecolor = None
-            alpha = 1.0
-
         if shape == "square":
             patch = plt.Rectangle(
                 (location["o"] - radius / 2, location["y"] - radius / 2),
                 radius,
                 radius,
-                color=color,
-                alpha=alpha,
-                edgecolor=edgecolor,
-                linewidth=0.6 if edgecolor else 0.0,
             )
         else:  # circle
             patch = plt.Circle(
                 (location["o"], location["y"]),
                 radius,
-                color=color,
-                alpha=alpha,
-                edgecolor=edgecolor,
-                linewidth=0.6 if edgecolor else 0.0,
             )
-        location_patches.append(patch)
+
+        if is_nan:
+            nan_patches.append(patch)
+        else:
+            location_patches.append(patch)
 
         # Draw action arrows if requested
         if do_plot_actions:
@@ -133,10 +109,20 @@ def plot_map(
                 outline = plt.Rectangle((location["o"] - radius / 2, location["y"] - radius / 2), radius, radius, linewidth=1, facecolor="none", edgecolor=[1, 0, 0])
             else:
                 outline = plt.Circle((location["o"], location["y"]), radius, linewidth=1, facecolor="none", edgecolor=[1, 0, 0])
-            location_patches.append(outline)
+            outline_patches.append(outline)
 
-    # Add all patches to axes
-    for patch in location_patches + action_patches:
+    if nan_patches:
+        nan_collection = PatchCollection(nan_patches, facecolor="#d9d9d9", edgecolor="#444444", linewidth=0.6)
+        ax.add_collection(nan_collection)
+
+    if location_patches:
+        location_collection = PatchCollection(location_patches, cmap=location_cm, edgecolor="none", linewidth=0.0)
+        location_collection.set_norm(Normalize(vmin=vmin, vmax=vmax))
+        location_collection.set_array(np.asarray(values[~nan_mask], dtype=float))
+        ax.add_collection(location_collection)
+
+    # Add action arrows and shiny outlines on top of the locations.
+    for patch in action_patches + outline_patches:
         ax.add_patch(patch)
 
     return ax

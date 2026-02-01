@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.gridspec import SubplotSpec
 
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.colorbars import colorbar
-from torch_tem.figures.figures.templates import SpatialMapsTemplate
+from torch_tem.figures.figures.templates import SpatialMapsMemoryTemplate
 from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells, plot_spatial_autocorrelogram
 from torch_tem.figures.plots.ratemap import plot_rate_map_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
@@ -30,7 +31,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     return PlaceCellsAutocorr(trace, ctx).plot()
 
 
-class PlaceCellsAutocorr(SpatialMapsTemplate):
+class PlaceCellsAutocorr(SpatialMapsMemoryTemplate):
     """Encapsulate state and rendering logic for the place-cell overview."""
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
@@ -48,6 +49,8 @@ class PlaceCellsAutocorr(SpatialMapsTemplate):
         self.world = self.trace.get_world(self.env_idx)
         self.location_ids = self.trace.get("world_step/location_ids")[:, self.env_idx]
         self.cells = [self.trace.get(f"state/hpc/location/mean/{f}")[:, self.env_idx, :] for f in range(self.n_freq)]
+        self.memory_hier = self.trace.get("state/hpc/_memory/0")[-1, self.env_idx]
+        self.memory_full = self.trace.get("state/hpc/_memory/1")[-1, self.env_idx]
 
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.
@@ -69,8 +72,10 @@ class PlaceCellsAutocorr(SpatialMapsTemplate):
         ax.set_title("Mean radial autocorr (±1 std)")
 
     def spatial_panels(self, ax: Axes) -> None:
+        pass
+
+    def spatial_panels_(self, ax: Axes) -> None:
         fig, panel_spec = ax.figure, ax.get_subplotspec()
-        fig.set_constrained_layout_pads(w_pad=0.01, h_pad=0.01, wspace=0.1, hspace=0.06)
         ax.remove()
 
         # Create outer place for frequencies
@@ -89,6 +94,28 @@ class PlaceCellsAutocorr(SpatialMapsTemplate):
         for f in range(n_freq):
             n_cells, nrows, ncols = freq_layout[f]
             self._plot_frequency_block(fig, outer[f, 0], f, n_cells, nrows, ncols)
+
+    @colorbar(group="memory", label="Memory")
+    def memory_panel_a(self, ax: Axes) -> None:
+        """Plot HPC memory matrices at the final timestep.
+
+        Args:
+            ax: Axes to draw into.
+        """
+        ax.matshow(self.memory_hier, cmap="coolwarm", vmin=-0.1, vmax=0.1)
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+
+    @colorbar(group="memory", label="Memory")
+    def memory_panel_b(self, ax: Axes) -> None:
+        """Plot HPC memory matrices at the final timestep.
+
+        Args:
+            ax: Axes to draw into.
+        """
+        ax.matshow(self.memory_full, cmap="coolwarm", vmin=-0.1, vmax=0.1)
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
 
     def _plot_frequency_block(self, fig: Figure, slot: SubplotSpec, f: int, n_cells: int, nrows: int, ncols: int) -> None:
         freq_spec = slot.subgridspec(2, 1, height_ratios=[0.24, 0.83], hspace=0.02)
@@ -114,10 +141,10 @@ class PlaceCellsAutocorr(SpatialMapsTemplate):
             r = cell_idx // ncols
             c = cell_idx % ncols
             subax = fig.add_subplot(inner[r, c])
-            plot_rate_map_cell(subax, self.world, cells_f, self.location_ids, cell_idx)
+            plot_rate_map_cell(subax, self.world, cells_f, self.location_ids, cell_idx, vmin=0.0, vmax=0.1)
 
-    def _determine_grid_shape(self, n_cells: int, min_cols: int = 2, max_cols: int = 32) -> tuple[int, int]:
-        a = 2 * self.n_freq  # more freq => wider grid
+    def _determine_grid_shape(self, n_cells: int, min_cols: int = 2, max_cols: int = 36) -> tuple[int, int]:
+        a = 3 * self.n_freq  # more freq => wider grid
         n_cells = max(1, n_cells)
         ncols = max(min_cols, min(max_cols, round(math.sqrt(n_cells * a))))
         nrows = max(1, math.ceil(n_cells / ncols))

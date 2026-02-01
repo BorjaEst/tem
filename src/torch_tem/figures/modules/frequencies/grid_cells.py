@@ -6,8 +6,8 @@ import matplotlib.figure as mpl_figure
 from matplotlib.axes import Axes
 
 from torch_tem.diagnostics.traces import TraceTree
-from torch_tem.figures.figures.colorbars import colorbar
-from torch_tem.figures.figures.templates import SpatialMatrix4Template
+from torch_tem.figures.figures.base import BaseFigureTemplate
+from torch_tem.figures.figures.panels import colorbar, panel
 from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells, plot_spatial_autocorrelogram
 from torch_tem.figures.plots.ratemap import plot_rate_map_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
@@ -27,7 +27,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
     return GridCellsAutocorr(trace, ctx).plot()
 
 
-class GridCellsAutocorr(SpatialMatrix4Template):
+class GridCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the grid-cell overview."""
 
     COLORBAR_VMAX = 1.00
@@ -62,6 +62,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} rate map")
 
     @colorbar(group="ratemaps", label="Firing rate")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def spatial_map_a(self, ax: Axes) -> None:
         """Plot a MEC rate map for cell 0.
 
@@ -71,6 +72,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         self._plot_rate_map(ax, self.CELLS["a"])
 
     @colorbar(group="ratemaps", label="Firing rate")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def spatial_map_b(self, ax: Axes) -> None:
         """Plot a MEC rate map for cell 1.
 
@@ -80,6 +82,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         self._plot_rate_map(ax, self.CELLS["b"])
 
     @colorbar(group="ratemaps", label="Firing rate")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def spatial_map_c(self, ax: Axes) -> None:
         """Plot a MEC rate map for cell 2.
 
@@ -89,6 +92,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         self._plot_rate_map(ax, self.CELLS["c"])
 
     @colorbar(group="ratemaps", label="Firing rate")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def spatial_map_d(self, ax: Axes) -> None:
         """Plot a MEC rate map for cell 3.
 
@@ -97,6 +101,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         """
         self._plot_rate_map(ax, self.CELLS["d"])
 
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def matrices_labels(self, ax: Axes) -> None:
         """Plot radial autocorrelation matrix labels for all cells.
 
@@ -112,6 +117,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         ax.set_title(f"MEC f{self.freq_idx} cell {cell_idx} autocorr")
 
     @colorbar(group="autocorr", label="Autocorr")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def matrix_a(self, ax: Axes) -> None:
         """Plot a spatial autocorrelogram for cell 0.
 
@@ -121,6 +127,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         self._plot_autocorr(ax, self.CELLS["a"])
 
     @colorbar(group="autocorr", label="Autocorr")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def matrix_b(self, ax: Axes) -> None:
         """Plot a spatial autocorrelogram for cell 1.
 
@@ -130,6 +137,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         self._plot_autocorr(ax, self.CELLS["b"])
 
     @colorbar(group="autocorr", label="Autocorr")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def matrix_c(self, ax: Axes) -> None:
         """Plot a spatial autocorrelogram for cell 2.
 
@@ -139,6 +147,7 @@ class GridCellsAutocorr(SpatialMatrix4Template):
         self._plot_autocorr(ax, self.CELLS["c"])
 
     @colorbar(group="autocorr", label="Autocorr")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def matrix_d(self, ax: Axes) -> None:
         """Plot a spatial autocorrelogram for cell 3.
 

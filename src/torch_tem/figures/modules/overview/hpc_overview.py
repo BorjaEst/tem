@@ -10,8 +10,8 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import SubplotSpec
 
 from torch_tem.diagnostics.traces import TraceTree
-from torch_tem.figures.figures.colorbars import colorbar
-from torch_tem.figures.figures.templates import SpatialMapsMemoryTemplate
+from torch_tem.figures.figures.base import BaseFigureTemplate
+from torch_tem.figures.figures.panels import colorbar, panel
 from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells, plot_spatial_autocorrelogram
 from torch_tem.figures.plots.ratemap import plot_rate_map_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
@@ -31,7 +31,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
     return PlaceCellsAutocorr(trace, ctx).plot()
 
 
-class PlaceCellsAutocorr(SpatialMapsMemoryTemplate):
+class PlaceCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the place-cell overview."""
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
@@ -52,6 +52,7 @@ class PlaceCellsAutocorr(SpatialMapsMemoryTemplate):
         self.memory_hier = self.trace.get("state/hpc/_memory/0")[-1, self.env_idx]
         self.memory_full = self.trace.get("state/hpc/_memory/1")[-1, self.env_idx]
 
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def map_labels(self, ax: Axes) -> None:
         """Plot the trajectory colored by time.
 
@@ -61,6 +62,7 @@ class PlaceCellsAutocorr(SpatialMapsMemoryTemplate):
         plot_time_colored_trajectory(ax, self.world, self.location_ids.tolist())
         ax.set_title("Trajectory colored by time")
 
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def matrices_labels(self, ax: Axes) -> None:
         """Plot radial autocorrelation matrix labels for all cells.
 
@@ -71,9 +73,11 @@ class PlaceCellsAutocorr(SpatialMapsMemoryTemplate):
             plot_radial_autocorr_cells(ax, self.world, cells, self.location_ids)
         ax.set_title("Mean radial autocorr (±1 std)")
 
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def spatial_panels(self, ax: Axes) -> None:
         pass
 
+    # We comment this for now unitl the layer issue is solved
     def spatial_panels_(self, ax: Axes) -> None:
         fig, panel_spec = ax.figure, ax.get_subplotspec()
         ax.remove()

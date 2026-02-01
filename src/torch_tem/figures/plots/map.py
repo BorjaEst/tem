@@ -48,6 +48,9 @@ def plot_map(
         The axes object with the environment map rendered.
     """
     values = np.asarray(values, dtype=float)
+    n_locations = len(getattr(environment, "locations", []))
+    if values.size != n_locations:
+        raise ValueError("values length must match number of locations: " f"{values.size} != {n_locations}")
     has_finite = values.size > 0 and np.isfinite(values).any()
 
     # Handle NaN values by using nanmin/nanmax when possible
@@ -57,11 +60,8 @@ def plot_map(
     location_cm = cm.get_cmap(location_cm, num_cols)
     action_cm = cm.get_cmap(action_cm, max(getattr(environment, "n_actions", 0), 1))
 
-    # Track NaNs for dedicated styling
-    if values.size == 0:
-        nan_mask = np.zeros(values.shape, dtype=bool)
-    else:
-        nan_mask = np.isnan(values)
+    # Track invalid values for dedicated styling
+    invalid_mask = ~np.isfinite(values)
 
     # Auto-scale radius based on environment density
     if radius is None:
@@ -76,7 +76,7 @@ def plot_map(
 
     # Draw locations
     for i, location in enumerate(environment.locations):
-        is_nan = nan_mask[i] if nan_mask.size else False
+        is_invalid = invalid_mask[i] if invalid_mask.size else False
         if shape == "square":
             patch = plt.Rectangle(
                 (location["o"] - radius / 2, location["y"] - radius / 2),
@@ -89,36 +89,70 @@ def plot_map(
                 radius,
             )
 
-        if is_nan:
+        if is_invalid:
             nan_patches.append(patch)
         else:
             location_patches.append(patch)
 
         # Draw action arrows if requested
         if do_plot_actions:
-            for a, action in enumerate(location["actions"]):
+            for action in location["actions"]:
                 if action["probability"] > 0:
-                    locations_to = [environment.locations[loc_to] for loc_to in np.where(np.array(action["transition"]) > 0)[0]]
+                    transitions = np.array(action["transition"])
+                    loc_indices = np.where(transitions > 0)[0]
+                    locations_to = [environment.locations[loc_to] for loc_to in loc_indices]
                     for loc_to in locations_to:
-                        action_patches.append(action_patch(location, loc_to, radius, action_cm(action["id"])))
+                        action_patches.append(
+                            action_patch(
+                                location,
+                                loc_to,
+                                radius,
+                                action_cm(action["id"]),
+                            )
+                        )
 
     # Highlight shiny locations with red outline
     for location in environment.locations:
         if location.get("shiny", False):
             if shape == "square":
-                outline = plt.Rectangle((location["o"] - radius / 2, location["y"] - radius / 2), radius, radius, linewidth=1, facecolor="none", edgecolor=[1, 0, 0])
+                outline = plt.Rectangle(
+                    (location["o"] - radius / 2, location["y"] - radius / 2),
+                    radius,
+                    radius,
+                    linewidth=1,
+                    facecolor="none",
+                    edgecolor=[1, 0, 0],
+                )
             else:
-                outline = plt.Circle((location["o"], location["y"]), radius, linewidth=1, facecolor="none", edgecolor=[1, 0, 0])
+                outline = plt.Circle(
+                    (location["o"], location["y"]),
+                    radius,
+                    linewidth=1,
+                    facecolor="none",
+                    edgecolor=[1, 0, 0],
+                )
             outline_patches.append(outline)
 
     if nan_patches:
-        nan_collection = PatchCollection(nan_patches, facecolor="#d9d9d9", edgecolor="#444444", linewidth=0.6)
+        nan_collection = PatchCollection(
+            nan_patches,
+            facecolor="#d9d9d9",
+            edgecolor="#444444",
+            linewidth=0.6,
+        )
         ax.add_collection(nan_collection)
 
     if location_patches:
-        location_collection = PatchCollection(location_patches, cmap=location_cm, edgecolor="none", linewidth=0.0)
+        location_collection = PatchCollection(
+            location_patches,
+            cmap=location_cm,
+            edgecolor="none",
+            linewidth=0.0,
+        )
         location_collection.set_norm(Normalize(vmin=vmin, vmax=vmax))
-        location_collection.set_array(np.asarray(values[~nan_mask], dtype=float))
+        location_collection.set_array(
+            np.asarray(values[~invalid_mask], dtype=float),
+        )
         ax.add_collection(location_collection)
 
     # Add action arrows and shiny outlines on top of the locations.

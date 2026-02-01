@@ -3,24 +3,14 @@
 from __future__ import annotations
 
 from torch_tem.figures.modules.frequencies import feature_cells, grid_cells, place_cells
-from torch_tem.figures.modules.overview import hpc_overview, lec_overview, mec_overview, tem_overview
+from torch_tem.figures.modules.overview import hpc_overview, lec_overview, mec_overview
 from torch_tem.figures.registry import REGISTRY, FigureSpec
 
 
 def register_builtin_figures() -> None:
     """Register built-in figure specifications."""
 
-    # Overall TEM overview figure
-    if not REGISTRY.has("tem-overview"):
-        REGISTRY.register(
-            FigureSpec(
-                name="tem-overview",
-                plot=tem_overview.plot,
-                default_filename="tem-overview",
-                tags={"episode"},
-                description="Overview of rollout observations",
-            )
-        )
+    # Overall overview figure
     if not REGISTRY.has("lec-overview"):
         REGISTRY.register(
             FigureSpec(

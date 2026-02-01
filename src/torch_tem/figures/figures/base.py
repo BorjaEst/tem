@@ -20,8 +20,11 @@ class BaseFigureTemplate(ABC):
     Subclasses implement `_create_layout()` and panel methods named in PANEL_NAMES.
     """
 
-    BASE_FIGSIZE: float = 1.00  # Base figure size multiplier
-    HEIGHT_FRAC: float = 0.25  # Fraction of textheight for figure height
+    HEIGHT_FRAC: float = 0.15  # Use to configure get_mpl_rcParams
+    SINGLE_COL: bool = False  # Use to configure get_mpl_rcParams
+    SHAREX: bool = False  # Use to configure get_mpl_rcParams
+    SHAREY: bool = False  # Use to configure get_mpl_rcParams
+    _panels = Dict[str, Any] = {}  # Use decorators from figures.panels to annotate panel methods
 
     def __init__(self, trace: Any, ctx: FigureContext) -> None:
         self.trace = trace
@@ -29,15 +32,20 @@ class BaseFigureTemplate(ABC):
         self.fig: Optional[Figure] = None
         self.axdict: dict[str, Axes] = {}
 
-    @abstractmethod
-    def _create_layout(self, fig: Figure) -> Dict[str, Axes]:
-        """Create the figure layout and return axes in the order of PANEL_NAMES."""
-        raise NotImplementedError
+    @property
+    def options(self) -> dict[str, Any]:
+        """Return figure rendering options derived from class attributes."""
+        return {
+            "single_col": self.SINGLE_COL,
+            "height_frac": self.HEIGHT_FRAC,
+            "sharex": self.SHAREX,
+            "sharey": self.SHAREY,
+        }
 
     def plot(self) -> Figure:
         """Create, render, and return the final Matplotlib figure."""
         colorbar_groups: dict[str, dict[str, Any]] = {}
-        rc_params, prp_w, prp_h = prp.get_mpl_rcParams(self.ctx.layout, height_frac=self.HEIGHT_FRAC)
+        rc_params, prp_w, prp_h = prp.get_mpl_rcParams(self.ctx.layout, **self.options)
         rc_params = dict(rc_params)
 
         with ExitStack() as stack:
@@ -46,15 +54,11 @@ class BaseFigureTemplate(ABC):
             stack.enter_context(plt.rc_context(rc_params))
 
             # figure size from context or prp defaults
-            self.fig = plt.figure(
-                figsize=(prp_w * self.BASE_FIGSIZE, prp_h * self.BASE_FIGSIZE),
-                dpi=self.ctx.dpi,
-                constrained_layout=True,
-            )
+            self.fig = plt.figure(figsize=(prp_w, prp_h), dpi=self.ctx.dpi, constrained_layout=True)
             self.axdict = self._create_layout(self.fig)
 
             # render each panel
-            for name, ax in self.axdict.items():
+            for name, ax in self._panels.items():
                 self._render_panel(name, ax, colorbar_groups)
 
             self._apply_colorbars(colorbar_groups)

@@ -26,7 +26,7 @@ def plot_rasterplot(
     """Plot observations (raster) and activations (heatmaps) in a stacked panel.
 
     The container axes is used to place inset axes that share the time axis.
-    A mappable is registered on the container axes for colorbar usage.
+    Colorbar discovery relies on Matplotlib artists in the inset axes.
 
     Args:
             ax: Container axes to draw into.

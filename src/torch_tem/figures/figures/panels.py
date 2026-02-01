@@ -1,4 +1,4 @@
-"""Colorbar metadata decorator for figure panel methods."""
+"""Decorators for figure panel methods."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def colorbar(*, group: str, label: str | None = None) -> Callable[[Callable[...,
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        fn._tem_colorbar = {"group": group, "label": label}
+        setattr(fn, "_tem_colorbar", {"group": group, "label": label})
         return fn
 
     return decorator

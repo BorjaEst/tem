@@ -5,8 +5,8 @@ import torch
 from matplotlib.axes import Axes
 
 from torch_tem.diagnostics.traces import TraceTree
-from torch_tem.figures.figures.colorbars import colorbar
-from torch_tem.figures.figures.templates import RasterX2Template
+from torch_tem.figures.figures.base import BaseFigureTemplate
+from torch_tem.figures.figures.panels import colorbar, panel
 from torch_tem.figures.plots.rasterplot import plot_rasterplot
 from torch_tem.figures.registry import FigureContext
 
@@ -16,7 +16,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
     return FeatCellsTimeseries(trace, ctx).plot()
 
 
-class FeatCellsTimeseries(RasterX2Template):
+class FeatCellsTimeseries(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the LEC overview."""
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
@@ -30,6 +30,7 @@ class FeatCellsTimeseries(RasterX2Template):
         self.cell_series = self.trace.get(f"state/lec/cells/{self.freq_idx}")[:, self.env_idx, :]
 
     @colorbar(group="lec_activity", label="Activation")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def raster_1(self, ax: Axes) -> None:
         """Plot observations and LEC activations over time."""
         options = {"vmin": 0.0, "vmax": 1.0, "obs_height": 0.3, "activation_names": []}
@@ -40,6 +41,7 @@ class FeatCellsTimeseries(RasterX2Template):
         ax.set_title("LEC input features and activations (after ponderation)")
 
     @colorbar(group="lec_activity", label="Activation")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def raster_2(self, ax: Axes) -> None:
         """Plot observations and LEC activations over time."""
         options = {"vmin": 0.0, "vmax": 1.0, "obs_height": 0.45, "activation_names": []}

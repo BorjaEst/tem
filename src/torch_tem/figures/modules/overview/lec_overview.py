@@ -6,8 +6,8 @@ import torch
 from matplotlib.axes import Axes
 
 from torch_tem.diagnostics.traces import TraceTree
-from torch_tem.figures.figures.colorbars import colorbar
-from torch_tem.figures.figures.templates import ParamRasterTemplate
+from torch_tem.figures.figures.base import BaseFigureTemplate
+from torch_tem.figures.figures.panels import colorbar, panel
 from torch_tem.figures.plots.rasterplot import plot_rasterplot
 from torch_tem.figures.registry import FigureContext
 from torch_tem.modules.lec import LECModel
@@ -18,7 +18,7 @@ def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
     return LECOverview(trace, ctx).plot()
 
 
-class LECOverview(ParamRasterTemplate):
+class LECOverview(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the LEC overview."""
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
@@ -34,6 +34,7 @@ class LECOverview(ParamRasterTemplate):
         self.alpha = [torch.sigmoid(p).detach().cpu().numpy() for p in lec.filter.alpha]
         self.w_f = [torch.sigmoid(p).detach().cpu().numpy() for p in lec.w_f]
 
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def params(self, ax: Axes) -> None:
         """Plot per-frequency LEC parameters if available."""
         n_freq = min(len(self.alpha), len(self.w_f))
@@ -47,6 +48,7 @@ class LECOverview(ParamRasterTemplate):
         ax.legend(loc="best", fontsize="small")
 
     @colorbar(group="lec_activity", label="Activation")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def raster(self, ax: Axes) -> None:
         """Plot observations and LEC activations over time."""
         activation_names = [f"Cells f{f_idx}" for f_idx in self.freq_idxs]

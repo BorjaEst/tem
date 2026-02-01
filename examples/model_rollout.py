@@ -243,11 +243,12 @@ def main() -> None:
     extras = {"lec": model.lec}
     ctx = FigureContext(env_idx=0, freq_idx=FREQUENCY_INDEX, split_name="validate", extras=extras)
     figs: list[tuple[str, plt.Figure]] = [
-        (f"01.1_tem_overview.png", figures.tem_overview.plot(trace, ctx)),
+        (f"01.0_tem_overview.png", figures.tem_overview.plot(trace, ctx)),
         (f"01.1_lec_overview.png", figures.lec_overview.plot(trace, ctx)),
-        (f"02_grid_cells.png", figures.grid_cells.plot(trace, ctx)),
-        (f"03_place_cells.png", figures.place_cells.plot(trace, ctx)),
-        (f"04_feature_cells.png", figures.feature_cells.plot(trace, ctx)),
+        (f"01.2_mec_overview.png", figures.mec_overview.plot(trace, ctx)),
+        (f"02.1_feature_cells.png", figures.feature_cells.plot(trace, ctx)),
+        (f"02.2_grid_cells.png", figures.grid_cells.plot(trace, ctx)),
+        (f"02.3_place_cells.png", figures.place_cells.plot(trace, ctx)),
     ]
 
     print(f"Step 4: Generated {len(figs)} figure(s).")

@@ -13,7 +13,7 @@ from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.base import BaseFigureTemplate
 from torch_tem.figures.figures.panels import colorbar, panel
 from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells
-from torch_tem.figures.plots.ratemap import plot_rate_map_cell
+from torch_tem.figures.plots.ratemap import plot_ratemap_cell
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
 
@@ -154,7 +154,7 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
             r = cell_idx // ncols
             c = cell_idx % ncols
             subax = fig.add_subplot(inner[r, c])
-            plot_rate_map_cell(subax, self.world, cells_f, self.location_ids, cell_idx, vmin=0.0, vmax=0.1)
+            plot_ratemap_cell(subax, self.world, cells_f, self.location_ids, cell_idx, vmin=0.0, vmax=0.1)
 
     def _determine_grid_shape(self, n_cells: int, min_cols: int = 2, max_cols: int = 36) -> tuple[int, int]:
         a = 3 * self.n_freq  # more freq => wider grid

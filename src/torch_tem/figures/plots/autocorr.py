@@ -294,6 +294,8 @@ def _select_mosaic_grid(
     *,
     min_cols: int = 2,
     max_cols: int = 36,
+    wspace: float = 0.0,
+    hspace: float = 0.0,
 ) -> tuple[int, int]:
     """Select a grid shape that minimizes unused space in the slot.
 
@@ -326,7 +328,11 @@ def _select_mosaic_grid(
     best_shape = (1, 1)
     for ncols in range(min_cols, max_cols + 1):
         nrows = int(math.ceil(n_cells / ncols))
-        cell_aspect = aspect * (nrows / ncols)
+        denom_cols = ncols + max(ncols - 1, 0) * wspace
+        denom_rows = nrows + max(nrows - 1, 0) * hspace
+        if denom_cols <= 0 or denom_rows <= 0:
+            continue
+        cell_aspect = aspect * (denom_rows / denom_cols)
         if cell_aspect > 0:
             square_penalty = abs(math.log(cell_aspect))
         else:
@@ -340,7 +346,7 @@ def _select_mosaic_grid(
     return best_shape
 
 
-def plot_mosaic(
+def plot_autocorr_mosaic(
     ax: plt.Axes,
     world: object,
     cells_trace: NDArray,
@@ -353,8 +359,8 @@ def plot_mosaic(
     cmap: str = "bwr",
     min_cols: int = 2,
     max_cols: int = 36,
-    wspace: float = 0.0,
-    hspace: float = 0.0,
+    wspace: float = 0.04,
+    hspace: float = 0.04,
 ) -> plt.Axes:
     """Plot a mosaic of spatial autocorrelograms for one frequency.
 
@@ -398,34 +404,59 @@ def plot_mosaic(
         ax.axis("off")
         return ax
 
+    if hasattr(ax, "_tem_mosaic_axes"):
+        for old_ax in list(getattr(ax, "_tem_mosaic_axes", [])):
+            try:
+                old_ax.remove()
+            except (AttributeError, ValueError):
+                continue
+
     fig = ax.figure
     bbox = ax.get_position()
     fig_w, fig_h = fig.get_size_inches()
     slot_w = float(bbox.width * fig_w)
     slot_h = float(bbox.height * fig_h)
+    wspace = max(float(wspace), 0.0)
+    hspace = max(float(hspace), 0.0)
     nrows, ncols = _select_mosaic_grid(
         len(indices),
         slot_w,
         slot_h,
         min_cols=min_cols,
         max_cols=max_cols,
+        wspace=wspace,
+        hspace=hspace,
     )
 
-    slot = ax.get_subplotspec()
-    if slot is None:
-        ax.text(0.5, 0.5, "No slot", ha="center", va="center")
+    denom_cols = ncols + max(ncols - 1, 0) * wspace
+    denom_rows = nrows + max(nrows - 1, 0) * hspace
+    if denom_cols <= 0 or denom_rows <= 0:
+        ax.text(0.5, 0.5, "No layout", ha="center", va="center")
         ax.axis("off")
         return ax
 
-    ax.remove()
-    inner = slot.subgridspec(nrows, ncols, wspace=wspace, hspace=hspace)
+    w = 1.0 / denom_cols
+    h = 1.0 / denom_rows
     axes: list[plt.Axes] = []
     for plot_idx, cell_idx in enumerate(indices):
         r = plot_idx // ncols
         c = plot_idx % ncols
-        subax = fig.add_subplot(inner[r, c])
-        plot_spatial_autocorrelogram(subax, world, cells_trace, location_ids, cell_idx, vmin=vmin, vmax=vmax, grid_res=grid_res, cmap=cmap)
+        x0 = c * (w + wspace * w)
+        y0 = 1.0 - (r + 1) * h - r * (hspace * h)
+        subax = ax.inset_axes([x0, y0, w, h])
+        plot_spatial_autocorrelogram(
+            subax,
+            world,
+            cells_trace,
+            location_ids,
+            cell_idx,
+            vmin=vmin,
+            vmax=vmax,
+            grid_res=grid_res,
+            cmap=cmap,
+        )
         axes.append(subax)
 
+    ax.set_axis_off()
     ax._tem_mosaic_axes = axes
     return ax

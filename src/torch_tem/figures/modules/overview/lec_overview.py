@@ -23,10 +23,10 @@ class LECOverview(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the LEC overview."""
 
     HEIGHT_FRAC: float = 0.40
-    MOSAIC_KWARGS = {"width_ratios": [1.0, 2.5], "height_ratios": [5.0, 1.0]}
+    MOSAIC_KWARGS = {"width_ratios": [1.0, 2.5], "height_ratios": [1.0, 5.0]}
     MOSAIC = [
-        ["params", "activations"],
         ["params", "observations"],
+        ["params", "activations"],
     ]
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:

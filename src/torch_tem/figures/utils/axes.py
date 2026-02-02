@@ -70,3 +70,66 @@ def _default_radius(n_locations: int) -> float:
     if n_locations <= 0:
         return 0.05
     return 2 * (0.01 + 1 / (10 * np.sqrt(n_locations)))
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def subdivide_axes(
+    ax,
+    nrows=1,
+    ncols=1,
+    *,
+    wspace=0.0,
+    hspace=0.0,
+    left_pad=0.0,
+    right_pad=0.0,
+    top_pad=0.0,
+    bottom_pad=0.0,
+) -> plt.Axes | np.ndarray:
+    """
+    Subdivide the EXACT bbox of `ax` into a grid of new axes.
+
+    Returns:
+        - Axes (for 1x1)
+        - 1D np.ndarray of Axes (for 1xn or nx1)
+        - 2D np.ndarray of Axes (for nxm)
+    """
+    fig = ax.figure
+    fig.canvas.draw()
+
+    bbox = ax.get_position()
+    ax.remove()
+
+    # Apply outer padding
+    x0 = bbox.x0 + left_pad
+    y0 = bbox.y0 + bottom_pad
+    w = bbox.width - left_pad - right_pad
+    h = bbox.height - top_pad - bottom_pad
+
+    # Cell size
+    cell_w = (w - (ncols - 1) * wspace) / ncols
+    cell_h = (h - (nrows - 1) * hspace) / nrows
+
+    out = []
+    for r in range(nrows):
+        row = []
+        for c in range(ncols):
+            left = x0 + c * (cell_w + wspace)
+            bottom = y0 + (nrows - 1 - r) * (cell_h + hspace)
+            new_ax = fig.add_axes([left, bottom, cell_w, cell_h])
+            row.append(new_ax)
+        out.append(row)
+
+    # Convert to Matplotlib-like output shape
+    arr = np.array(out, dtype=object)
+
+    if nrows == 1 and ncols == 1:
+        return arr[0, 0]
+    elif nrows == 1:  # 1 × N
+        return arr[0]
+    elif ncols == 1:  # N × 1
+        return arr[:, 0]
+    else:
+        return arr

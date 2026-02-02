@@ -35,10 +35,10 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the place-cell overview."""
 
     HEIGHT_FRAC: float = 0.40
-    MOSAIC_KWARGS = {"width_ratios": [1.0, 6.0, 1.0]}
+    MOSAIC_KWARGS = {"width_ratios": [2.0, 4.0, 2.0]}
     MOSAIC = [
-        ["map_labels", "spatial_panels", "memory_panel_a"],
-        ["matrices_labels", "spatial_panels", "memory_panel_b"],
+        ["map_labels", "spatial_matrices", "memory_panel_a"],
+        ["matrices_labels", "spatial_matrices", "memory_panel_b"],
     ]
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
@@ -81,35 +81,13 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
         ax.set_title("Mean radial autocorr (±1 std)")
 
     @panel()  # Here some arguments to configure the pannel, position, etc.
-    def spatial_panels(self, ax: Axes) -> None:
+    def spatial_matrices(self, ax: Axes) -> None:
         pass
 
-    # We comment this for now unitl the layer issue is solved
-    def spatial_panels_(self, ax: Axes) -> None:
-        fig, panel_spec = ax.figure, ax.get_subplotspec()
-        ax.remove()
-
-        # Create outer place for frequencies
-        n_freq = len(self.cells)
-        freq_layout: list[tuple[int, int, int]] = []
-        height_ratios: list[float] = []
-        title_weight = 0.75
-        for f in range(n_freq):
-            n_cells = int(self.cells[f].shape[1]) if getattr(self.cells[f], "ndim", 0) >= 2 else 0
-            nrows, ncols = self._determine_grid_shape(n_cells)
-            freq_layout.append((n_cells, nrows, ncols))
-            height_ratios.append(title_weight + max(1, nrows))
-        outer = panel_spec.subgridspec(n_freq, 1, height_ratios=height_ratios, hspace=0.25, wspace=0.00)
-
-        # Plot each frequency block
-        for f in range(n_freq):
-            n_cells, nrows, ncols = freq_layout[f]
-            self._plot_frequency_block(fig, outer[f, 0], f, n_cells, nrows, ncols)
-
-    @colorbar(group="memory", label="Memory")
-    @panel()
+    @colorbar(group="memory", label="Strength (0.0 to 0.1)")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def memory_panel_a(self, ax: Axes) -> None:
-        """Plot HPC memory matrices at the final timestep.
+        """Plot HPC hierarchical memory matrices at the final timestep.
 
         Args:
             ax: Axes to draw into.
@@ -118,10 +96,10 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
         ax.set_xticklabels([])
         ax.set_yticklabels([])
 
-    @colorbar(group="memory", label="Memory")
-    @panel()
+    @colorbar(group="memory", label="Strength (0.0 to 0.1)")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
     def memory_panel_b(self, ax: Axes) -> None:
-        """Plot HPC memory matrices at the final timestep.
+        """Plot HPC full memory matrices at the final timestep.
 
         Args:
             ax: Axes to draw into.
@@ -129,36 +107,3 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
         ax.matshow(self.memory_full, cmap="coolwarm", vmin=-0.1, vmax=0.1)
         ax.set_xticklabels([])
         ax.set_yticklabels([])
-
-    def _plot_frequency_block(self, fig: Figure, slot: SubplotSpec, f: int, n_cells: int, nrows: int, ncols: int) -> None:
-        freq_spec = slot.subgridspec(2, 1, height_ratios=[0.24, 0.83], hspace=0.02)
-
-        # Title axis for frequency
-        self._plot_frequency_title(fig, freq_spec[0, 0], f, n_cells)
-
-        # Autocorr place axis
-        self._plot_cell_ratemap_grid(fig, freq_spec[1, 0], self.cells[f], nrows, ncols)
-
-    def _plot_frequency_title(self, fig: Figure, slot: SubplotSpec, f: int, n_cells: int) -> None:
-        title_ax = fig.add_subplot(slot)
-        title_ax.axis("off")
-        title = f"Frequency {f} firing rate maps (n={n_cells})"
-        title_ax.text(0.0, 0.5, title, ha="left", va="center", fontsize=9)
-
-    def _plot_cell_ratemap_grid(self, fig: Figure, slot: SubplotSpec, cells_f, nrows: int, ncols: int) -> None:
-        n_cells = int(cells_f.shape[1])
-        inner = slot.subgridspec(nrows, ncols, wspace=0.0, hspace=0.0)
-        capacity = max(1, nrows * ncols)
-
-        for cell_idx in range(min(n_cells, capacity)):
-            r = cell_idx // ncols
-            c = cell_idx % ncols
-            subax = fig.add_subplot(inner[r, c])
-            plot_ratemap_cell(subax, self.world, cells_f, self.location_ids, cell_idx, vmin=0.0, vmax=0.1)
-
-    def _determine_grid_shape(self, n_cells: int, min_cols: int = 2, max_cols: int = 36) -> tuple[int, int]:
-        a = 3 * self.n_freq  # more freq => wider grid
-        n_cells = max(1, n_cells)
-        ncols = max(min_cols, min(max_cols, round(math.sqrt(n_cells * a))))
-        nrows = max(1, math.ceil(n_cells / ncols))
-        return nrows, ncols

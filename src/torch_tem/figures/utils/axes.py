@@ -6,6 +6,7 @@ from typing import Any, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 
 def initialise_axes(
@@ -75,71 +76,77 @@ def _default_radius(n_locations: int) -> float:
 
 
 def subdivide_axes(
-    ax,
-    nrows=1,
-    ncols=1,
+    ax: Axes,
+    nrows: int = 1,
+    ncols: int = 1,
     *,
-    wspace=0.0,
-    hspace=0.0,
-    left_pad=0.0,
-    right_pad=0.0,
-    top_pad=0.0,
-    bottom_pad=0.0,
+    wspace: float = 0.0,
+    hspace: float = 0.0,
+    left_pad: float = 0.0,
+    right_pad: float = 0.0,
+    top_pad: float = 0.0,
+    bottom_pad: float = 0.0,
+    hide_parent: bool = True,
 ) -> Axes | np.ndarray[Any, np.dtype[Axes]]:
     """
-    Subdivide the EXACT bbox of `ax` into a grid of new axes.
+    Subdivide the bbox of `ax` into a grid of new child axes.
+
+    IMPORTANT:
+    - Does NOT remove `ax` (so titles/annotations can remain).
+    - Child axes are created as inset axes anchored to `ax` in ax.transAxes,
+      so they follow any later layout changes (e.g., colorbars shrinking the parent).
+
+    Spacing/padding units:
+    - `left_pad`, `right_pad`, `top_pad`, `bottom_pad`, `wspace`, `hspace`
+      are in parent-axes fraction units (0..1).
 
     Returns:
         - Axes (for 1x1)
         - 1D np.ndarray of Axes (for 1xn or nx1)
         - 2D np.ndarray of Axes (for nxm)
     """
-    fig = ax.figure
-    if fig is None:
-        raise ValueError("Cannot subdivide an Axes that is not attached to a Figure.")
+    if nrows <= 0 or ncols <= 0:
+        raise ValueError(f"nrows and ncols must be positive, got nrows={nrows}, ncols={ncols}")
 
-    # Ensure layout has been computed before reading positions.
-    if getattr(fig, "canvas", None) is not None:
-        fig.canvas.draw()
+    if hide_parent:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.patch.set_alpha(0.0)
+        ax.set_navigate(False)
 
-    bbox = ax.get_position()
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_frame_on(False)
-    ax.set_alpha(0.0)
-    ax.set_navigate(False)
+    # Usable area inside the parent axes, in parent axes coordinates.
+    usable_w = 1.0 - left_pad - right_pad
+    usable_h = 1.0 - top_pad - bottom_pad
+    if usable_w <= 0 or usable_h <= 0:
+        return np.array([], dtype=object)
 
-    # Apply outer padding
-    x0 = bbox.x0 + left_pad
-    y0 = bbox.y0 + bottom_pad
-    w = bbox.width - left_pad - right_pad
-    h = bbox.height - top_pad - bottom_pad
+    # Cell size in parent axes coords.
+    cell_w = (usable_w - (ncols - 1) * wspace) / ncols
+    cell_h = (usable_h - (nrows - 1) * hspace) / nrows
+    if cell_w <= 0 or cell_h <= 0:
+        return np.array([], dtype=object)
 
-    # Cell size
-    cell_w = (w - (ncols - 1) * wspace) / ncols
-    cell_h = (h - (nrows - 1) * hspace) / nrows
-
-    out = []
+    out: list[list[Axes]] = []
     for r in range(nrows):
-        row = []
+        row: list[Axes] = []
         for c in range(ncols):
-            left = x0 + c * (cell_w + wspace)
-            bottom = y0 + (nrows - 1 - r) * (cell_h + hspace)
-            new_ax = fig.add_axes([left, bottom, cell_w, cell_h])
-            row.append(new_ax)
+            x0 = left_pad + c * (cell_w + wspace)
+            y0 = bottom_pad + (nrows - 1 - r) * (cell_h + hspace)
+            child = ax.inset_axes([x0, y0, cell_w, cell_h], transform=ax.transAxes)
+            row.append(child)
         out.append(row)
 
-    # Convert to Matplotlib-like output shape
     arr = np.array(out, dtype=object)
 
     if nrows == 1 and ncols == 1:
         return arr[0, 0]
-    elif nrows == 1:  # 1 × N
+    if nrows == 1:  # 1 × N
         return arr[0]
-    elif ncols == 1:  # N × 1
+    if ncols == 1:  # N × 1
         return arr[:, 0]
-    else:
-        return arr
+    return arr
 
 
 def mosaic_axes(

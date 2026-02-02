@@ -12,10 +12,10 @@ from matplotlib.gridspec import SubplotSpec
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.base import BaseFigureTemplate
 from torch_tem.figures.figures.panels import colorbar, panel
-from torch_tem.figures.plots.autocorr import plot_radial_autocorr_cells
-from torch_tem.figures.plots.ratemap import plot_ratemap_cell
+from torch_tem.figures.plots.ratemap import plot_ratematx_mosaic
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.utils.axes import mosaic_axes, subdivide_axes
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
@@ -34,11 +34,12 @@ def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
 class PlaceCellsAutocorr(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the place-cell overview."""
 
-    HEIGHT_FRAC: float = 0.40
-    MOSAIC_KWARGS = {"width_ratios": [2.0, 4.0, 2.0]}
+    HEIGHT_FRAC: float = 0.60
+    MOSAIC_KWARGS = {"width_ratios": [2.0, 6.0]}
     MOSAIC = [
-        ["map_labels", "spatial_matrices", "memory_panel_a"],
-        ["matrices_labels", "spatial_matrices", "memory_panel_b"],
+        ["map_labels", "spatial_matrices"],
+        ["memory_panel_a", "spatial_matrices"],
+        ["memory_panel_b", "spatial_matrices"],
     ]
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
@@ -69,22 +70,7 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
         plot_time_colored_trajectory(ax, self.world, self.location_ids.tolist())
         ax.set_title("Trajectory colored by time")
 
-    @panel()  # Here some arguments to configure the pannel, position, etc.
-    def matrices_labels(self, ax: Axes) -> None:
-        """Plot radial autocorrelation matrix labels for all cells.
-
-        Args:
-            ax: Axes to draw into.
-        """
-        for cells in self.cells:
-            plot_radial_autocorr_cells(ax, self.world, cells, self.location_ids)
-        ax.set_title("Mean radial autocorr (±1 std)")
-
-    @panel()  # Here some arguments to configure the pannel, position, etc.
-    def spatial_matrices(self, ax: Axes) -> None:
-        pass
-
-    @colorbar(group="memory", label="Strength (0.0 to 0.1)")
+    @colorbar(group="memory", label=None)
     @panel()  # Here some arguments to configure the pannel, position, etc.
     def memory_panel_a(self, ax: Axes) -> None:
         """Plot HPC hierarchical memory matrices at the final timestep.
@@ -93,10 +79,11 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
             ax: Axes to draw into.
         """
         ax.matshow(self.memory_hier, cmap="coolwarm", vmin=-0.1, vmax=0.1)
+        ax.set_title("Hierarchical memory")
         ax.set_xticklabels([])
         ax.set_yticklabels([])
 
-    @colorbar(group="memory", label="Strength (0.0 to 0.1)")
+    @colorbar(group="memory", label=None)
     @panel()  # Here some arguments to configure the pannel, position, etc.
     def memory_panel_b(self, ax: Axes) -> None:
         """Plot HPC full memory matrices at the final timestep.
@@ -105,5 +92,16 @@ class PlaceCellsAutocorr(BaseFigureTemplate):
             ax: Axes to draw into.
         """
         ax.matshow(self.memory_full, cmap="coolwarm", vmin=-0.1, vmax=0.1)
+        ax.set_title("Full memory")
         ax.set_xticklabels([])
         ax.set_yticklabels([])
+
+    @panel()  # Here some arguments to configure the pannel, position, etc.
+    def spatial_matrices(self, ax: Axes) -> None:
+        nrows = len(self.freq_idxs)
+        for freq_idx, freq_ax in enumerate(subdivide_axes(ax, nrows, 1, hspace=0.07)):
+            cells = self.cells[freq_idx]
+            axes = mosaic_axes(freq_ax, cells.shape[-1], wspace=0.04, hspace=0.04)
+            axes_list = list(np.ravel(axes)) if isinstance(axes, np.ndarray) else [axes]
+            plot_ratematx_mosaic(axes_list, self.world, cells, self.location_ids)
+            freq_ax.set_title(f"Spatial rate maps - Freq {freq_idx}", fontsize=7)

@@ -288,7 +288,7 @@ def _rate_map_cell_values(
 
 
 def plot_autocorr_mosaic(
-    ax: plt.Axes,
+    ax: Sequence[plt.Axes],
     world: object,
     cells_trace: NDArray,
     location_ids: Sequence[int] | NDArray,
@@ -306,7 +306,7 @@ def plot_autocorr_mosaic(
     """Plot a mosaic of spatial autocorrelograms for one frequency.
 
     Args:
-        ax: Axes to draw into (mosaic is rendered inside its subplot slot).
+        ax: Axes to draw into.
         world: Environment world with location coordinates.
         cells_trace: Cell activations (T, B, C) or (T, C).
         location_ids: Ordered list of visited location indices.

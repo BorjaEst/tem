@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 
 
 def initialise_axes(
-    ax: Optional[plt.Axes] = None,
+    ax: Optional[Axes] = None,
     *,
     environment: Optional[object] = None,
     radius: Optional[float] = None,
     padding_scale: float = 2.0,
-) -> plt.Axes:
+) -> Axes:
     """Initialize or configure axes for environment map plotting.
 
     Sets up axes with:
@@ -72,10 +73,6 @@ def _default_radius(n_locations: int) -> float:
     return 2 * (0.01 + 1 / (10 * np.sqrt(n_locations)))
 
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-
 def subdivide_axes(
     ax,
     nrows=1,
@@ -87,7 +84,7 @@ def subdivide_axes(
     right_pad=0.0,
     top_pad=0.0,
     bottom_pad=0.0,
-) -> plt.Axes | np.ndarray:
+) -> Axes | np.ndarray[Any, np.dtype[Axes]]:
     """
     Subdivide the EXACT bbox of `ax` into a grid of new axes.
 
@@ -133,3 +130,44 @@ def subdivide_axes(
         return arr[:, 0]
     else:
         return arr
+
+
+def mosaic_axes(
+    ax: plt.Axes,
+    n_items: int,
+    *,
+    wspace=0.0,
+    hspace=0.0,
+    left_pad=0.0,
+    right_pad=0.0,
+    top_pad=0.0,
+    bottom_pad=0.0,
+) -> np.ndarray[Any, np.dtype[Axes]]:
+    bbox = ax.get_position()
+    slot_w_in = bbox.width  * fig_w_in
+    slot_h_in = bbox.height * fig_h_in
+    A = slot_w_in / slot_h_in
+
+    usable_w = 1 - left - right
+    usable_h = 1 - bottom - top
+
+    ncols0 = round(sqrt(n_items * A))
+    candidates = {clamp(ncols0-1), clamp(ncols0), clamp(ncols0+1)}
+
+    for ncols in candidates:
+        nrows = ceil(n_items / ncols)
+
+        cell_w = usable_w / (ncols + (ncols-1)*wspace)
+        cell_h = usable_h / (nrows + (nrows-1)*hspace)
+
+        score = min(cell_w * slot_w_in, cell_h * slot_h_in)
+        keep best (score, squareness, empties)
+
+    gap_w = wspace * best_cell_w
+    gap_h = hspace * best_cell_h
+
+    return subdivide_axes(
+        ax, best_nrows, best_ncols,
+        wspace=gap_w, hspace=gap_h,
+        left_pad=left_pad, right_pad=right_pad, bottom_pad=bottom_pad, top_pad=top_pad
+    )

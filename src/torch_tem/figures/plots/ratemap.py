@@ -119,7 +119,7 @@ def plot_ratematx_cell(
 
 
 def plot_ratematx_mosaic(
-    ax: plt.Axes,
+    ax: Sequence[plt.Axes],
     world: object,
     cells_trace: NDArray,
     location_ids: list[int],

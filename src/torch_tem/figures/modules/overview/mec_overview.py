@@ -15,7 +15,7 @@ from torch_tem.figures.figures.panels import panel
 from torch_tem.figures.plots.autocorr import plot_autocorr_mosaic, plot_radial_autocorr_cells
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
-from torch_tem.figures.utils.axes import subdivide_axes
+from torch_tem.figures.utils.axes import mosaic_axes, subdivide_axes
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> Figure:
@@ -83,4 +83,6 @@ class GridCellsAutocorr(BaseFigureTemplate):
         nrows = len(self.freq_idxs)
         for freq_idx, ax in enumerate(subdivide_axes(ax, nrows, 1, hspace=0.06)):
             cells = self.cells[freq_idx]
+            axs = mosaic_axes(ax, npanels=len(cells))
             plot_autocorr_mosaic(ax, self.world, cells, self.location_ids)
+            ax.set_title(f"Spatial autocorr - Freq {freq_idx}")

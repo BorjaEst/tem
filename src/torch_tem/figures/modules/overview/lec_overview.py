@@ -8,8 +8,9 @@ from matplotlib.axes import Axes
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.base import BaseFigureTemplate
 from torch_tem.figures.figures.panels import colorbar, panel
-from torch_tem.figures.plots.rasterplot import plot_rasterplot
+from torch_tem.figures.plots.rasterplot import plot_activation, plot_observations
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.utils.axes import subdivide_axes
 from torch_tem.modules.lec import LECModel
 
 
@@ -22,10 +23,10 @@ class LECOverview(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the LEC overview."""
 
     HEIGHT_FRAC: float = 0.40
-    MOSAIC_KWARGS = {"width_ratios": [1.0, 2.5]}
+    MOSAIC_KWARGS = {"width_ratios": [1.0, 2.5], "height_ratios": [5.0, 1.0]}
     MOSAIC = [
-        ["params", "raster"],
-        ["params", "raster"],
+        ["params", "activations"],
+        ["params", "observations"],
     ]
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
@@ -34,7 +35,7 @@ class LECOverview(BaseFigureTemplate):
         self.env_idx = self.trace.validate_env_idx(self.ctx.env_idx)
         self.freq_idxs = [self.trace.validate_freq_idx("state/lec/cells", f) for f in range(self.n_freq)]
 
-        self.observations = self.trace.get("world_step/observation")[:, self.env_idx]
+        self.obs_values = self.trace.get("world_step/observation")[:, self.env_idx]
         self.cells = [self.trace.get(f"state/lec/cells/{f}")[:, self.env_idx, :] for f in range(self.n_freq)]
 
         lec: LECModel = self.ctx.extras.get("lec")
@@ -56,9 +57,18 @@ class LECOverview(BaseFigureTemplate):
 
     @colorbar(group="lec_activity", label="Activation")
     @panel()  # Here some arguments to configure the pannel, position, etc.
-    def raster(self, ax: Axes) -> None:
+    def observations(self, ax: Axes) -> None:
+        """Plot LEC activations over time for all frequencies."""
+        plot_observations(ax, self.obs_values)
+        ax.set_title("Observations timeseries (one-hot encoded)")
+
+    @colorbar(group="lec_activity", label="Activation")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
+    def activations(self, ax: Axes) -> None:
         """Plot observations and LEC activations over time."""
-        activation_names = [f"Cells f{f_idx}" for f_idx in self.freq_idxs]
-        options = {"vmin": 0.0, "vmax": 1.0, "obs_height": 0.2, "activation_names": activation_names}
-        plot_rasterplot(ax, self.observations, self.cells, **options)
-        ax.set_title("LEC activations (after ponderation)")
+        nrows = len(self.freq_idxs)
+        options = {"vmin": 0.0, "vmax": 1.0, "cmap": "GnBu"}
+        for freq_idx, freq_ax in enumerate(subdivide_axes(ax, nrows, 1, hspace=0.1)):
+            plot_activation(freq_ax, self.cells[freq_idx], **options)
+            freq_ax.set_title(f"Activation timeseries - Freq {freq_idx}", fontsize=7)
+            freq_ax.set_yticks([]); freq_ax.set_xticks([])  # fmt: skip

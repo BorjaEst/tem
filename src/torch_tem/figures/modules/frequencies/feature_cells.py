@@ -7,7 +7,7 @@ from matplotlib.axes import Axes
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.base import BaseFigureTemplate
 from torch_tem.figures.figures.panels import colorbar, panel
-from torch_tem.figures.plots.rasterplot import plot_rasterplot
+from torch_tem.figures.plots.rasterplot import plot_activation, plot_observations
 from torch_tem.figures.registry import FigureContext
 
 
@@ -20,7 +20,8 @@ class FeatCellsTimeseries(BaseFigureTemplate):
     """Encapsulate state and rendering logic for the LEC overview."""
 
     HEIGHT_FRAC: float = 0.40
-    MOSAIC = [["raster_1"], ["raster_2"]]
+    MOSAIC = [["raster_1"], ["raster_2"], ["raster_3"], ["raster_4"]]
+    SHAREX: bool = True
 
     def __init__(self, trace: TraceTree, ctx: FigureContext) -> None:
         super().__init__(trace, ctx)
@@ -36,19 +37,26 @@ class FeatCellsTimeseries(BaseFigureTemplate):
     @panel()  # Here some arguments to configure the pannel, position, etc.
     def raster_1(self, ax: Axes) -> None:
         """Plot observations and LEC activations over time."""
-        options = {"vmin": 0.0, "vmax": 1.0, "obs_height": 0.3, "activation_names": []}
-        options["activation_names"].append("Input")
-        options["activation_names"].append(f"Cells f{self.freq_idx}")
-        activations = [self.feature_series, self.cell_series]
-        plot_rasterplot(ax, self.observations, activations, **options)
+        plot_observations(ax, self.observations)
         ax.set_title("LEC input features and activations (after ponderation)")
 
     @colorbar(group="lec_activity", label="Activation")
     @panel()  # Here some arguments to configure the pannel, position, etc.
     def raster_2(self, ax: Axes) -> None:
         """Plot observations and LEC activations over time."""
-        options = {"vmin": 0.0, "vmax": 1.0, "obs_height": 0.45, "activation_names": []}
-        options["activation_names"].append(f"Filtered f{self.freq_idx}")
-        activations = [self.filtered_series]
-        plot_rasterplot(ax, self.observations, activations, **options)
+        plot_observations(ax, self.feature_series)
+        ax.set_title("Filtered activations (before ponderation)")
+
+    @colorbar(group="lec_activity", label="Activation")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
+    def raster_3(self, ax: Axes) -> None:
+        """Plot observations and LEC activations over time."""
+        plot_activation(ax, self.cell_series)
+        ax.set_title("Filtered activations (before ponderation)")
+
+    @colorbar(group="lec_activity", label="Activation")
+    @panel()  # Here some arguments to configure the pannel, position, etc.
+    def raster_4(self, ax: Axes) -> None:
+        """Plot observations and LEC activations over time."""
+        plot_activation(ax, self.filtered_series)
         ax.set_title("Filtered activations (before ponderation)")

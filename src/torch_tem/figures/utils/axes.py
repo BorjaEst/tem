@@ -63,7 +63,6 @@ def initialise_axes(
         ax.set_xlim([0, 1])
         ax.set_ylim([0, 1])
     ax.set_aspect(1)
-    ax.invert_yaxis()  # Y increases downward (standard graphics convention)
     ax.axis("off")
 
     return ax

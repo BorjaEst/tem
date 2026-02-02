@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 import matplotlib.pyplot as plt
@@ -94,10 +95,19 @@ def subdivide_axes(
         - 2D np.ndarray of Axes (for nxm)
     """
     fig = ax.figure
-    fig.canvas.draw()
+    if fig is None:
+        raise ValueError("Cannot subdivide an Axes that is not attached to a Figure.")
+
+    # Ensure layout has been computed before reading positions.
+    if getattr(fig, "canvas", None) is not None:
+        fig.canvas.draw()
 
     bbox = ax.get_position()
-    ax.remove()
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_frame_on(False)
+    ax.set_alpha(0.0)
+    ax.set_navigate(False)
 
     # Apply outer padding
     x0 = bbox.x0 + left_pad
@@ -136,38 +146,99 @@ def mosaic_axes(
     ax: plt.Axes,
     n_items: int,
     *,
-    wspace=0.0,
-    hspace=0.0,
-    left_pad=0.0,
-    right_pad=0.0,
-    top_pad=0.0,
-    bottom_pad=0.0,
+    wspace: float = 0.0,
+    hspace: float = 0.0,
+    left_pad: float = 0.0,
+    right_pad: float = 0.0,
+    top_pad: float = 0.0,
+    bottom_pad: float = 0.0,
 ) -> np.ndarray[Any, np.dtype[Axes]]:
+    """Create a mosaic of axes sized to fit `n_items` plots.
+
+    Args:
+        ax: Slot axes whose bounding box defines the available space.
+        n_items: Number of panels to layout.
+        wspace: Horizontal spacing as a fraction of each cell width.
+        hspace: Vertical spacing as a fraction of each cell height.
+        left_pad: Left padding in figure fraction units.
+        right_pad: Right padding in figure fraction units.
+        top_pad: Top padding in figure fraction units.
+        bottom_pad: Bottom padding in figure fraction units.
+
+    Returns:
+        Array of created axes laid out within the slot.
+    """
+    fig = ax.figure
+    if fig is None:
+        raise ValueError("Cannot create a mosaic for an Axes that is not attached to a Figure.")
+
+    # Ensure layout has been computed before reading positions.
+    if getattr(fig, "canvas", None) is not None:
+        fig.canvas.draw()
+
     bbox = ax.get_position()
-    slot_w_in = bbox.width  * fig_w_in
+
+    if n_items <= 0:
+        return np.array([], dtype=object)
+
+    fig_w_in, fig_h_in = fig.get_size_inches()
+    slot_w_in = bbox.width * fig_w_in
     slot_h_in = bbox.height * fig_h_in
-    A = slot_w_in / slot_h_in
+    if slot_w_in <= 0 or slot_h_in <= 0:
+        return np.array([], dtype=object)
 
-    usable_w = 1 - left - right
-    usable_h = 1 - bottom - top
+    aspect = slot_w_in / slot_h_in
+    usable_w = max(bbox.width - left_pad - right_pad, 1e-6)
+    usable_h = max(bbox.height - top_pad - bottom_pad, 1e-6)
 
-    ncols0 = round(sqrt(n_items * A))
-    candidates = {clamp(ncols0-1), clamp(ncols0), clamp(ncols0+1)}
+    def clamp_cols(value: int) -> int:
+        return max(1, min(int(value), n_items))
 
-    for ncols in candidates:
-        nrows = ceil(n_items / ncols)
+    ncols0 = int(round(math.sqrt(n_items * aspect)))
+    candidates = {clamp_cols(ncols0 - 1), clamp_cols(ncols0), clamp_cols(ncols0 + 1)}
 
-        cell_w = usable_w / (ncols + (ncols-1)*wspace)
-        cell_h = usable_h / (nrows + (nrows-1)*hspace)
+    best: dict[str, float | int] | None = None
+    for ncols in sorted(candidates):
+        nrows = int(math.ceil(n_items / ncols))
+        denom_cols = ncols + max(ncols - 1, 0) * wspace
+        denom_rows = nrows + max(nrows - 1, 0) * hspace
+        if denom_cols <= 0 or denom_rows <= 0:
+            continue
 
-        score = min(cell_w * slot_w_in, cell_h * slot_h_in)
-        keep best (score, squareness, empties)
+        cell_w = usable_w / denom_cols
+        cell_h = usable_h / denom_rows
+        cell_w_in = cell_w * fig_w_in
+        cell_h_in = cell_h * fig_h_in
+        score = min(cell_w_in, cell_h_in)
+        if score <= 0:
+            continue
 
-    gap_w = wspace * best_cell_w
-    gap_h = hspace * best_cell_h
+        squareness = 1.0 - abs(cell_w_in - cell_h_in) / max(cell_w_in, cell_h_in)
+        empties = nrows * ncols - n_items
+        key = (score, squareness, -empties)
+        if best is None or key > best["key"]:
+            best = {
+                "key": key,
+                "nrows": nrows,
+                "ncols": ncols,
+                "cell_w": cell_w,
+                "cell_h": cell_h,
+            }
+
+    if best is None:
+        return np.array([], dtype=object)
+
+    gap_w = wspace * float(best["cell_w"])
+    gap_h = hspace * float(best["cell_h"])
 
     return subdivide_axes(
-        ax, best_nrows, best_ncols,
-        wspace=gap_w, hspace=gap_h,
-        left_pad=left_pad, right_pad=right_pad, bottom_pad=bottom_pad, top_pad=top_pad
+        ax,
+        int(best["nrows"]),
+        int(best["ncols"]),
+        wspace=gap_w,
+        hspace=gap_h,
+        left_pad=left_pad,
+        right_pad=right_pad,
+        bottom_pad=bottom_pad,
+        top_pad=top_pad,
     )

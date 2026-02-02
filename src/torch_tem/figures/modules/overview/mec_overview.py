@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import math
-
+import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from matplotlib.gridspec import SubplotSpec
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from torch_tem.diagnostics.traces import TraceTree
 from torch_tem.figures.figures.base import BaseFigureTemplate
@@ -81,8 +78,9 @@ class GridCellsAutocorr(BaseFigureTemplate):
     @panel()  # Here some arguments to configure the pannel, position, etc.
     def spatial_matrices(self, ax: Axes) -> None:
         nrows = len(self.freq_idxs)
-        for freq_idx, ax in enumerate(subdivide_axes(ax, nrows, 1, hspace=0.06)):
+        for freq_idx, freq_ax in enumerate(subdivide_axes(ax, nrows, 1, hspace=0.07)):
             cells = self.cells[freq_idx]
-            axs = mosaic_axes(ax, npanels=len(cells))
-            plot_autocorr_mosaic(ax, self.world, cells, self.location_ids)
-            ax.set_title(f"Spatial autocorr - Freq {freq_idx}")
+            axes = mosaic_axes(freq_ax, cells.shape[-1], wspace=0.04, hspace=0.04)
+            axes_list = list(np.ravel(axes)) if isinstance(axes, np.ndarray) else [axes]
+            plot_autocorr_mosaic(axes_list, self.world, cells, self.location_ids)
+            freq_ax.set_title(f"Spatial autocorr - Freq {freq_idx}", fontsize=7)

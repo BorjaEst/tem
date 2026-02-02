@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-import math
 from typing import Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from numpy.typing import NDArray
 
-from torch_tem.figures.utils import aggregate_rate_map, select_mosaic_grid
+from torch_tem.figures.utils import aggregate_rate_map
 from torch_tem.figures.utils.rasterize import rasterize_locations
 
 
 def plot_spatial_autocorrelogram(
-    ax: plt.Axes,
+    ax: Axes,
     world: object,
     cells_trace: NDArray,
     location_ids: Sequence[int] | NDArray,
@@ -24,7 +24,7 @@ def plot_spatial_autocorrelogram(
     vmax: float | None = None,
     grid_res: float | None = None,
     cmap: str = "coolwarm",
-) -> plt.Axes:
+) -> Axes:
     """Plot a 2D spatial autocorrelogram for a selected cell.
 
     Args:
@@ -69,7 +69,7 @@ def plot_spatial_autocorrelogram(
 
 
 def plot_radial_autocorr_cells(
-    ax: plt.Axes,
+    ax: Axes,
     world: object,
     cells_trace: NDArray,
     location_ids: Sequence[int] | NDArray,
@@ -78,7 +78,7 @@ def plot_radial_autocorr_cells(
     grid_res: float | None = None,
     n_bins: int = 32,
     color: Optional[str] = None,
-) -> plt.Axes:
+) -> Axes:
     """Plot mean radial autocorrelation profile with std across cells.
 
     Args:
@@ -288,7 +288,7 @@ def _rate_map_cell_values(
 
 
 def plot_autocorr_mosaic(
-    ax: Sequence[plt.Axes],
+    axes: Sequence[Axes] | Axes,
     world: object,
     cells_trace: NDArray,
     location_ids: Sequence[int] | NDArray,
@@ -298,15 +298,11 @@ def plot_autocorr_mosaic(
     vmax: float | None = None,
     grid_res: float | None = None,
     cmap: str = "coolwarm",
-    min_cols: int = 2,
-    max_cols: int = 36,
-    wspace: float = 0.04,
-    hspace: float = 0.04,
-) -> plt.Axes:
-    """Plot a mosaic of spatial autocorrelograms for one frequency.
+) -> Sequence[Axes]:
+    """Render a mosaic of spatial autocorrelograms into provided axes.
 
     Args:
-        ax: Axes to draw into.
+        axes: Axes to draw into.
         world: Environment world with location coordinates.
         cells_trace: Cell activations (T, B, C) or (T, C).
         location_ids: Ordered list of visited location indices.
@@ -315,20 +311,21 @@ def plot_autocorr_mosaic(
         vmax: Optional max value for shared color scaling.
         grid_res: Optional grid resolution for rasterization.
         cmap: Colormap name.
-        min_cols: Minimum number of columns in the mosaic grid.
-        max_cols: Maximum number of columns in the mosaic grid.
-        wspace: Horizontal spacing between mini-plots.
-        hspace: Vertical spacing between mini-plots.
 
     Returns:
-        The parent axes. The created mini-axes are stored on
-        `ax._tem_mosaic_axes`.
+        Sequence of axes that were provided.
     """
+    axes_list = list(np.ravel(axes)) if isinstance(axes, np.ndarray) else axes
+    axes_list = [axes] if isinstance(axes, Axes) else list(axes)
+    if not axes_list:
+        return axes_list
+
     cell_array = np.asarray(cells_trace)
     if cell_array.ndim < 2 or cell_array.shape[-1] == 0:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
-        ax.axis("off")
-        return ax
+        axes_list[0].text(0.5, 0.5, "No data", ha="center", va="center")
+        for empty_ax in axes_list:
+            empty_ax.axis("off")
+        return axes_list
 
     n_cells_total = int(cell_array.shape[-1])
     if cell_indices is None:
@@ -341,63 +338,16 @@ def plot_autocorr_mosaic(
                 indices.append(idx_int)
 
     if not indices:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        axes_list[0].text(0.5, 0.5, "No data", ha="center", va="center")
+        for empty_ax in axes_list:
+            empty_ax.axis("off")
+        return axes_list
+
+    options = {"vmin": vmin, "vmax": vmax, "grid_res": grid_res, "cmap": cmap}
+    for ax, cell_idx in zip(axes_list, indices):
+        plot_spatial_autocorrelogram(ax, world, cells_trace, location_ids, cell_idx, **options)
+
+    for ax in axes_list[len(indices) :]:
         ax.axis("off")
-        return ax
 
-    if hasattr(ax, "_tem_mosaic_axes"):
-        for old_ax in list(getattr(ax, "_tem_mosaic_axes", [])):
-            try:
-                old_ax.remove()
-            except (AttributeError, ValueError):
-                continue
-
-    fig = ax.figure
-    bbox = ax.get_position()
-    fig_w, fig_h = fig.get_size_inches()
-    slot_w = float(bbox.width * fig_w)
-    slot_h = float(bbox.height * fig_h)
-    wspace = max(float(wspace), 0.0)
-    hspace = max(float(hspace), 0.0)
-    nrows, ncols = select_mosaic_grid(
-        len(indices),
-        slot_w,
-        slot_h,
-        min_cols=min_cols,
-        max_cols=max_cols,
-        wspace=wspace,
-        hspace=hspace,
-    )
-
-    denom_cols = ncols + max(ncols - 1, 0) * wspace
-    denom_rows = nrows + max(nrows - 1, 0) * hspace
-    if denom_cols <= 0 or denom_rows <= 0:
-        ax.text(0.5, 0.5, "No layout", ha="center", va="center")
-        ax.axis("off")
-        return ax
-
-    w = 1.0 / denom_cols
-    h = 1.0 / denom_rows
-    axes: list[plt.Axes] = []
-    for plot_idx, cell_idx in enumerate(indices):
-        r = plot_idx // ncols
-        c = plot_idx % ncols
-        x0 = c * (w + wspace * w)
-        y0 = 1.0 - (r + 1) * h - r * (hspace * h)
-        subax = ax.inset_axes([x0, y0, w, h])
-        plot_spatial_autocorrelogram(
-            subax,
-            world,
-            cells_trace,
-            location_ids,
-            cell_idx,
-            vmin=vmin,
-            vmax=vmax,
-            grid_res=grid_res,
-            cmap=cmap,
-        )
-        axes.append(subax)
-
-    ax.set_axis_off()
-    ax._tem_mosaic_axes = axes
-    return ax
+    return axes_list

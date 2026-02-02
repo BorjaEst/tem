@@ -2,15 +2,16 @@ from typing import Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from numpy.typing import NDArray
 
 from torch_tem.figures.plots.map import plot_map
-from torch_tem.figures.utils import aggregate_rate_map, select_mosaic_grid
+from torch_tem.figures.utils import aggregate_rate_map
 from torch_tem.figures.utils.rasterize import rasterize_locations
 
 
 def plot_ratemap_cell(
-    ax: plt.Axes,
+    ax: Axes,
     world: object,
     cells: np.ndarray,
     location_ids: list[int],
@@ -20,7 +21,7 @@ def plot_ratemap_cell(
     vmax: float | None = None,
     shape: str = "square",
     cmap: str = "copper_r",
-) -> plt.Axes:
+) -> Axes:
     """Plot a single cell's rate map on an existing axes.
 
     Args:
@@ -53,7 +54,7 @@ def plot_ratemap_cell(
 
 
 def plot_ratematx_cell(
-    ax: plt.Axes,
+    ax: Axes,
     world: object,
     cells: np.ndarray,
     location_ids: list[int],
@@ -62,7 +63,7 @@ def plot_ratematx_cell(
     vmin: float | None = None,
     vmax: float | None = None,
     cmap: str = "copper_r",
-) -> plt.Axes:
+) -> Axes:
     """Plot a single cell's rate matrix on an existing axes.
 
     Args:
@@ -119,7 +120,7 @@ def plot_ratematx_cell(
 
 
 def plot_ratematx_mosaic(
-    ax: Sequence[plt.Axes],
+    axes: Sequence[Axes],
     world: object,
     cells_trace: NDArray,
     location_ids: list[int],
@@ -128,31 +129,34 @@ def plot_ratematx_mosaic(
     vmin: float | None = None,
     vmax: float | None = None,
     cmap: str = "copper_r",
-    min_cols: int = 2,
-    max_cols: int = 36,
-    wspace: float = 0.04,
-    hspace: float = 0.04,
-) -> plt.Axes:
-    """Plot multiple cell rate maps in a mosaic layout on existing axes.
+) -> Sequence[Axes]:
+    """Render multiple cell rate maps into provided axes.
 
     Args:
-        ax: Axes to draw into.
+        axes: Axes to draw into.
         world: Environment world with location coordinates.
-        cells: Array of shape (T, B, C) or (T, C) with cell activations.
+        cells_trace: Array of shape (T, B, C) or (T, C) with cell activations.
         location_ids: Ordered list of visited location indices.
         cell_indices: Optional cell indices to include.
         vmin: Minimum value for color scaling.
         vmax: Maximum value for color scaling.
-        shape: Shape for the background map markers.
         cmap: Colormap name for the rate map.
+
     Returns:
-        The axes with the rate map mosaic rendered.
+        Sequence of axes that were provided.
     """
+    axes_list = list(np.ravel(axes)) if isinstance(axes, np.ndarray) else axes
+    axes_list = [axes] if isinstance(axes, Axes) else list(axes)
+    axes_list = list(axes)
+    if not axes_list:
+        return axes_list
+
     cell_array = np.asarray(cells_trace)
     if cell_array.ndim < 2 or cell_array.shape[-1] == 0:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
-        ax.axis("off")
-        return ax
+        axes_list[0].text(0.5, 0.5, "No data", ha="center", va="center")
+        for empty_ax in axes_list:
+            empty_ax.axis("off")
+        return axes_list
 
     n_cells_total = int(cell_array.shape[-1])
     if cell_indices is None:
@@ -165,62 +169,16 @@ def plot_ratematx_mosaic(
                 indices.append(idx_int)
 
     if not indices:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        axes_list[0].text(0.5, 0.5, "No data", ha="center", va="center")
+        for empty_ax in axes_list:
+            empty_ax.axis("off")
+        return axes_list
+
+    options = {"vmin": vmin, "vmax": vmax, "cmap": cmap}
+    for ax, cell_idx in zip(axes_list, indices):
+        plot_ratematx_cell(ax, world, cells_trace, location_ids, cell_idx, **options)
+
+    for ax in axes_list[len(indices) :]:
         ax.axis("off")
-        return ax
 
-    if hasattr(ax, "_tem_mosaic_axes"):
-        for old_ax in list(getattr(ax, "_tem_mosaic_axes", [])):
-            try:
-                old_ax.remove()
-            except (AttributeError, ValueError):
-                continue
-
-    fig = ax.figure
-    bbox = ax.get_position()
-    fig_w, fig_h = fig.get_size_inches()
-    slot_w = float(bbox.width * fig_w)
-    slot_h = float(bbox.height * fig_h)
-    wspace = max(float(wspace), 0.0)
-    hspace = max(float(hspace), 0.0)
-    nrows, ncols = select_mosaic_grid(
-        len(indices),
-        slot_w,
-        slot_h,
-        min_cols=min_cols,
-        max_cols=max_cols,
-        wspace=wspace,
-        hspace=hspace,
-    )
-
-    denom_cols = ncols + max(ncols - 1, 0) * wspace
-    denom_rows = nrows + max(nrows - 1, 0) * hspace
-    if denom_cols <= 0 or denom_rows <= 0:
-        ax.text(0.5, 0.5, "No layout", ha="center", va="center")
-        ax.axis("off")
-        return ax
-
-    w = 1.0 / denom_cols
-    h = 1.0 / denom_rows
-    axes: list[plt.Axes] = []
-    for plot_idx, cell_idx in enumerate(indices):
-        r = plot_idx // ncols
-        c = plot_idx % ncols
-        x0 = c * (w + wspace * w)
-        y0 = 1.0 - (r + 1) * h - r * (hspace * h)
-        subax = ax.inset_axes([x0, y0, w, h])
-        plot_ratematx_cell(
-            subax,
-            world,
-            cells_trace,
-            location_ids,
-            cell_idx,
-            vmin=vmin,
-            vmax=vmax,
-            cmap=cmap,
-        )
-        axes.append(subax)
-
-    ax.set_axis_off()
-    ax._tem_mosaic_axes = axes
-    return ax
+    return axes_list

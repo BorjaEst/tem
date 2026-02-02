@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import matplotlib.figure as mpl_figure
+import numpy as np
 from matplotlib.axes import Axes
 
 from torch_tem.diagnostics.traces import TraceTree
@@ -12,6 +13,7 @@ from torch_tem.figures.plots.autocorr import plot_autocorr_mosaic, plot_radial_a
 from torch_tem.figures.plots.ratemap import plot_ratematx_mosaic
 from torch_tem.figures.plots.trajectory import plot_time_colored_trajectory
 from torch_tem.figures.registry import FigureContext
+from torch_tem.figures.utils.axes import mosaic_axes
 
 
 def plot(trace: TraceTree, ctx: FigureContext) -> mpl_figure.Figure:
@@ -69,7 +71,9 @@ class GridCellsAutocorr(BaseFigureTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_ratematx_mosaic(ax, self.world, abs(self.cells), self.location_ids.tolist(), vmin=0.0, vmax=0.10)
+        axes = mosaic_axes(ax, self.cells.shape[-1], wspace=0.04, hspace=0.04)
+        axes_list = list(np.ravel(axes)) if isinstance(axes, np.ndarray) else [axes]
+        plot_ratematx_mosaic(axes_list, self.world, abs(self.cells), self.location_ids.tolist(), vmin=0.0, vmax=0.10)
         # ax.set_title(f"HPC f{self.freq_idx} rate map")
 
     @panel()  # Here some arguments to configure the pannel, position, etc.
@@ -90,5 +94,7 @@ class GridCellsAutocorr(BaseFigureTemplate):
         Args:
             ax: Axes to draw into.
         """
-        plot_autocorr_mosaic(ax, self.world, self.cells, self.location_ids, vmin=-0.10, vmax=0.10)
+        axes = mosaic_axes(ax, self.cells.shape[-1], wspace=0.04, hspace=0.04)
+        axes_list = list(np.ravel(axes)) if isinstance(axes, np.ndarray) else [axes]
+        plot_autocorr_mosaic(axes_list, self.world, self.cells, self.location_ids, vmin=-0.10, vmax=0.10)
         # ax.set_title(f"HPC f{self.freq_idx} spatial autocorr")
